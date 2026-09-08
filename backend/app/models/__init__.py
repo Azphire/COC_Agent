@@ -1,1 +1,1 @@
-"""Model provider interfaces; no provider implementation yet."""
+"""Model interfaces and stateless OpenAI-compatible adapters."""

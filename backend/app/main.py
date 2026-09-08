@@ -5,7 +5,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, websocket
+from app.api import health, model, websocket
 from app.config import Settings
 from app.persistence.database import Database
 
@@ -33,6 +33,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["Content-Type"],
     )
     application.include_router(health.router)
+    application.include_router(model.router)
     application.include_router(websocket.router)
     return application
 

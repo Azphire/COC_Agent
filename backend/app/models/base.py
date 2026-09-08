@@ -1,13 +1,42 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Protocol
+
+from pydantic import BaseModel, Field, SerializeAsAny
+
+type Message = Mapping[str, Any]
+type Tool = Mapping[str, Any]
+type ResponseSchema = type[BaseModel] | Mapping[str, Any]
+
+
+class ModelError(Exception):
+    """A short, provider-independent configuration or model request failure."""
+
+
+class ToolCall(BaseModel):
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+class ModelResponse(BaseModel):
+    text: str = ""
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    structured: SerializeAsAny[BaseModel] | dict[str, Any] | None = None
+    finish_reason: str | None = None
 
 
 class ModelClient(Protocol):
-    """Shared interface for future local and external model adapters."""
+    """Stateless generation; streaming returns text chunks, never executed tools."""
 
     async def generate(
         self,
-        messages: Sequence[Mapping[str, Any]],
-        tools: Sequence[Mapping[str, Any]] | None = None,
-        response_schema: Mapping[str, Any] | None = None,
-    ) -> Mapping[str, Any]: ...
+        messages: Sequence[Message],
+        tools: Sequence[Tool] | None = None,
+        response_schema: ResponseSchema | None = None,
+        stream: bool = False,
+        *,
+        temperature: float = 0.0,
+        max_tokens: int = 256,
+    ) -> ModelResponse | AsyncIterator[str]: ...
+
+    async def close(self) -> None: ...

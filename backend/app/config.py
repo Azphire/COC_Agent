@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,10 +25,11 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, ge=1, le=65535)
     data_dir: Path = Path("../data")
 
-    model_provider: Literal["ollama", "openai"] = "ollama"
-    model_base_url: str = "http://127.0.0.1:11434/v1"
+    model_provider: str = "ollama"
+    model_base_url: str = "http://127.0.0.1:11434/v1/"
     model_name: str = "qwen3:8b"
-    model_api_key: SecretStr = SecretStr("")
+    model_api_key: SecretStr = SecretStr("ollama")
+    model_timeout_seconds: float = Field(default=120.0, gt=0)
 
     database_url: str = "sqlite+aiosqlite:///../data/game.db"
     checkpoint_db_path: Path = Path("../data/agent_checkpoints.db")

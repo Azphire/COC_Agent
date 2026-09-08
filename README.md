@@ -2,7 +2,7 @@
 
 Windows 原生运行的本地主机型 CoC 5 跑团 Agent。目标是由一名玩家在本地启动主机，支持单人游戏和其他玩家通过局域网浏览器加入；模型可选择 Ollama 或外部兼容 API。
 
-当前仅有开发骨架：FastAPI 健康检查、异步 SQLite 连接、WebSocket JSON echo，以及 React 连接测试页。模型仅保留配置和 Protocol；启动、健康检查和测试均不调用模型。
+当前支持 FastAPI 健康检查、异步 SQLite 连接、WebSocket JSON echo、模型状态显示，以及统一模型适配层的普通生成、流式文本、结构化输出和工具调用解析。启动、健康检查和单元测试不触发模型推理；真实模型检查由本地脚本单独执行。
 
 ## 环境
 
@@ -10,7 +10,7 @@ Windows 原生运行的本地主机型 CoC 5 跑团 Agent。目标是由一名�
 - Node.js `>=22.12`、npm。前端来自当前官方 Vite React TypeScript 模板，详见 [Vite 入门文档](https://vite.dev/guide/)。
 - Ollama 可选，连接测试不需要安装 Ollama 或下载模型。
 
-本次搭建检测：Git `2.48.1.windows.1`、系统 Python `3.12.7`、uv `0.12.0`、Node.js `22.14.0`、npm `10.9.2`。项目虚拟环境使用 Python `3.12.7`；另检测到 uv 管理的 Python `3.12.13`。未检测到 Ollama 命令。
+初始环境：Git `2.48.1.windows.1`、系统 Python `3.12.7`、uv `0.12.0`、Node.js `22.14.0`、npm `10.9.2`。项目虚拟环境使用 Python `3.12.7`；另检测到 uv 管理的 Python `3.12.13`。
 
 ## 安装与启动
 
@@ -47,9 +47,9 @@ Ollama 本地模式的默认配置：
 
 ```dotenv
 MODEL_PROVIDER=ollama
-MODEL_BASE_URL=http://127.0.0.1:11434/v1
+MODEL_BASE_URL=http://127.0.0.1:11434/v1/
 MODEL_NAME=qwen3:8b
-MODEL_API_KEY=
+MODEL_API_KEY=ollama
 ```
 
 外部 OpenAI 兼容 API 模式的配置示例：
@@ -61,7 +61,7 @@ MODEL_NAME=your-model-name
 MODEL_API_KEY=
 ```
 
-以后接入真实模型时，再将外部服务的实际地址、模型名和密钥填写到本地 `.env`。当前配置切换只会改变健康接口报告的供应商，两个模式都尚未实现真实调用。示例域名和模型名只是占位。
+外部服务以后也通过同一适配层调用，使用时填写实际地址、模型名和密钥；示例域名和模型名只是占位。本轮不调用外部 API，本地检查脚本会拒绝外部 provider。
 
 前端单独读取 `frontend/.env`：
 
@@ -71,6 +71,38 @@ VITE_WS_URL=ws://127.0.0.1:8000/ws
 ```
 
 `VITE_` 变量会暴露给浏览器，只用于连接地址；模型 API Key 仅放在后端 `.env`。两份 `.env` 都已忽略，`.env.example` 可提交。
+
+## 本地模型
+
+使用 Windows 原生 Ollama，安装包来自官方项目：
+
+```powershell
+winget install --id Ollama.Ollama -e --source winget
+ollama --version
+ollama pull qwen3:8b
+ollama list
+Invoke-RestMethod http://127.0.0.1:11434/api/version
+```
+
+若新安装后当前终端尚未刷新 PATH，可使用默认位置 `$env:LOCALAPPDATA\Programs\Ollama\ollama.exe`，或重新打开终端。安装后优先使用 Ollama 后台程序，不在已有实例运行时再次启动 `ollama serve`。详见 [Ollama Windows 安装说明](https://docs.ollama.com/windows)。
+
+模型默认存储在用户目录 `%USERPROFILE%\.ollama\models`，不放入仓库，不修改全局 `OLLAMA_MODELS`。下载前确认该磁盘至少有 15GB 空闲空间。示例为 `qwen3:8b`；更换模型时只需下载目标模型并修改根目录 `.env` 中的 `MODEL_NAME`，随后重启后端。
+
+根目录 `.env` 使用上一节的 Ollama 配置。`MODEL_API_KEY=ollama` 是 SDK 所需的非空占位值，Ollama 会忽略它，参见[官方兼容接口说明](https://docs.ollama.com/api/openai-compatibility)。可选 `MODEL_TIMEOUT_SECONDS=120` 用于限制请求等待时间。
+
+Ollama 保持默认的 `127.0.0.1:11434` 本机监听，不将其改为 `0.0.0.0`，也不开放该端口的入站规则。访问顺序为：玩家浏览器 → FastAPI → 模型适配层 → 本机 Ollama。浏览器只请求后端 `/api/model/status`，只收到 `provider`、`model`、`available`；状态接口读取模型列表，不提交 Prompt，不返回 Ollama 地址、目录或密钥。外部 provider 当前报告未就绪，不进行外部连通测试。
+
+在后端目录运行一次真实检查：
+
+```powershell
+cd backend
+uv run python scripts/check_local_model.py
+ollama ps
+```
+
+脚本先以空 Prompt 加载配置中的模型并报告耗时，再依次检查短中文回复、流式文本、Pydantic JSON 校验和 `roll_dice(100, 1)` 工具参数。它不会执行骰子、下载模型或连接外部 provider。首次加载的计时与后续短请求计时分开记录；如果模型已加载，会明确标注。
+
+适配层使用 `openai.AsyncOpenAI`，无内部会话历史，SDK 自动重试设为 0。Ollama 请求关闭思考输出以缩短本轮验证；普通响应返回文本、工具调用及可选结构化对象。流式模式仅支持文本，工具及 JSON 校验使用非流式模式，避免丢失工具参数或跳过完整 JSON 校验。调用方在结束后关闭模型客户端，提前结束流时关闭异步流。
 
 ## 局域网连接测试
 
@@ -99,10 +131,11 @@ backend/
   app/
     main.py, config.py         # 应用启动与配置
     api/                      # 健康检查与 WebSocket
-    models/base.py            # ModelClient Protocol
+    models/                   # 统一接口、OpenAI 兼容适配器与 factory
     persistence/database.py   # SQLAlchemy 异步 SQLite
     agents/, character/, rules/, memory/, rooms/  # 预留空包
-  tests/                      # 两项最小测试
+  scripts/check_local_model.py # 四项真实本地模型检查
+  tests/                      # 原有测试及离线模型单元测试
   pyproject.toml, uv.lock, .python-version
 frontend/                     # React / TypeScript / Vite
 data/
@@ -127,10 +160,11 @@ cd backend
 uv run ruff check .
 uv run pytest
 cd ../frontend
+npm run lint
 npm run build
 ```
 
-两项测试使用临时 SQLite 文件：健康接口返回 200 和 `status=ok`；WebSocket 收到 `connected` 事件并完成一次 JSON echo。不会改动本地游戏数据库。
+原有两项测试仍使用临时 SQLite 文件：健康接口返回 200 和 `status=ok`；WebSocket 收到 `connected` 事件并完成一次 JSON echo。新增测试验证模型 factory、未知 provider、普通响应和工具参数解析，以及模型存在、缺失、离线时的状态接口。模型调用全部使用 mock，pytest 不要求 Ollama 在线，也不改动本地游戏数据库。
 
 后端运行时，也可在 PowerShell 执行 `Invoke-RestMethod http://127.0.0.1:8000/api/health`。预期结果：
 
