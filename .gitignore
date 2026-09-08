@@ -18,7 +18,9 @@ data/rules/*
 data/modules/*
 data/saves/*
 data/logs/*
+data/extension/*
 !data/rules/.gitkeep
 !data/modules/.gitkeep
 !data/saves/.gitkeep
 !data/logs/.gitkeep
+!data/extension/.gitkeep
