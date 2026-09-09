@@ -2,11 +2,12 @@ import asyncio
 import json
 from uuid import uuid4
 
+from adjudication_helpers import ScenarioAdapter as FakeModelAdapter
 from fastapi.testclient import TestClient
 from test_agent_runtime import game, scenario, submit, wait_cycle  # noqa: F401
 from test_rooms import headers, join, lobby, ok  # noqa: F401
 
-from app.agents.model import AgentModelClient, FakeModelAdapter
+from app.agents.model import AgentModelClient
 from app.config import Settings
 from app.main import create_app
 from app.models.base import ModelError, ModelResponse
@@ -90,7 +91,7 @@ def test_checkpoint_restart_pending_save_load(client, game, character_settings):
         ok(second.post(game["prefix"] + "/resume"))
         ok(second.post(game["prefix"] + f"/checks/{check['id']}/roll", json={}))
         assert wait_cycle(second, game)["status"] == "completed"
-        assert len(adapter.prompts) == 3
+        assert len(adapter.prompts) == 2
         result = ok(second.get(game["prefix"] + "/checks"))[0]
         ok(second.post(game["prefix"] + "/pause"))
         ok(second.post(game["prefix"] + f"/snapshots/{save['id']}/load"))
@@ -147,7 +148,9 @@ def test_tool_rejections_are_structured_and_do_not_corrupt_room(client, game):  
     cycle = wait_cycle(client, game)
     assert cycle["status"] == "completed", cycle
     run = ok(client.get(game["prefix"] + "/agent-runs"))[0]
-    assert [r["ok"] for r in run["tool_results"]] == [False, False, False, True]
+    assert run["tool_results"] == []
+    validation = ok(client.get(game["prefix"] + f"/cycles/{cycle['id']}/validation"))["validation"]
+    assert len(validation["rejected_actions"]) == 3
     assert ok(client.get(game["prefix"]))["game"]["module"]["scene"]["id"] == "square"
 
 
@@ -172,9 +175,13 @@ def test_investigator_cannot_use_keeper_tools_and_only_one_speech(client, game):
     ok(submit(client, game))
     assert wait_cycle(client, game)["status"] == "completed"
     run = ok(client.get(game["prefix"] + "/agent-runs"))[-1]
-    assert [r["ok"] for r in run["tool_results"]] == [False, True, False, True]
-    memory = ok(client.get(game["prefix"] + "/memories"))[0]
-    assert memory["scope"] == "agent_private" and memory["kind"] == "belief"
+    assert run["structured_output"]["mode"] == "speak" and run["tool_results"] == []
+    events = ok(client.get(game["prefix"] + "/events"))["events"]
+    assert sum(e["type"] == "agent.spoke" for e in events) == 1
+    assert not any(
+        e["type"] in {"scene.updated", "agent.action_proposed"} and e["payload"].get("cycle_id")
+        for e in events
+    )
 
 
 def test_max_tool_calls_repairs_before_effects(client, game):  # noqa: F811
@@ -215,7 +222,7 @@ def test_credentials_and_hidden_reasoning_removed(client, game):  # noqa: F811
     public_prompts = [
         json.loads(p[-1]["content"])
         for p in game["adapter"].prompts
-        if json.loads(p[-1]["content"]).get("phase") == "narrate_publicly"
+        if json.loads(p[-1]["content"]).get("phase") == "generate_keeper_narration"
     ]
     assert public_prompts
     for prompt in public_prompts:
@@ -256,12 +263,16 @@ def test_summary_and_memory_survive_event_window(client, game):  # noqa: F811
     assert summary["coverage_start"] <= summary["coverage_end"]
     runs = ok(client.get(game["prefix"] + "/agent-runs"))
     assert (
-        sum(r["graph_node"] == "update_memories" and r["cycle_id"] == cycle["id"] for r in runs)
-        == 1
+        sum(r["graph_node"] == "update_summary" and r["cycle_id"] == cycle["id"] for r in runs) == 1
     )
     for run in runs:
-        assert len(run["context"].get("events", [])) <= 25
-    kp = next(r for r in reversed(runs) if r["graph_node"] == "keeper_decide")
+        if run["graph_node"] != "update_summary":
+            assert len(run["context"].get("events", [])) <= 25
+        assert (
+            len(json.dumps(run["context"], ensure_ascii=False))
+            <= client.app.state.settings.agent_context_chars
+        )
+    kp = next(r for r in reversed(runs) if r["graph_node"] == "plan_keeper_action")
     assert any(m["kind"] == "observation" for m in kp["context"]["memories"])
 
 
@@ -284,7 +295,8 @@ def test_summary_failure_does_not_fail_cycle(client, game):  # noqa: F811
     cycle = wait_cycle(client, game)
     assert cycle["status"] == "completed"
     assert any(
-        r["error_type"] == "summary_failed" for r in ok(client.get(game["prefix"] + "/agent-runs"))
+        r["graph_node"] == "update_summary" and r["status"] == "failed"
+        for r in ok(client.get(game["prefix"] + "/agent-runs"))
     )
 
 

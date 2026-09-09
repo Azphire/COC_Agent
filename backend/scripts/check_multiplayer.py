@@ -19,7 +19,7 @@ from websockets.sync.client import connect
 class BrowserPage(SmokeCheck):
     def __init__(self, owner, name):
         self.directory = owner.directory / name
-        self.directory.mkdir()
+        self.directory.mkdir(exist_ok=True)
         self.http = owner.http
         self.cdp = None
         self.request_id = 0
@@ -35,6 +35,9 @@ class BrowserPage(SmokeCheck):
             if path.is_file()
         )
         profile = self.directory / "profile"
+        devtools = profile / "DevToolsActivePort"
+        if devtools.exists():
+            devtools.unlink()
         owner.start(
             [
                 str(chrome),
@@ -52,7 +55,6 @@ class BrowserPage(SmokeCheck):
             ROOT,
             f"chrome-{name}",
         )
-        devtools = profile / "DevToolsActivePort"
         wait_for(devtools.exists)
         port = devtools.read_text().splitlines()[0]
         target = next(

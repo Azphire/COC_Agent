@@ -5,6 +5,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.persistence import (  # noqa: F401
+    adjudication_models,
     agent_models,
     knowledge_models,
     module_ir_models,

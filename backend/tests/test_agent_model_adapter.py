@@ -3,11 +3,46 @@ import json
 import httpx
 import pytest
 
+from app.agents.adjudication_schemas import KeeperPlan
 from app.agents.model import AgentModelClient, FakeModelAdapter
 from app.agents.schemas import AgentDecision, SummaryOutput
 from app.config import Settings
 from app.models.base import ModelError, ModelResponse, ToolCall
 from app.models.ollama import ModelFormatError, OllamaAgentAdapter
+
+
+async def test_critical_nullable_plan_decisions_are_explicit_in_generation():
+    seen = []
+    plan = KeeperPlan(
+        plan_id="plan",
+        cycle_id="cycle",
+        current_scene_id="scene",
+        parsed_intent={
+            "type": "observe",
+            "actor_member_id": "actor",
+            "actor_character_slot_id": "slot",
+            "evidence_quote": "我观察现场",
+            "confidence": 1,
+        },
+    )
+
+    def respond(request):
+        seen.append(json.loads(request.content)["format"])
+        return httpx.Response(200, json={"message": {"content": plan.model_dump_json()}})
+
+    adapter = OllamaAgentAdapter(Settings(_env_file=None))
+    await adapter.client.aclose()
+    adapter.client = httpx.AsyncClient(
+        base_url="http://127.0.0.1:11434", transport=httpx.MockTransport(respond)
+    )
+    try:
+        result = await adapter.generate([], response_schema=KeeperPlan)
+    finally:
+        await adapter.close()
+    assert {"proposed_check", "proposed_transition_id"} <= set(seen[0]["required"])
+    assert "x-explicit-output" not in json.dumps(seen[0])
+    assert result.structured.proposed_check is None
+    assert result.structured.proposed_transition_id is None
 
 
 async def test_ollama_options_schema_and_hidden_thinking():

@@ -170,11 +170,11 @@ def test_context_budget_includes_separators_and_repair_feedback(client, game):  
                     binding,
                     profile,
                     cycle,
-                    phase="keeper_decide_repair",
+                    phase="repair_action_arguments",
                     additions={"validation_errors": [{"instruction": "先切换到维修间，再检定"}]},
                 )
                 assert len(json.dumps(context, ensure_ascii=False)) <= budget
-                assert context["phase"] == "keeper_decide_repair"
+                assert context["phase"] == "repair_action_arguments"
                 assert context["validation_errors"]
 
     client.portal.call(verify)
@@ -191,7 +191,7 @@ def test_tool_receipt_idempotency(client, game):  # noqa: F811
             cycle.status = "running"
             run = await session.scalar(
                 select(AgentRun).where(
-                    AgentRun.cycle_id == cycle.id, AgentRun.graph_node == "keeper_decide"
+                    AgentRun.cycle_id == cycle.id, AgentRun.graph_node == "plan_keeper_action"
                 )
             )
             rid, room_id = run.id, run.room_id
@@ -221,7 +221,7 @@ def test_concurrent_human_actions_one_cycle(client, game):  # noqa: F811
         results = list(pool.map(lambda _: ok(client.post(path, json={})), range(2)))
     assert results[0]["check"]["dice"] == results[1]["check"]["dice"]
     assert wait_cycle(client, game)["status"] == "completed"
-    assert len(game["adapter"].prompts) == 4
+    assert len(game["adapter"].prompts) == 3
 
 
 def test_profile_draft_is_not_persisted_until_confirmation(client, game):  # noqa: F811

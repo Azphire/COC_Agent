@@ -6,14 +6,48 @@ Implements the existing model protocol. The graph never sees this transport.
 import json
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.models.base import ModelError, ModelResponse, ToolCall
 from app.models.factory import local_ollama_origin
 
 
 class ModelFormatError(ModelError):
-    pass
+    def __init__(self, message, issues=None):
+        super().__init__(message)
+        self.issues = issues or []
+
+
+def schema_issues(error, schema):
+    """Schema-defined paths and constraint codes only; never include model values."""
+    allowed = set()
+
+    def collect(value):
+        if isinstance(value, dict):
+            allowed.update(value.get("properties", {}))
+            for item in value.values():
+                collect(item)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        collect(schema.model_json_schema())
+    return [
+        {
+            "field": ".".join(
+                str(p) if isinstance(p, int) or p in allowed else "unrecognized"
+                for p in item["loc"]
+            ),
+            "code": item["type"],
+            "limits": {
+                k: v
+                for k, v in item.get("ctx", {}).items()
+                if k in {"le", "ge", "max_length", "min_length"} and isinstance(v, (int, float))
+            },
+        }
+        for item in error.errors(include_input=False, include_url=False)[:5]
+    ]
 
 
 def generation_schema(value):
@@ -23,7 +57,21 @@ def generation_schema(value):
     after generation. num_predict independently limits generated response length.
     """
     if isinstance(value, dict):
-        return {k: generation_schema(v) for k, v in value.items() if k != "maxLength"}
+        result = {
+            k: generation_schema(v)
+            for k, v in value.items()
+            if k not in {"maxLength", "x-explicit-output"}
+        }
+        explicit = [
+            name
+            for name, prop in value.get("properties", {}).items()
+            if prop.get("x-explicit-output")
+        ]
+        if explicit:
+            # Require an explicit object or null for critical action decisions.
+            # Pydantic defaults keep old persisted plans readable.
+            result["required"] = list(dict.fromkeys([*result.get("required", []), *explicit]))
+        return result
     if isinstance(value, list):
         return [generation_schema(v) for v in value]
     return value
@@ -114,6 +162,10 @@ class OllamaAgentAdapter:
                     "output": data.get("eval_count"),
                 },
             )
+        except ValidationError as error:
+            raise ModelFormatError(
+                "模型输出格式无效", schema_issues(error, response_schema)
+            ) from None
         except (KeyError, TypeError, ValueError):
             raise ModelFormatError("模型输出格式无效") from None
 

@@ -5,10 +5,11 @@ import time
 from uuid import uuid4
 
 import pytest
+from adjudication_helpers import ScenarioAdapter as FakeModelAdapter
 from pydantic import ValidationError
 from test_rooms import headers, join, lobby, ok, prepare  # noqa: F401
 
-from app.agents.model import AgentModelClient, FakeModelAdapter
+from app.agents.model import AgentModelClient
 from app.agents.modules import Module, content_hash, load_modules
 from app.agents.schemas import AgentDecision, CheckRequest
 from app.agents.tools import TOOLS, validate
@@ -20,7 +21,7 @@ from app.rules.checks import check_value, judge, roll_check, threshold
 
 def scenario(messages, kwargs):
     context = json.loads(messages[-1]["content"])
-    if context.get("phase") == "narrate_publicly":
+    if context.get("phase") == "generate_keeper_narration":
         check = context["checks"][-1] if context["checks"] else None
         return {
             "content": f"本次检定出目 {check['result']['total']}，"
@@ -36,7 +37,7 @@ def scenario(messages, kwargs):
                 {"name": "propose_action", "arguments": {"text": "我检查入口，留意是否有人靠近。"}}
             ]
         }
-    if context["phase"] == "resolve_keeper_response":
+    if context["phase"] == "execute_state_tools":
         check = context["checks"][-1]
         tools = [{"name": "reveal_clue", "arguments": {"clue_id": "logbook"}}]
         if check["result"]["passed"]:
@@ -55,15 +56,13 @@ def scenario(messages, kwargs):
     if "检定" in action["payload"]["text"]:
         return {
             "tools": [
-                {"name": "update_scene", "arguments": {"scene_id": "workshop"}},
                 {
                     "name": "request_skill_check",
                     "arguments": {
                         "target_member_id": action["actor_member_id"],
                         "kind": "skill",
                         "name": "spot_hidden",
-                        "reason": "仔细检查工作台",
-                        "clue_id": "pin",
+                        "reason": "仔细检查当前现场",
                         "visibility": "actor_and_host"
                         if "私密" in action["payload"]["text"]
                         else "public",
@@ -240,41 +239,41 @@ def test_interrupt_roll_resume_and_duplicate(client, game):
     ok(client.post(path, json={}, headers=headers(game["remote"]["member_token"])))
     final = wait_cycle(client, game)
     assert final["status"] == "completed", final
-    assert final["id"] == cycle["id"] and final["state"]["call_count"] == 4
+    assert final["id"] == cycle["id"] and final["state"]["call_count"] == 3
     resolved = ok(client.post(path, json={}))
     assert resolved["check"]["status"] == "resolved"
-    assert len(game["adapter"].prompts) == 4
+    assert len(game["adapter"].prompts) == 3
     events = ok(client.get(game["prefix"] + "/events"))["events"]
     assert sum(e["type"] == "check.resolved" for e in events) == 1
 
 
 @pytest.mark.parametrize("repair_succeeds", [True, False])
-def test_scene_plan_repair_is_bounded_and_precedes_tools(client, game, repair_succeeds):
+def test_argument_repair_is_bounded_and_precedes_tools(client, game, repair_succeeds):
     def responder(messages, kwargs):
         context = json.loads(messages[-1]["content"])
+        if kwargs["response_schema"].__name__ == "ArgumentRepair":
+            assert "tool_schema" in context and "action_identifiers" not in context
+            args = dict(context["arguments"])
+            if repair_succeeds:
+                args.pop("forged_result")
+            return {"arguments": args}
         plan = scenario(messages, kwargs)
-        if context["phase"] == "keeper_decide" or (
-            context["phase"] == "keeper_decide_repair" and not repair_succeeds
-        ):
-            plan["tools"] = [t for t in plan["tools"] if t["name"] != "update_scene"]
-        if context["phase"] == "keeper_decide_repair":
-            assert context["validation_errors"][0]["errors"][0]["required_scene_id"] == "workshop"
+        if context["phase"] == "plan_keeper_action":
+            plan["tools"][0]["arguments"]["forged_result"] = 1
         return plan
 
     game["adapter"].responder = responder
-    ok(submit(client, game, "进入维修间，对工作台进行侦查检定"))
+    ok(submit(client, game, "对当前现场进行侦查检定"))
     cycle = wait_cycle(client, game)
-    assert cycle["state"]["call_count"] == 2
-    assert cycle["status"] == ("waiting_for_roll" if repair_succeeds else "failed"), cycle
-    runs = ok(client.get(game["prefix"] + "/agent-runs"))
-    assert any(r["status"] == "rejected" for r in runs)
+    assert cycle["state"]["call_count"] == (2 if repair_succeeds else 4)
+    assert cycle["status"] == ("waiting_for_roll" if repair_succeeds else "completed"), cycle
     checks = ok(client.get(game["prefix"] + "/checks"))
     if repair_succeeds:
         assert len(checks) == 1
         ok(client.post(game["prefix"] + f"/checks/{checks[0]['id']}/roll", json={}))
         final = wait_cycle(client, game)
         assert final["status"] == "completed", final
-        assert final["state"]["call_count"] == 5
+        assert final["state"]["call_count"] == 4
     else:
         assert checks == []
 

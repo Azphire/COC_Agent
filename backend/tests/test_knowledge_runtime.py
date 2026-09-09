@@ -41,7 +41,7 @@ def test_run_evidence_excludes_uninjected_candidates_and_uncropped_text(
             room = await svc.rooms.room(session, rag_game["room"]["id"])
             original = await session.scalar(
                 select(AgentRun).where(
-                    AgentRun.room_id == room.id, AgentRun.graph_node == "keeper_decide"
+                    AgentRun.room_id == room.id, AgentRun.graph_node == "plan_keeper_action"
                 )
             )
             run = AgentRun(
@@ -100,7 +100,7 @@ def rag_game(client, game):  # noqa: F811
 
     def responder(messages, kwargs):
         context = json.loads(messages[-1]["content"])
-        if context.get("phase") == "narrate_publicly":
+        if context.get("phase") == "generate_keeper_narration":
             rules = context.get("RULE_EVIDENCE", [])
             if rules:
                 return {
@@ -125,7 +125,7 @@ def rag_game(client, game):  # noqa: F811
                 ]
             }
         response = scenario(messages, kwargs)
-        if context["phase"] == "keeper_decide":
+        if context["phase"] == "plan_keeper_action":
             response["tools"].insert(
                 0, {"name": "search_module", "arguments": {"query": "维修间工作台检定调查"}}
             )
@@ -155,7 +155,7 @@ def test_rag_fake_cycle_interrupt_tools_claims_visibility_and_exports(client, ra
     audits = []
     for run in runs:
         audits.extend(ok(client.get(game["prefix"] + f"/agent-runs/{run['id']}/retrievals")))
-        if run["graph_node"] in {"run_teammates", "narrate_publicly"}:
+        if run["graph_node"] in {"decide_teammates", "generate_keeper_narration"}:
             assert "私密测试标记紫月" not in json.dumps(run["context"], ensure_ascii=False)
         assert run["model_calls"]
     assert audits and any(a["injected_ids"] for a in audits)
@@ -179,8 +179,8 @@ def test_rag_fake_cycle_interrupt_tools_claims_visibility_and_exports(client, ra
         ).status_code
         == 404
     )
-    narrator = next(r for r in runs if r["graph_node"] == "narrate_publicly")
-    citation = narrator["structured_output"]["claims"][0]["evidence_ids"][0]
+    narrator = next(r for r in runs if r["graph_node"] == "generate_keeper_narration")
+    citation = narrator["structured_output"]["grounded_claims"][0]["evidence_ids"][0]
     assert (
         client.get(
             game["prefix"] + f"/evidence/{citation}",
@@ -216,7 +216,7 @@ def test_grounding_rejects_invalid_claims(client, rag_game, case):
             room = await svc.rooms.room(session, game["room"]["id"])
             run = await session.scalar(
                 select(AgentRun).where(
-                    AgentRun.room_id == room.id, AgentRun.graph_node == "keeper_decide"
+                    AgentRun.room_id == room.id, AgentRun.graph_node == "plan_keeper_action"
                 )
             )
             rows = list(
@@ -341,7 +341,7 @@ def test_unsupported_rule_request_needs_host_ruling(client, rag_game, scene_evas
 
     def responder(messages, kwargs):
         context = json.loads(messages[-1]["content"])
-        if context.get("phase") == "narrate_publicly":
+        if context.get("phase") == "generate_keeper_narration":
             if scene_evasion:
                 scene = context["module"]["scene"]
                 return {

@@ -116,7 +116,7 @@ async def build_context(
     service, session, room, binding, profile, cycle, phase=None, additions=None, run_id=None
 ):
     phase = phase or cycle.state["current_node"]
-    narrator = phase == "narrate_publicly"
+    narrator = phase in {"narrate_publicly", "generate_keeper_narration"}
     keeper = profile.role == "keeper" and not narrator
     identity = Identity(binding.member_id, keeper)
     all_events = await service.rooms.events(session, room, identity)
@@ -308,6 +308,26 @@ async def build_context(
                 {"cycle_id": cycle.id, **resolved["module_context_audit"]},
                 "host_only",
             )
+    if not keeper and context.get("public_entities"):
+        # Citation metadata is resolved from frozen server records after a claim
+        # is selected. Repeating it here crowds out the actual check result.
+        context["public_entities"] = [
+            {
+                k: v
+                for k, v in entity.items()
+                if k
+                in {
+                    "id",
+                    "type",
+                    "title",
+                    "public_summary",
+                    "state",
+                    "origin",
+                    "revealed_event_seq",
+                }
+            }
+            for entity in context["public_entities"]
+        ]
     if run_id:
         configured = await service.knowledge.binding(session, room.id)
         if configured and configured["enabled"]:
@@ -351,10 +371,43 @@ async def build_context(
         context["memories"].append(candidate)
         selected.append(memory.id)
     window = all_events[-service.settings.agent_event_window :]
-    for event in reversed(window):
+    pending_window = []
+    if not narrator:
+        from app.agents.adjudication_schemas import SummaryRecoveryState
+        from app.persistence.adjudication_models import SummaryRecoveryRecord
+
+        recovery_row = await session.get(SummaryRecoveryRecord, (room.id, binding.profile_id))
+        if recovery_row:
+            recovery = SummaryRecoveryState.model_validate(recovery_row.document)
+            if recovery.stale and recovery.pending_start_seq:
+                pending_window = [
+                    e
+                    for e in all_events
+                    if recovery.pending_start_seq
+                    <= e["seq"]
+                    <= (recovery.pending_end_seq or e["seq"])
+                ]
+                context["summary_status"] = {
+                    "stale": True,
+                    "pending_start_seq": recovery.pending_start_seq,
+                    "pending_end_seq": recovery.pending_end_seq,
+                }
+    # Reserve the current action in its dedicated field; then prioritize the oldest
+    # unsummarized evidence before filling the remainder with recent events.
+    chosen_seqs = set()
+    state_events = [
+        e
+        for e in reversed(window)
+        if e["type"] in {"clue.revealed", "entity.revealed", "check.resolved", "scene.updated"}
+    ]
+    for event in [*pending_window, *state_events, *reversed(window)]:
+        if event["seq"] in chosen_seqs:
+            continue
         proposed = {**context, "events": [event, *context["events"]]}
         if len(json.dumps(proposed, ensure_ascii=False)) <= budget:
             context["events"].insert(0, event)
+            chosen_seqs.add(event["seq"])
+    context["events"].sort(key=lambda e: e["seq"])
     require(
         len(json.dumps(context, ensure_ascii=False)) <= budget,
         "当前模组和角色超过上下文预算，请提高上下文限制或减少席位",

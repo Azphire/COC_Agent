@@ -126,8 +126,10 @@ class NavigationCheck(PreparationCheck):
         )
         return process
 
-    def __init__(self, real, config):
-        SmokeCheck.__init__(self, artifact_prefix="batch6-real" if real else "batch6-fake")
+    def __init__(self, real, config, artifact_prefix=None):
+        SmokeCheck.__init__(
+            self, artifact_prefix=artifact_prefix or ("batch6-real" if real else "batch6-fake")
+        )
         self.real, self.config, self.pages, self.backend = real, config, [], None
         self.report = {"mode": "local qwen3:8b" if real else "Fake Model", "passed": False}
         self.http.timeout = 180

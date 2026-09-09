@@ -10,14 +10,15 @@ export default function RoomTimelineEvent({ event, room }: { event: RoomEvent; r
   const teammate = ['agent.spoke', 'agent.action_proposed'].includes(event.type)
   const system = event.type.startsWith('check.') || event.type === 'agent.cycle_changed' || event.type === 'clue.revealed'
   const actor = String(p.actor_name || (isKP || teammate ? binding?.name : member?.display_name) || '系统')
-  const role = event.type.startsWith('review.') ? '主机审阅' : event.type.startsWith('entity.') ? '线索' : event.type === 'scene.updated' ? '场景' : event.type.startsWith('check.') ? '检定' : event.type === 'agent.cycle_changed' ? 'Agent' : isKP ? 'KP' : teammate ? 'AI队友' : system ? '系统' : member?.controller_type === 'agent' ? 'AI队友' : member ? '真人' : '系统'
+  const role = event.type === 'npc.spoke' ? 'NPC' : event.type.startsWith('review.') ? '主机审阅' : event.type.startsWith('entity.') ? '线索' : event.type === 'scene.updated' ? '场景' : event.type.startsWith('check.') ? '检定' : event.type === 'agent.cycle_changed' ? 'Agent' : isKP ? 'KP' : teammate ? 'AI队友' : system ? '系统' : member?.controller_type === 'agent' ? 'AI队友' : member ? '真人' : '系统'
   const cycle = String(p.cycle_id || '').slice(0, 8)
-  const textTypes = ['chat.message', 'action.submitted', 'keeper.narration', 'agent.spoke', 'agent.action_proposed', 'module.completed', 'agent.needs_host_ruling']
+  const textTypes = ['chat.message', 'action.submitted', 'keeper.narration', 'npc.spoke', 'agent.spoke', 'agent.action_proposed', 'module.completed', 'agent.needs_host_ruling']
   const result = p.result as { total: number; level: string; passed: boolean } | undefined
   const labels: Record<string, string> = { running: '进行中', waiting_for_roll: '等待检定', completed: '完成', failed: '失败', cancelled: '已取消' }
   return <li data-event-seq={event.seq} data-actor-type={role} data-controller={isKP || teammate ? 'agent' : system ? 'system' : member?.controller_type || 'system'}>
     <small>#{event.seq} [{new Date(event.occurred_at).toLocaleTimeString()}] [{role}{!system && actor !== '系统' ? `：${actor}` : ''}] {cycle && `[${cycle}]`} {event.visibility !== 'public' && '私密'}</small>
     {textTypes.includes(event.type) ? <p className="preserve-lines">{event.type === 'agent.spoke' ? '发言：' : event.type === 'agent.action_proposed' ? '行动：' : ''}{String(p.text)}</p>
+      : event.type === 'action.clarification_requested' ? <p>需要澄清：{String(p.question)}</p>
       : event.type === 'check.requested' ? <p>KP 请求“{String(p.name)}”检定 · {room.members.find(m => m.id === p.target_member_id)?.display_name}</p>
       : event.type === 'check.resolved' ? <p>1D100={result?.total}，结果：{resultLabels[result?.level || '']} · {result?.passed ? '通过' : '未通过'}</p>
       : event.type === 'clue.revealed' ? <p>公开线索：{String(p.title)} · {String(p.content)}</p>

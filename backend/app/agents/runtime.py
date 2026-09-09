@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from sqlalchemy import select
 
+from app.agents.action_runtime import ActionRuntimeMixin
 from app.agents.schemas import AgentCycleState, AgentDecision, SummaryOutput
 from app.agents.tools import AgentTools, definitions
 from app.domain.character import utc_now
@@ -34,22 +35,23 @@ from app.rooms.service import RoomError, require
 
 NODES = [
     "collect_context",
-    "keeper_decide",
-    "validate_keeper_actions",
-    "execute_keeper_tools",
+    "plan_keeper_action",
+    "validate_player_intent",
+    "validate_keeper_plan",
+    "supplement_context",
+    "execute_read_tools",
     "wait_for_host_review",
-    "execute_deferred_tools",
+    "create_checks",
     "wait_for_human_roll",
-    "resolve_keeper_response",
-    "wait_for_late_host_review",
-    "narrate_publicly",
-    "run_teammates",
-    "update_memories",
+    "execute_state_tools",
+    "generate_keeper_narration",
+    "decide_teammates",
+    "update_summary",
     "finish_cycle",
 ]
 
 
-class AgentRuntime:
+class AgentRuntime(ActionRuntimeMixin):
     def __init__(self, service):
         self.service, self.rooms = service, service.rooms
         self.tools = AgentTools(service)
@@ -185,7 +187,9 @@ class AgentRuntime:
                     if isinstance(error, ModelError)
                     else "Agent 回合执行失败，可由主机重试或取消"
                 )
-                await self.fail(room_id, cycle_id, type(error).__name__, safe)
+                from app.agents.action_policy import error_category
+
+                await self.fail(room_id, cycle_id, error_category(error), safe)
 
     async def fail(self, room_id, cycle_id, error_type, safe_error):
         async def operation(session, room):
@@ -194,7 +198,18 @@ class AgentRuntime:
                 return
             safe = await self.service.sanitize(session, room, safe_error)
             cycle.status = "failed"
-            cycle.state = {**cycle.state, "status": "failed", "safe_error": safe}
+            stages = dict(cycle.state.get("stage_states", {}))
+            stages[cycle.state["current_node"]] = {
+                "status": "failed",
+                "safe_error": safe,
+                "error_category": error_type,
+            }
+            cycle.state = {
+                **cycle.state,
+                "status": "failed",
+                "safe_error": safe,
+                "stage_states": stages,
+            }
             for run in await session.scalars(
                 select(AgentRun).where(
                     AgentRun.cycle_id == cycle.id, AgentRun.status.in_(["running", "decided"])
@@ -229,8 +244,22 @@ class AgentRuntime:
                 "房间或回合已暂停",
             )
             await self.service.knowledge.require_available(session, room.id)
-            await self.service.navigation.check_cycle(session, room, cycle)
-            cycle.state = {**cycle.state, "current_node": name}
+            try:
+                await self.service.navigation.check_cycle(session, room, cycle)
+            except RoomError:
+                if not await self.service.adjudication.recover_revision(session, room, cycle):
+                    raise
+            stages = dict(cycle.state.get("stage_states", {}))
+            previous = cycle.state.get("current_node")
+            if previous and previous != name:
+                stages[previous] = {"status": "completed", "safe_error": None}
+            stages[name] = {"status": "running", "safe_error": None}
+            cycle.state = {
+                **cycle.state,
+                "schema_version": 1,
+                "current_node": name,
+                "stage_states": stages,
+            }
             self.service.cycle_event(session, room, cycle)
             return cycle.state
 
@@ -1167,9 +1196,20 @@ class AgentRuntime:
                 "status": "completed",
                 "wait_reason": None,
                 "safe_error": None,
+                "stage_states": {
+                    **cycle.state.get("stage_states", {}),
+                    "finish_cycle": {"status": "completed", "safe_error": None},
+                },
             }
             for binding in await self.service.bindings(session, room.id):
                 binding.status = "idle"
+                binding.last_consumed_event_seq = max(
+                    binding.last_consumed_event_seq, cycle.state["triggering_event_seq"]
+                )
+            for run in await session.scalars(
+                select(AgentRun).where(AgentRun.cycle_id == cycle.id, AgentRun.status == "decided")
+            ):
+                run.status, run.finished_at = "completed", utc_now()
             self.service.cycle_event(session, room, cycle)
             return cycle.state
 

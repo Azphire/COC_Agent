@@ -21,7 +21,7 @@ Windows 原生运行的本地主机型 CoC 第七版跑团 Agent。目标是由�
 
 主机可展开“Agent 调试面板”并刷新，查看 graph 节点、模型、耗时、结构化输出、工具回执、输入事件与记忆；玩家不能读取这些数据。模组快照在绑定时固定，源 YAML 后续修改不影响旧房间。
 
-8GB 显存下默认所有调用串行复用一个模型，`MODEL_CONTEXT_LIMIT=8192`、`MODEL_OUTPUT_LIMIT=900`、`MODEL_TEMPERATURE=0.3`、`MODEL_KEEP_ALIVE=5m`。建议首次加载使用 `MODEL_TIMEOUT_SECONDS=240`；在根 `.env` 修改后重启后端。`default` 预设来自这些后端配置，不在档案中保存密钥。每轮最多 6 次实际调用（含格式修复、最多一次前置条件计划修正及一次摘要），每次最多 4 个工具。一个队友时，无检定通常 3 次、有检定通常 4 次；增加队友会占用同一预算。
+8GB 显存下默认所有调用串行复用一个模型，`MODEL_CONTEXT_LIMIT=8192`、`MODEL_OUTPUT_LIMIT=900`、`MODEL_TEMPERATURE=0.3`、`MODEL_KEEP_ALIVE=5m`。建议首次加载使用 `MODEL_TIMEOUT_SECONDS=240`；在根 `.env` 修改后重启后端。`default` 预设来自这些后端配置，不在档案中保存密钥。每轮默认最多 12 次实际调用，格式修复、参数修复、队友修复和按需摘要都计入预算；每份计划最多 4 个工具。一个队友时，基本流程为计划、结果叙事和队友决策三次调用；检定等待不重新生成计划。计划输出预算至少 1600 tokens，增加队友、修复和摘要会占用同一回合预算。
 
 第三批验收命令（仓库根目录，需已安装 Chrome，且 8000／5173 端口空闲）：
 
@@ -270,6 +270,27 @@ SQLite 默认为 `data/game.db`，启动时用 `metadata.create_all` 增量创�
 主机游戏界面的「当前场景导航」显示路径、前一场景、NPC、转换条件、审阅状态和实际 cycle 节点审计。无合法转换时沿用主机审阅；主机也可批准一次性转场。存读档固定 snapshot、source hash 和位置；出现 `module_structure_missing` 时保留调查板和历史，暂停新回合。恢复匹配知识库或在原 hash 未变时重建原准备任务，再调用 `POST /api/rooms/{id}/module-navigation/reload` 并恢复房间。
 
 《常暗之厢》可复用本地 Word 只读提取，构建完整基础目录后仅校正开场与一次邻接转换，绑定第五批已批准开场实体。没有已批准 NPC 时不要自动批准未来人物。Fake 三浏览器验收命令为 `backend/.venv/Scripts/python.exe backend/scripts/check_module_navigation.py`；真实验收加 `--real --config .cache/batch-6/real-config.json`，配置参考[ModuleIR 文档](docs/module-ir.md)，结果见[第六批报告](docs/batch-6-report.md)。脚本只在 `.cache` 的独立数据库运行并清理临时服务，真实模型固定使用已有 `qwen3:8b`。
+
+## 玩家行动裁决（第七批）
+
+真人行动先进入私有 `KeeperPlan`，服务端核对原文引句、角色、当前目标、工具权限、检定与转场条件，执行完成后才生成公开 `KeeperNarration`。观察入口或询问去向不会自动转场；只有真人明确移动、目标匹配批准出口且条件满足，才允许进入下一场景。检定等待期间只显示请求，骰点由服务端产生。
+
+意图或目标不明确时，界面显示“需要澄清”和问题。补充行动会作为新的 action event 关联该问题，上一回合已经结束。当前场景有已公开 NPC 时，可以在行动框选择交谈目标；KP 只按已批准公开摘要扮演 NPC。准备工作台显示批准人物计数，合成测试人物必须勾选专用标记。
+
+AI 队友可以 `pass`，不会被强制生成台词。服务端检查最近三次输出、其他队友和真人动作，重复内容最多修复一次，再重复则沉默；相同动作与目标默认冷却两个回合，场景或公开结果变化可解除，存档会保存冷却状态。
+
+工具缺少当前场景内容时允许一次局部补读；同场景 revision 冲突允许一次复核，权限与前置条件错误不盲目重试。参数修复不能发明目标 ID。已成功工具、检定、转场和公开事件通过 receipt 或等价幂等记录避免重复执行。摘要失败保留旧摘要和待摘要范围，后续回合重试；达到失败上限后主机可在调试面板手动重建。
+
+主机调试面板可查看意图、evidence quote、计划、允许/拒绝动作、补读和恢复、工具 receipt、最终叙事、队友拒绝与 pass、摘要 stale 状态。玩家只能看到公开结果、等待状态和澄清问题。完整协议见[行动裁决文档](docs/action-adjudication.md)，实测结果见[第七批报告](docs/batch-7-report.md)。
+
+《常暗之厢》行为验收依次进行：观察环境、调查入口但不移动、与当前 NPC 交谈、完成一次真人检定、让队友获得多次机会、明确进入批准的下一场景，再存档、重启、读档并继续观察。命令在仓库根目录运行：
+
+```powershell
+backend/.venv/Scripts/python.exe backend/scripts/check_action_adjudication.py
+backend/.venv/Scripts/python.exe backend/scripts/check_action_adjudication.py --real --config .cache/batch-6/real-config.json
+```
+
+脚本使用隔离数据库和三个 Chrome profile，真实模式只调用现有本地 `qwen3:8b`。一次摘要超时为隔离验收注入，单独计入审计；Fake 模式另注入局部工具错误。原始模组、`.env` 和用户库不修改。真实 PUBLIC/HOST_DEBUG 记录位于 `.cache/batch-7/常暗之厢-session.md`。
 
 ## 验证
 

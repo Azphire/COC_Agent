@@ -10,7 +10,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.models.base import ModelError, ModelResponse
 from app.models.factory import create_model
-from app.models.ollama import ModelFormatError, OllamaAgentAdapter
+from app.models.ollama import ModelFormatError, OllamaAgentAdapter, schema_issues
 
 _semaphores = WeakKeyDictionary()
 
@@ -82,13 +82,20 @@ class AgentModelClient:
                     ):
                         raise ModelFormatError("模型输出包含不支持的字段")
                     return result, int((time.monotonic() - started) * 1000)
-                except (ValidationError, ValueError, ModelFormatError):
+                except (ValidationError, ValueError, ModelFormatError) as error:
                     if attempt:
                         raise ModelFormatError("模型结构化输出在一次修复后仍无效") from None
                     prompt = list(messages) + [
                         {
                             "role": "user",
-                            "content": "上次格式无效。只返回所给 JSON schema 的对象，不输出推理。",
+                            "content": "上次格式无效。只返回所给 JSON schema 的对象，"
+                            "不输出推理。字段约束："
+                            + json.dumps(
+                                schema_issues(error, response_schema)
+                                if isinstance(error, ValidationError)
+                                else getattr(error, "issues", []),
+                                ensure_ascii=False,
+                            ),
                         }
                     ]
                 except TimeoutError:

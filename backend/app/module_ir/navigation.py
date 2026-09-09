@@ -286,6 +286,8 @@ class ModuleNavigationService:
         if run:
             cycle = await session.get(AgentCycle, run.cycle_id)
             await self.check_cycle(session, room, cycle)
+            if not host:
+                await self.agents.adjudication.guard_transition(session, room, run, target.node_id)
         legal = next(
             (
                 t
@@ -398,6 +400,18 @@ class ModuleNavigationService:
                 "host_only",
             )
             state.updated_event_seq = event.seq
+            if host:
+                self.rooms.append(
+                    session,
+                    room,
+                    "host.action",
+                    room.host_member_id,
+                    {
+                        "action": "scene_transition",
+                        "request_id": request.request_id,
+                        "scene_title": target.public_title,
+                    },
+                )
             result = {
                 "current_scene_node_id": target.node_id,
                 "navigation_revision": state.navigation_revision,

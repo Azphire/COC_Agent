@@ -56,6 +56,12 @@ class ActionInput(DomainModel):
     text: Text
     client_request_id: UUID
     actor_member_id: UUID | None = None
+    target_entity_id: str | None = Field(default=None, max_length=100)
+    clarification_event_seq: int | None = Field(default=None, ge=1)
+
+
+class ClarificationInput(ActionInput):
+    clarification_event_seq: int = Field(ge=1)
 
 
 class Empty(DomainModel):
@@ -140,7 +146,22 @@ class SummaryOutput(DomainModel):
     content: Text
 
 
+class CycleStage(DomainModel):
+    schema_version: Literal[1] = 1
+    status: Literal[
+        "running", "waiting_for_roll", "waiting_for_review", "completed", "failed", "cancelled"
+    ]
+    safe_error: str | None = None
+    error_category: str | None = None
+
+
 class AgentCycleState(TypedDict):
+    schema_version: int
+    requires_clarification: bool
+    clarification_question: str | None
+    clarification_event_seq: int | None
+    summary_attempted: bool
+    stage_states: dict
     current_scene_node_id: str
     selected_node_ids: list[str]
     selected_block_ids: list[str]

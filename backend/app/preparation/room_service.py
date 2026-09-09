@@ -49,6 +49,9 @@ class RoomEntityService:
             "revealed_by": row.revealed_by,
             "revealed_time": iso_utc(row.revealed_time) if row.revealed_time else None,
             "correction_reference": row.correction_reference,
+            "origin": "host_authored_test"
+            if "host_authored_test" in row.snapshot.get("tags", [])
+            else row.snapshot.get("generated_by", "model"),
         }
 
     async def public(self, session, room_id):

@@ -150,7 +150,7 @@ class AgentTools:
     def __init__(self, service):
         self.service = service
 
-    async def execute(self, room_id, run_id, index, name, arguments):
+    async def execute(self, room_id, run_id, index, name, arguments, *, recovery=False):
         async def operation(session, room):
             run = await session.get(AgentRun, run_id)
             require(run and run.room_id == room.id, "运行记录不属于此房间", 403)
@@ -179,6 +179,13 @@ class AgentTools:
             key = f"{run_id}:{index}"
             fingerprint = content_hash({"name": name, "arguments": arguments})
             previous = await session.get(ToolReceipt, key)
+            if recovery and previous and not previous.result.get("ok"):
+                require(
+                    previous.result.get("code") in {"context_missing", "revision_conflict"},
+                    "此工具错误不能自动重试",
+                )
+                key += ":recovery"
+                previous = await session.get(ToolReceipt, key)
             if previous:
                 require(
                     previous.run_id == run_id
@@ -186,6 +193,26 @@ class AgentTools:
                     and previous.request_hash == fingerprint,
                     "工具幂等键已用于不同参数",
                 )
+                if previous.result.get("ok"):
+                    from app.agents.adjudication_schemas import AdjudicationRecord, RecoveryDecision
+                    from app.persistence.adjudication_models import ActionPlanRecord
+
+                    plan_record = await session.get(ActionPlanRecord, run.cycle_id)
+                    if plan_record:
+                        document = AdjudicationRecord.model_validate(plan_record.document)
+                        if not any(
+                            r.action == "receipt" and r.tool_index == index
+                            for r in document.recoveries
+                        ):
+                            document.recoveries.append(
+                                RecoveryDecision(
+                                    error="already_applied",
+                                    action="receipt",
+                                    tool_index=index,
+                                    succeeded=True,
+                                )
+                            )
+                            plan_record.document = document.model_dump(mode="json")
                 return previous.result
             require(0 <= index < 4, "每次 Agent run 最多四个工具", 422)
             try:
@@ -203,11 +230,20 @@ class AgentTools:
                     "code": "invalid_arguments",
                 }
             except RoomError as error:
+                from app.agents.action_policy import error_category
+
                 result = {
                     "ok": False,
                     "tool": name,
                     "error": error.message,
-                    "code": "tool_rejected",
+                    "code": error_category(error),
+                }
+            except Exception:
+                result = {
+                    "ok": False,
+                    "tool": name,
+                    "error": "工具暂时无法完成，请主机处理",
+                    "code": "internal_error",
                 }
             if not result["ok"]:
                 # A savepoint rollback expires objects changed during dispatch, including
@@ -227,7 +263,12 @@ class AgentTools:
                     room,
                     "agent.tool_rejected",
                     binding.member_id,
-                    {"cycle_id": run.cycle_id, "tool": name, "error": result["error"]},
+                    {
+                        "cycle_id": run.cycle_id,
+                        "tool": name,
+                        "error": result["error"],
+                        "code": result["code"],
+                    },
                     "host_only",
                 )
             cycle.state = {
@@ -241,6 +282,25 @@ class AgentTools:
 
     async def dispatch(self, session, room, run, binding, profile, name, args):
         service, rooms = self.service, self.service.rooms
+        from app.agents.action_policy import STATE_TOOLS
+        from app.persistence.adjudication_models import ActionPlanRecord
+
+        action_record = await session.get(ActionPlanRecord, run.cycle_id)
+        if action_record and name in STATE_TOOLS:
+            cycle = await session.get(AgentCycle, run.cycle_id)
+            _, doc, _, _ = await service.adjudication.validate(
+                session, room, cycle, after_check=True
+            )
+            require(
+                any(
+                    a.tool.name == name
+                    and a.tool.arguments == args.model_dump(mode="json", exclude_none=True)
+                    or a.tool.name == name
+                    and a.tool.arguments == args.model_dump(mode="json")
+                    for a in doc.validation.approved_actions
+                ),
+                "precondition_failed：工具未通过行动计划验证",
+            )
         navigation = await service.navigation.state(session, room.id)
         if navigation:
             cycle = await session.get(AgentCycle, run.cycle_id)
@@ -393,6 +453,7 @@ class AgentTools:
             await self.complete(session, room, module)
             return {"clue_id": clue.id, "event_seq": event.seq}
         if name == "update_scene":
+            await service.adjudication.guard_transition(session, room, run, args.scene_id)
             definition = Module.model_validate(module.document)
             scene = next((sc for sc in definition.scenes if sc.id == args.scene_id), None)
             require(scene is not None, "模组中没有此场景", 422)

@@ -3,11 +3,11 @@ import time
 from uuid import uuid4
 
 import pytest
+from adjudication_helpers import ScenarioAdapter as FakeModelAdapter
 from fastapi.testclient import TestClient
 from test_module_preparation import approve_opening, preparation  # noqa: F401
 from test_rooms import headers, lobby, ok, prepare  # noqa: F401
 
-from app.agents.model import FakeModelAdapter
 from app.main import create_app
 
 
@@ -26,7 +26,7 @@ def scenario(messages, kwargs):
     context = json.loads(messages[-1]["content"])
     if context.get("phase") == "summary":
         return {"content": "当前公开实体以调查板为准。"}
-    if context.get("phase") == "narrate_publicly":
+    if context.get("phase") == "generate_keeper_narration":
         entity = context["public_entities"][-1]
         return {
             "claims": [
@@ -45,7 +45,7 @@ def scenario(messages, kwargs):
                 {"name": "propose_action", "arguments": {"text": "我留意公告附近的动静。"}},
             ]
         }
-    if context["phase"] == "resolve_keeper_response":
+    if context["phase"] == "execute_state_tools":
         return {"tools": []}
     evidence = context.get("MODULE_EVIDENCE", [])
     action = context["triggering_action"]
@@ -156,9 +156,9 @@ def test_review_interrupt_resume_permissions_idempotency_and_public_context(
     runs = ok(client.get(prefix + "/agent-runs"))
     if decision == "reject":
         assert len(game["adapter"].prompts) <= 2
-        assert not any(r["graph_node"] == "run_teammates" for r in runs)
+        assert not any(r["graph_node"] == "decide_teammates" for r in runs)
     for run in runs:
-        if run["graph_node"] in {"narrate_publicly", "run_teammates"}:
+        if run["graph_node"] in {"generate_keeper_narration", "decide_teammates"}:
             text = json.dumps(run["context"], ensure_ascii=False)
             assert (
                 "keeper_summary" not in text
@@ -314,7 +314,7 @@ def test_scene_transition_uses_approved_relation_or_interrupt(
 
     def transition(messages, kwargs):
         context = json.loads(messages[-1]["content"])
-        if context.get("phase") == "keeper_decide":
+        if context.get("phase") == "plan_keeper_action":
             return {"tools": [{"name": "transition_scene", "arguments": {"scene_id": entity_id}}]}
         return scenario(messages, kwargs)
 
@@ -322,16 +322,13 @@ def test_scene_transition_uses_approved_relation_or_interrupt(
     submit(client, game, "进入通道")
     cycle = wait(client, game["prefix"])
     if not approved_relation:
-        assert cycle["status"] == "waiting_for_review", cycle
-        review = ok(client.get(game["prefix"] + "/review-requests"))[0]
-        assert review["request_type"] == "scene_transition"
-        ok(client.post(game["prefix"] + f"/review-requests/{review['id']}/approve", json={}))
-        cycle = wait(client, game["prefix"], ("completed", "failed"))
+        assert cycle["status"] == "completed" and cycle["state"]["requires_clarification"], cycle
+        assert ok(client.get(game["prefix"] + "/review-requests")) == []
+        assert ok(client.get(game["prefix"]))["game"]["module"]["scene"]["id"] != entity_id
+        return
     assert cycle["status"] == "completed", cycle
     assert ok(client.get(game["prefix"]))["game"]["module"]["scene"]["id"] == entity_id
-    assert len(ok(client.get(game["prefix"] + "/review-requests"))) == (
-        0 if approved_relation else 1
-    )
+    assert ok(client.get(game["prefix"] + "/review-requests")) == []
 
 
 def test_rejection_format_failure_ends_without_second_rewrite(client, prepared_game):
@@ -353,7 +350,7 @@ def test_grounded_raw_fact_becomes_review_before_canonical_memory(client, prepar
 
     def claim(messages, kwargs):
         context = json.loads(messages[-1]["content"])
-        if context.get("phase") == "keeper_decide":
+        if context.get("phase") == "plan_keeper_action":
             evidence = context["MODULE_EVIDENCE"][0]
             return {
                 "tools": [],

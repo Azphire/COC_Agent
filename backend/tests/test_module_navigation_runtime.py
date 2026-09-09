@@ -2,11 +2,12 @@ import json
 from uuid import uuid4
 
 import pytest
+from adjudication_helpers import ScenarioAdapter as FakeModelAdapter
 from test_host_review import wait
 from test_module_navigation import navigation_game, structure_data  # noqa: F401
 from test_rooms import headers, lobby, ok, prepare  # noqa: F401
 
-from app.agents.model import FakeModelAdapter
+from app.agents.tools import definitions as registered_tools
 from app.knowledge.schemas import GroundedClaim
 from app.module_ir.schemas import NodeArgs
 from app.persistence.agent_models import AgentRun
@@ -17,7 +18,7 @@ def responder(messages, kwargs):
     context = json.loads(messages[-1]["content"])
     if context.get("phase") == "summary":
         return {"content": "Public scene and revealed entities only."}
-    if context.get("phase") == "narrate_publicly":
+    if context.get("phase") == "generate_keeper_narration":
         scene = context["module"]["scene"]
         return {
             "claims": [
@@ -37,9 +38,10 @@ def responder(messages, kwargs):
             ]
         }
     definitions, _ = json.JSONDecoder().raw_decode(messages[0]["content"].split("可用工具：", 1)[1])
+    assert all(t["function"]["name"] != "transition_scene" for t in definitions)
     transition_schema = next(
         t["function"]["parameters"]
-        for t in definitions
+        for t in registered_tools("keeper", structure_navigation=True)
         if t["function"]["name"] == "transition_scene"
     )
     assert "scene_id" not in transition_schema["properties"]
@@ -48,7 +50,7 @@ def responder(messages, kwargs):
         "expected_revision",
         "request_id",
     }
-    if context["phase"] == "resolve_keeper_response":
+    if context["phase"] == "execute_state_tools":
         return {"tools": []}
     text = context["triggering_action"]["payload"]["text"]
     if "move" in text:
@@ -117,12 +119,12 @@ def test_normal_cycles_never_global_search_and_transition_context_switches(
     assert nav["current_scene_node_id"] == d["nodes"]["Future"]
     assert calls == []
     runs = ok(client.get(d["room_prefix"] + "/agent-runs"))
-    kp = [r for r in runs if r["graph_node"] == "keeper_decide"]
+    kp = [r for r in runs if r["graph_node"] == "plan_keeper_action"]
     assert kp and "OPENING_ONLY" in json.dumps(kp[0]["context"])
     assert all(
         "FUTURE_SECRET" not in json.dumps(r["context"])
         for r in runs
-        if r["graph_node"] in {"run_teammates", "narrate_publicly"}
+        if r["graph_node"] in {"decide_teammates", "generate_keeper_narration"}
     )
     events = ok(
         client.get(d["room_prefix"] + "/events", headers=headers(d["remote"]["member_token"]))
@@ -183,7 +185,7 @@ def test_node_grounding_and_arbitrary_node_rejected(client, running_navigation):
 
             run = await session.scalar(
                 select(AgentRun).where(
-                    AgentRun.room_id == room.id, AgentRun.graph_node == "keeper_decide"
+                    AgentRun.room_id == room.id, AgentRun.graph_node == "plan_keeper_action"
                 )
             )
             block = run.context["module"]["blocks"][0]
@@ -221,7 +223,7 @@ def test_rejected_navigation_tool_rolls_back_without_expired_orm_crash(client, r
 
     def rejected(messages, kwargs):
         context = json.loads(messages[-1]["content"])
-        if context.get("phase") == "keeper_decide":
+        if context.get("phase") == "plan_keeper_action":
             return {
                 "tools": [
                     {"name": "open_module_node", "arguments": {"node_id": "node_forged"}},
@@ -239,12 +241,15 @@ def test_rejected_navigation_tool_rolls_back_without_expired_orm_crash(client, r
         return responder(messages, kwargs)
 
     client.app.state.agent_service.model.adapter = FakeModelAdapter(responder=rejected)
-    assert act(client, d, "Invalid reference must not change position")["status"] == "completed"
+    cycle = act(client, d, "Invalid reference must not change position")
+    assert cycle["status"] == "completed"
     nav = ok(client.get(d["room_prefix"] + "/module-navigation"))
     assert nav["current_scene_node_id"] == d["nodes"]["Opening"]
     runs = ok(client.get(d["room_prefix"] + "/agent-runs"))
-    tools = next(r["tool_results"] for r in runs if r["graph_node"] == "keeper_decide")
-    assert len(tools) == 2 and all(not t["ok"] for t in tools)
+    tools = next(r["tool_results"] for r in runs if r["graph_node"] == "plan_keeper_action")
+    assert tools == []  # Invalid requests are now rejected before tool dispatch.
+    validation = ok(client.get(d["room_prefix"] + f"/cycles/{cycle['id']}/validation"))
+    assert len(validation["validation"]["rejected_actions"]) == 2
 
 
 def test_reveal_future_scene_entity_requires_current_binding(client, running_navigation):
@@ -252,7 +257,7 @@ def test_reveal_future_scene_entity_requires_current_binding(client, running_nav
 
     def future(messages, kwargs):
         context = json.loads(messages[-1]["content"])
-        if context.get("phase") == "keeper_decide":
+        if context.get("phase") == "plan_keeper_action":
             return {
                 "tools": [
                     {

@@ -47,6 +47,12 @@ class AgentService:
         self.structure = ModuleStructureService(self)
         self.navigation = ModuleNavigationService(self)
         self.module_context = ModuleContextResolver(self)
+        from app.agents.adjudication import ActionAdjudicationService
+
+        self.adjudication = ActionAdjudicationService(self)
+        from app.memory.recovery import SummaryRecoveryService
+
+        self.summary_recovery = SummaryRecoveryService(self)
 
     async def sanitize(self, session, room, value):
         members = await self.rooms.members(session, room)
@@ -133,6 +139,9 @@ class AgentService:
                 "current_node": cycle.state["current_node"],
                 "safe_error": cycle.state.get("safe_error"),
                 "wait_reason": cycle.state.get("wait_reason"),
+                "requires_clarification": cycle.state.get("requires_clarification", False),
+                "clarification_question": cycle.state.get("clarification_question"),
+                "clarification_event_seq": cycle.state.get("clarification_event_seq"),
             }
             if identity.is_host:
                 result["cycle"]["state"] = cycle.state
@@ -163,12 +172,50 @@ class AgentService:
                 "version": prepared.preparation_version,
                 "source_hash": prepared.source_hash,
             }
+        navigation = await self.navigation.state(session, room.id)
+        result["conversation_targets"] = [
+            e
+            for e in result["public_entities"]
+            if e["type"] == "npc"
+            and (not navigation or e["id"] in navigation.active_npc_entity_ids)
+        ]
         return result
 
     async def get(self, room_id, token, kind, target=None):
         async with self.rooms.database.sessions() as session:
             room = await self.rooms.room(session, room_id)
             identity = await self.rooms.identity(session, room, token)
+            if kind in {"plan", "validation", "teammate_behavior", "summary_status"}:
+                require(identity.is_host, "仅主机可查看内部行动和恢复状态", 403)
+                from app.agents.adjudication_schemas import AdjudicationRecord
+                from app.persistence.adjudication_models import (
+                    ActionPlanRecord,
+                    AgentBehaviorRecord,
+                    SummaryRecoveryRecord,
+                )
+
+                if kind in {"plan", "validation"}:
+                    record = await session.get(ActionPlanRecord, str(target))
+                    require(record and record.room_id == room.id, "计划不存在", 404)
+                    document = AdjudicationRecord.model_validate(record.document)
+                    return (
+                        document.plan.model_dump(mode="json")
+                        if kind == "plan"
+                        else document.model_dump(mode="json")
+                    )
+                model = (
+                    AgentBehaviorRecord if kind == "teammate_behavior" else SummaryRecoveryRecord
+                )
+                records = await session.scalars(select(model).where(model.room_id == room.id))
+                return [
+                    {
+                        "member_id" if kind == "teammate_behavior" else "profile_id": r.member_id
+                        if kind == "teammate_behavior"
+                        else r.profile_id,
+                        **r.document,
+                    }
+                    for r in records
+                ]
             if kind == "checks":
                 return await self.check_views(session, room, identity)
             if kind in {"runs", "run", "memories", "config"}:
@@ -393,6 +440,22 @@ class AgentService:
             if previous:
                 require(previous.request_hash == fingerprint, "请求 ID 已用于不同内容")
                 return {"event": event_view(previous)}
+            if body.clarification_event_seq:
+                clarification = await session.get(
+                    RoomEvent, (room.id, body.clarification_event_seq)
+                )
+                require(
+                    clarification
+                    and clarification.type == "action.clarification_requested"
+                    and clarification.payload.get("actor_member_id") == actor,
+                    "澄清请求不存在或不属于此行动者",
+                    403,
+                )
+            if body.target_entity_id:
+                visible = await self.entities.public(session, room.id)
+                require(
+                    any(e["id"] == body.target_entity_id for e in visible), "行动目标不可见", 403
+                )
             require(cycle is None, "此房间已有活动回合，请等待、重试或取消")
             bindings = await self.ensure_config(session, room)
             require(
@@ -405,7 +468,12 @@ class AgentService:
                 room,
                 "action.submitted",
                 actor,
-                {"text": safe_body["text"], "cycle_id": cycle_id},
+                {
+                    "text": safe_body["text"],
+                    "cycle_id": cycle_id,
+                    "target_entity_id": body.target_entity_id,
+                    "clarification_event_seq": body.clarification_event_seq,
+                },
                 request_id=str(body.client_request_id),
                 request_hash=fingerprint,
             )
@@ -438,6 +506,22 @@ class AgentService:
             session.add(cycle)
             self.cycle_event(session, room, cycle)
             return {"event": event_view(event)}
+        elif action == "behavior.reset":
+            require(cycle is None, "请在回合结束后重置队友状态")
+            from app.agents.adjudication_schemas import BehaviorState
+            from app.persistence.adjudication_models import AgentBehaviorRecord
+
+            row = await session.get(AgentBehaviorRecord, (room.id, target))
+            require(row, "队友状态不存在", 404)
+            row.document = BehaviorState().model_dump(mode="json")
+            self.rooms.append(
+                session,
+                room,
+                "agent.behavior_reset",
+                room.host_member_id,
+                {"member_id": target},
+                "host_only",
+            )
         elif action == "check.roll":
             check = await session.get(CheckRecord, target)
             require(check and check.room_id == room.id, "检定不存在", 404)
@@ -498,6 +582,21 @@ class AgentService:
             require(False, "未知 Agent 操作", 422)
 
     def cycle_event(self, session, room, cycle):
+        stages = dict(cycle.state.get("stage_states", {}))
+        if cycle.status != "running":
+            prior = stages.get(cycle.state["current_node"], {})
+            stages[cycle.state["current_node"]] = {
+                **prior,
+                "status": cycle.status,
+                "safe_error": cycle.state.get("safe_error"),
+            }
+        cycle.state = {
+            **cycle.state,
+            "stage_states": {
+                name: s.CycleStage.model_validate(value).model_dump(mode="json")
+                for name, value in stages.items()
+            },
+        }
         self.rooms.append(
             session,
             room,
@@ -552,7 +651,7 @@ class AgentService:
     async def request_check(self, session, room, run, args):
         cycle = await session.get(AgentCycle, run.cycle_id)
         require(
-            run.graph_node in {"keeper_decide", "keeper_decide_repair"},
+            run.graph_node in {"keeper_decide", "keeper_decide_repair", "plan_keeper_action"},
             "每轮仅允许 KP 首次决策请求一次检定",
             422,
         )
@@ -718,6 +817,23 @@ class AgentService:
             )
             for binding in doc["bindings"]
         }
+        from app.agents.adjudication_schemas import AdjudicationSaveState
+        from app.persistence.adjudication_models import AgentBehaviorRecord, SummaryRecoveryRecord
+
+        doc["adjudication"] = AdjudicationSaveState(
+            behaviors={
+                r.member_id: r.document
+                for r in await session.scalars(
+                    select(AgentBehaviorRecord).where(AgentBehaviorRecord.room_id == room.id)
+                )
+            },
+            summary_recoveries={
+                r.profile_id: r.document
+                for r in await session.scalars(
+                    select(SummaryRecoveryRecord).where(SummaryRecoveryRecord.room_id == room.id)
+                )
+            },
+        ).model_dump(mode="json")
         session.add(AgentSaveState(snapshot_id=snapshot.id, document=doc))
 
     @staticmethod
@@ -740,6 +856,29 @@ class AgentService:
             require(module is None, "该旧存档没有模组状态，请使用绑定模组之后的存档")
             return
         data = saved.document
+        from app.agents.adjudication_schemas import AdjudicationSaveState
+        from app.persistence.adjudication_models import AgentBehaviorRecord, SummaryRecoveryRecord
+
+        adjudication = AdjudicationSaveState.model_validate(data.get("adjudication", {}))
+        for model, key_name, values in (
+            (AgentBehaviorRecord, "member_id", adjudication.behaviors),
+            (SummaryRecoveryRecord, "profile_id", adjudication.summary_recoveries),
+        ):
+            for row in await session.scalars(select(model).where(model.room_id == room.id)):
+                if getattr(row, key_name) not in values:
+                    await session.delete(row)
+            for key, value in values.items():
+                row = await session.get(model, (room.id, key))
+                if row:
+                    row.document = value.model_dump(mode="json")
+                else:
+                    session.add(
+                        model(
+                            room_id=room.id,
+                            **{key_name: key},
+                            document=value.model_dump(mode="json"),
+                        )
+                    )
         for profile_id, document in data.get("profiles", {}).items():
             profile = await session.get(ProfileRecord, profile_id)
             require(

@@ -196,6 +196,48 @@ async def action(room_id: UUID, body: s.ActionInput, svc: Service, token: Token)
     return await svc.rooms.command(room_id, token, "agent.action", body)
 
 
+@router.post("/rooms/{room_id}/clarifications")
+async def clarify(room_id: UUID, body: s.ClarificationInput, svc: Service, token: Token):
+    return await svc.rooms.command(room_id, token, "agent.action", body)
+
+
+@router.get("/rooms/{room_id}/cycles/{cycle_id}/plan")
+async def keeper_plan(room_id: UUID, cycle_id: UUID, svc: Service, token: Token):
+    return await svc.get(room_id, token, "plan", cycle_id)
+
+
+@router.get("/rooms/{room_id}/cycles/{cycle_id}/validation")
+async def validation(room_id: UUID, cycle_id: UUID, svc: Service, token: Token):
+    return await svc.get(room_id, token, "validation", cycle_id)
+
+
+@router.get("/rooms/{room_id}/teammate-behavior")
+async def behavior(room_id: UUID, svc: Service, token: Token):
+    return await svc.get(room_id, token, "teammate_behavior")
+
+
+@router.post("/rooms/{room_id}/teammate-behavior/{member_id}/reset")
+async def reset_behavior(room_id: UUID, member_id: UUID, svc: Service, token: Token):
+    return await svc.rooms.command(room_id, token, "agent.behavior.reset", target=member_id)
+
+
+@router.get("/rooms/{room_id}/summary-status")
+async def summary_status(room_id: UUID, svc: Service, token: Token):
+    return await svc.get(room_id, token, "summary_status")
+
+
+@router.post("/rooms/{room_id}/summary-rebuild")
+async def rebuild_summary(room_id: UUID, svc: Service, token: Token):
+    await svc.get(room_id, token, "summary_status")
+    async with svc.rooms.database.sessions() as session:
+        require(not await svc.cycle(session, str(room_id), active=True), "请等待回合结束再重建摘要")
+        cycle = await svc.cycle(session, str(room_id))
+        require(cycle, "尚无可摘要的行动")
+        cycle_id = cycle.id
+    await svc.summary_recovery.update(str(room_id), cycle_id, manual=True)
+    return await svc.get(room_id, token, "summary_status")
+
+
 @router.get("/rooms/{room_id}/agent-cycle")
 async def cycle(room_id: UUID, svc: Service, token: Token):
     return await svc.get(room_id, token, "cycle")
