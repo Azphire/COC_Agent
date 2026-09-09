@@ -55,6 +55,14 @@ class AgentCycle(Base):
     __tablename__ = "agent_cycles"
     __table_args__ = (
         Index(
+            "uq_active_room_cycle_with_review",
+            "room_id",
+            unique=True,
+            sqlite_where=text(
+                "status IN ('running', 'waiting_for_roll', 'waiting_for_review', 'failed')"
+            ),
+        ),
+        Index(
             "uq_active_room_cycle",
             "room_id",
             unique=True,

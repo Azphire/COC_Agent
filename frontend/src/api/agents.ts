@@ -1,4 +1,5 @@
 import type { KnowledgeBinding } from './knowledge'
+import type { PublicEntity } from './preparation'
 
 export type AgentProfileInput = {
   role: 'keeper' | 'investigator'; name: string; background: string; personality: string;
@@ -13,6 +14,8 @@ export type Check = {
   result: { total: number; threshold: number; level: string; passed: boolean; outcome: string } | null;
 }
 export type GameState = {
+  public_entities?: PublicEntity[];
+  preparation?: { id: string; version: number; source_hash: string };
   knowledge?: KnowledgeBinding;
   enabled: boolean;
   module: { id: string; title: string; public_introduction: string; scene: { id: string; title: string; public_description: string }; clues: { id: string; title: string; content: string }[]; completed: boolean } | null;
@@ -22,4 +25,4 @@ export type GameState = {
 }
 export const difficultyLabels = { regular: '普通', hard: '困难', extreme: '极难' }
 export const resultLabels: Record<string, string> = { critical: '大成功', extreme: '极难成功', hard: '困难成功', regular: '普通成功', failure: '失败', fumble: '大失败' }
-export const nodeLabels: Record<string, string> = { collect_context: '整理现场', keeper_decide: 'KP 思考中', validate_keeper_actions: 'KP 思考中', execute_keeper_tools: 'KP 推进调查', wait_for_human_roll: '等待检定', resolve_keeper_response: 'KP 叙事中', narrate_publicly: 'KP 叙事中', run_teammates: '队友行动中', update_memories: '整理记忆', finish_cycle: '回合结束' }
+export const nodeLabels: Record<string, string> = { wait_for_host_review: '等待主机审阅', execute_deferred_tools: '执行已批准行动', wait_for_late_host_review: '核对审阅结果', collect_context: '整理现场', keeper_decide: 'KP 思考中', validate_keeper_actions: 'KP 思考中', execute_keeper_tools: 'KP 推进调查', wait_for_human_roll: '等待检定', resolve_keeper_response: 'KP 叙事中', narrate_publicly: 'KP 叙事中', run_teammates: '队友行动中', update_memories: '整理记忆', finish_cycle: '回合结束' }

@@ -28,7 +28,13 @@ class AgentModelClient:
         self.calls = []
 
     async def generate(
-        self, messages, response_schema=None, tools=None, on_call=None, on_result=None
+        self,
+        messages,
+        response_schema=None,
+        tools=None,
+        on_call=None,
+        on_result=None,
+        output_limit=None,
     ):
         started = time.monotonic()
         if self.adapter is None:
@@ -50,7 +56,7 @@ class AgentModelClient:
                             response_schema=response_schema,
                             tools=tools,
                             temperature=self.settings.model_temperature,
-                            max_tokens=self.settings.model_output_limit,
+                            max_tokens=output_limit or self.settings.model_output_limit,
                         )
                     if not isinstance(result, ModelResponse):
                         raise ModelFormatError("模型输出格式无效")

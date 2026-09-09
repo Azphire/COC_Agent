@@ -142,3 +142,8 @@ pre {
 .check-card { padding: 1rem; border: 1px solid #b6aa92; border-radius: .5rem; margin: .8rem 0; background: #fbf8ef; }
 .agent-binding { border-top: 1px solid #d7d2c6; padding: .8rem 0; }
 .agent-game [role="status"] { font-weight: 600; color: #36564d; }
+.board-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+.entity-card { padding: 1rem; margin-block: 1rem; border: 1px solid #607b8060; border-radius: 8px; }
+.entity-card h4 { margin-top: 0; }
+.entity-card textarea { min-height: 90px; }
+.host-review { border-left: 4px solid #a97729; }

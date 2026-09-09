@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.agents.model import AgentModelClient
 from app.agents.runtime import AgentRuntime
 from app.agents.service import AgentService
-from app.api import agents, characters, health, knowledge, model, rooms, websocket
+from app.api import agents, characters, health, knowledge, model, preparation, rooms, websocket
 from app.auth import require_host
 from app.character.repository import VersionConflict
 from app.character.service import CharacterError
@@ -42,11 +42,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             application.state.agent_service = agent_service
             application.state.room_service.agent_service = agent_service
+            await agent_service.preparation.initialize()
             agent_service.runtime = AgentRuntime(agent_service)
             await agent_service.runtime.initialize()
             yield
         finally:
             if hasattr(application.state, "agent_service"):
+                await application.state.agent_service.preparation.close()
                 await application.state.agent_service.runtime.close()
             await database.close()
 
@@ -66,6 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(rooms.ws_router)
     application.include_router(agents.router)
     application.include_router(knowledge.router)
+    application.include_router(preparation.router)
 
     @application.middleware("http")
     async def host_boundary(request, call_next):

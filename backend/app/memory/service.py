@@ -65,7 +65,14 @@ async def write_memory(session, rooms, room, binding, profile, args):
             sources
             and all(
                 e["type"]
-                in {"clue.revealed", "scene.updated", "check.resolved", "module.completed"}
+                in {
+                    "clue.revealed",
+                    "scene.updated",
+                    "check.resolved",
+                    "module.completed",
+                    "entity.revealed",
+                    "entity.corrected",
+                }
                 for e in sources
             ),
             "世界事实必须来自权威事件",
@@ -173,12 +180,101 @@ async def build_context(
         "phase": phase,
         **(additions or {}),
     }
+    prepared = await service.entities.binding(session, room.id)
+    if prepared:
+        public_entities = await service.entities.public(session, room.id)
+        context["public_entities"] = public_entities
+        context["prepared_module"] = True
+        context["public_state"] = {"scene_id": prepared.current_scene}
+        if cycle.state.get("review_result"):
+            context["review_result"] = {"status": cycle.state["review_result"]["status"]}
+        if keeper:
+            actor_id = (trigger or {}).get("actor_member_id")
+            context["characters"] = [
+                card
+                if card["member_id"] == actor_id
+                else {
+                    k: v
+                    for k, v in card.items()
+                    if k not in {"effective_attributes", "skill_values"}
+                }
+                for card in cards
+            ]
+            entities = await service.entities.host(session, room.id)
+            # The same frozen summaries are already in approved_entities. Avoid
+            # repeating their source metadata in the keeper's bounded context.
+            context["public_entities"] = [
+                {"id": e["id"], "state": e["state"]} for e in public_entities
+            ]
+            context["module"] = {
+                "id": module.document["id"],
+                "title": module.document["title"],
+                "approved_entities": [
+                    {
+                        k: e[k]
+                        for k in (
+                            "id",
+                            "type",
+                            "title",
+                            "keeper_summary",
+                            "public_summary",
+                            "state",
+                        )
+                    }
+                    for e in entities
+                ],
+                "approved_relations": [
+                    {
+                        k: r[k]
+                        for k in (
+                            "source_entity_id",
+                            "target_entity_id",
+                            "relation_type",
+                            "keeper_note",
+                        )
+                    }
+                    for r in prepared.relations
+                ],
+            }
+            for item, entity in zip(context["module"]["approved_entities"], entities, strict=True):
+                conditions = {k: v for k, v in entity["reveal_conditions"].items() if v}
+                if conditions:
+                    item["reveal_conditions"] = conditions
+                if entity["suggested_checks"]:
+                    item["suggested_checks"] = entity["suggested_checks"]
+            context["review_result"] = cycle.state.get("review_result")
+        else:
+            visible = public_module(module)
+            context["module"] = {k: visible[k] for k in ("id", "title", "scene")}
+            context["public_state"] = {"scene_id": prepared.current_scene}
     if narrator:
         context["profile"] = {"role": "public_narrator"}
         context["checks"] = [c for c in context["checks"] if c["visibility"] == "public"]
     for check in context["checks"]:
         if check.get("dice"):
             check["dice"] = {k: v for k, v in check["dice"].items() if k != "roll_record"}
+    if prepared:
+        context["checks"] = [
+            {
+                k: v
+                for k, v in check.items()
+                if k
+                in {
+                    "id",
+                    "target_member_id",
+                    "kind",
+                    "name",
+                    "difficulty",
+                    "value",
+                    "visibility",
+                    "status",
+                    "dice",
+                    "result",
+                    "clue_id",
+                }
+            }
+            for check in context["checks"]
+        ]
     # An upper bound in characters is conservative for the configured Chinese context.
     budget = min(
         service.settings.agent_context_chars,

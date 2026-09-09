@@ -24,7 +24,7 @@ from app.persistence.room_models import RoomEvent, RoomMember
 from app.rooms.service import event_view, iso_utc, require
 from app.rules.checks import check_value, roll_check
 
-ACTIVE = ("running", "waiting_for_roll", "failed")
+ACTIVE = ("running", "waiting_for_roll", "waiting_for_review", "failed")
 
 
 class AgentService:
@@ -35,6 +35,11 @@ class AgentService:
         from app.knowledge.service import KnowledgeService
 
         self.knowledge = KnowledgeService(self)
+        from app.preparation.room_service import RoomEntityService
+        from app.preparation.service import PreparationService
+
+        self.preparation = PreparationService(self)
+        self.entities = RoomEntityService(self)
 
     async def sanitize(self, session, room, value):
         members = await self.rooms.members(session, room)
@@ -112,6 +117,7 @@ class AgentService:
             "checks": checks,
             "cycle": None,
             "bindings": [],
+            "public_entities": await self.entities.public(session, room.id),
         }
         if cycle:
             result["cycle"] = {
@@ -119,6 +125,7 @@ class AgentService:
                 "status": cycle.status,
                 "current_node": cycle.state["current_node"],
                 "safe_error": cycle.state.get("safe_error"),
+                "wait_reason": cycle.state.get("wait_reason"),
             }
             if identity.is_host:
                 result["cycle"]["state"] = cycle.state
@@ -141,6 +148,14 @@ class AgentService:
             )
         if identity.is_host and module:
             result["keeper_module"] = module.document
+            result["host_entities"] = await self.entities.host(session, room.id)
+        prepared = await self.entities.binding(session, room.id)
+        if prepared:
+            result["preparation"] = {
+                "id": prepared.preparation_id,
+                "version": prepared.preparation_version,
+                "source_hash": prepared.source_hash,
+            }
         return result
 
     async def get(self, room_id, token, kind, target=None):
@@ -394,6 +409,15 @@ class AgentService:
                 current_node="collect_context",
                 keeper_run_id=None,
                 pending_check_id=None,
+                wait_reason=None,
+                pending_review_id=None,
+                approved_entity_ids_used=[],
+                proposed_entity_ids=[],
+                revealed_entity_ids=[],
+                scene_transition=None,
+                review_count=0,
+                review_result=None,
+                deferred_tools=[],
                 tool_results=[],
                 teammate_queue=[b.id for b in bindings if b.member_id != room.host_member_id],
                 completed_teammate_ids=[],
@@ -477,10 +501,20 @@ class AgentService:
                 "current_node": cycle.state["current_node"],
                 "safe_error": cycle.state.get("safe_error"),
                 "call_count": cycle.state.get("call_count", 0),
+                "wait_reason": cycle.state.get("wait_reason"),
             },
         )
 
     async def cancel_cycle(self, session, room, cycle):
+        from app.persistence.preparation_models import HostReviewRequest
+
+        review = await session.scalar(
+            select(HostReviewRequest).where(
+                HostReviewRequest.cycle_id == cycle.id, HostReviewRequest.status == "pending"
+            )
+        )
+        if review:
+            review.status, review.resolved_at = "cancelled", utc_now()
         checks = await session.scalars(
             select(CheckRecord).where(
                 CheckRecord.cycle_id == cycle.id, CheckRecord.status == "pending"
@@ -502,7 +536,7 @@ class AgentService:
                 check.document["visibility"],
             )
         cycle.status, cycle.finished_at = "cancelled", utc_now()
-        cycle.state = {**cycle.state, "status": "cancelled"}
+        cycle.state = {**cycle.state, "status": "cancelled", "wait_reason": None}
         for binding in await self.bindings(session, room.id):
             binding.status = "idle"
         self.cycle_event(session, room, cycle)
@@ -515,6 +549,10 @@ class AgentService:
             422,
         )
         require(cycle.state.get("pending_check_id") is None, "本轮已请求过检定")
+        require(
+            not cycle.state.get("pending_review_id") or cycle.state.get("review_result"),
+            "主机审阅通过后才能创建检定",
+        )
         target = await session.get(RoomMember, str(args.target_member_id))
         require(
             target and target.room_id == room.id and target.active and target.role == "player",
@@ -531,7 +569,21 @@ class AgentService:
         except ValueError as error:
             require(False, str(error), 422)
         module = await self.module(session, room.id)
-        if args.clue_id:
+        prepared = await self.entities.binding(session, room.id)
+        if args.clue_id and prepared:
+            entity = await self.entities.entity(session, room.id, args.clue_id)
+            await self.entities.check_conditions(
+                session, room, entity, run.cycle_id, for_check=True
+            )
+            expected = entity.snapshot["reveal_conditions"]["successful_check"]
+            require(
+                expected
+                and (args.kind, args.name, args.difficulty)
+                == (expected["kind"], expected["name"], expected["difficulty"]),
+                "检定与实体批准条件不匹配",
+                422,
+            )
+        elif args.clue_id:
             clue = next(
                 (c for c in Module.model_validate(module.document).clues if c.id == args.clue_id),
                 None,
@@ -621,6 +673,7 @@ class AgentService:
 
     async def save(self, session, room, snapshot):
         await self.knowledge.save(session, room, snapshot)
+        await self.entities.save(session, room, snapshot)
         module = await self.module(session, room.id)
         if module is None:
             return
@@ -729,3 +782,4 @@ class AgentService:
                         "safe_error": None,
                     }
                 self.cycle_event(session, room, restored)
+        await self.entities.load(session, room, snapshot)

@@ -7,9 +7,69 @@ from test_agent_runtime import game, scenario, submit, wait_cycle  # noqa: F401
 from test_rooms import headers, lobby, ok  # noqa: F401
 
 from app.knowledge.schemas import GroundedClaim
-from app.persistence.agent_models import AgentRun
+from app.persistence.agent_models import AgentRun, ProfileRecord, RoomAgentBinding
 from app.persistence.knowledge_models import RetrievalRecord
 from app.rooms.service import RoomError
+
+
+def test_run_evidence_excludes_uninjected_candidates_and_uncropped_text(
+    client, rag_game, monkeypatch
+):
+    from app.knowledge.service import KnowledgeContextBuilder
+
+    ok(submit(client, rag_game, "奖励骰规则"))
+    assert wait_cycle(client, rag_game)["status"] == "completed"
+    retriever = client.app.state.agent_service.knowledge.retriever
+    search = retriever.search
+
+    def extra_candidate(*args, **kwargs):
+        found = search(*args, **kwargs)
+        return found + [{**found[0], "evidence_id": "ev_not_injected"}] if found else []
+
+    monkeypatch.setattr(retriever, "search", extra_candidate)
+    monkeypatch.setattr(
+        KnowledgeContextBuilder,
+        "select",
+        staticmethod(
+            lambda evidence, budget, public: [{**evidence[0], "excerpt": "奖励骰增加一个候选"}]
+        ),
+    )
+
+    async def verify():
+        svc = client.app.state.agent_service
+        async with svc.rooms.transaction() as session:
+            room = await svc.rooms.room(session, rag_game["room"]["id"])
+            original = await session.scalar(
+                select(AgentRun).where(
+                    AgentRun.room_id == room.id, AgentRun.graph_node == "keeper_decide"
+                )
+            )
+            run = AgentRun(
+                **{
+                    column.name: getattr(original, column.name)
+                    for column in AgentRun.__table__.columns
+                    if column.name != "id"
+                },
+                id=str(uuid4()),
+            )
+            session.add(run)
+            await session.flush()
+            profile = await session.get(ProfileRecord, run.profile_id)
+            binding = await session.scalar(
+                select(RoomAgentBinding).where(
+                    RoomAgentBinding.room_id == room.id,
+                    RoomAgentBinding.member_id == run.actor_member_id,
+                )
+            )
+            selected, records = await svc.knowledge.pre_context(
+                session, room, binding, profile, run.id, run.context, 1000
+            )
+            actual = await svc.knowledge.evidence_for_run(session, run.id, room.id, run.profile_id)
+            assert actual == {e["evidence_id"]: e for e in selected}
+            assert next(iter(actual.values()))["excerpt"] == "奖励骰增加一个候选"
+            assert any(r.source_filters["candidate_count"] > len(r.evidence) for r in records)
+
+    client.portal.call(verify)
 
 
 @pytest.fixture

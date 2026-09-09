@@ -79,3 +79,11 @@ SQL 先按来源 ID/hash、kind、edition、visibility 限定，再取 FTS5 BM25
 后续若增加 embedding，可在 KnowledgeRetriever 接口下增加候选检索实现，继续共用 source/hash/edition/visibility 前置过滤和 GroundedClaim 验证，不让向量结果绕过边界。本批没有下载或启用该能力。
 
 实现参考：[SQLite FTS5 官方文档](https://www.sqlite.org/fts5.html)、[Microsoft Word Documents.Open](https://learn.microsoft.com/en-us/office/vba/api/word.documents.open)。
+
+## 第五批补充：有限词法优化与实体准备
+
+原评测脚本和答案集合保持不变；独立 holdout 在调参前冻结。`scripts/evaluate_batch5.py` 同时运行两组评测，报告各组与合并的 Hit@1/3/5、MRR、延迟和无答案结果。两轮最终结果见[第五批报告](batch-5-report.md)，未达到的目标保留失败案例，没有继续调参。
+
+检索增加确定性概念拆分、技能键／骰式／难度术语保留、短语与标题命中通道，以及按来源限定的 2/3-gram 和概念候选。多路候选使用 weighted reciprocal rank fusion 合并，按物理页去重，并给多概念和其他来源留出候选。来源意图仅加权，不排除另一本规则来源；没有 query 到页码映射、模型改写、embedding 或额外模型请求。
+
+模组准备从同 source hash 下的选定页／章节顺序读取有限 chunk，为实际送入生成 run 的摘录记录证据 ID。模型实体证据必须来自该 run，摘要本身不成为新原文。准备模组的游戏检索以已批准当前场景标题和本次行动构造查询；原始模组证据仍仅 KP 可读，新事实先进入主机审阅。批准实体与公开实体是两种不同权限集合，详见[模组准备](module-preparation.md)。

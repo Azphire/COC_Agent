@@ -4,6 +4,8 @@ import type { Result, Room } from '../api/rooms'
 import type { AgentProfile } from '../api/agents'
 import { difficultyLabels, nodeLabels, resultLabels } from '../api/agents'
 import KnowledgeBindingPanel from './KnowledgeBindingPanel'
+import HostEntityPanel from './HostEntityPanel'
+import InvestigationBoard from './InvestigationBoard'
 
 type Props = { room: Room; token: string; acceptRoom: (room: Room) => void }
 
@@ -24,7 +26,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
   const prefix = `/rooms/${room.id}`
   const game = room.game
   const cycle = game?.cycle
-  const active = !!cycle && ['running', 'waiting_for_roll', 'failed'].includes(cycle.status)
+  const active = !!cycle && ['running', 'waiting_for_roll', 'waiting_for_review', 'failed'].includes(cycle.status)
   const editable = room.is_host && ['lobby', 'paused'].includes(room.status) && !active
   useEffect(() => {
     if (room.is_host) {
@@ -53,6 +55,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
   }
   const seats = room.members.filter(m => m.active && (m.id === room.host_member_id || m.controller_type === 'agent'))
   return <>
+    {room.is_host && <HostEntityPanel room={room} token={token} acceptRoom={acceptRoom} />}
     {room.is_host && <KnowledgeBindingPanel room={room} token={token} acceptRoom={acceptRoom} />}
     {room.is_host && <section><h2>AI 与模组设置</h2><p><a href="#/agents">创建或编辑 Agent 档案</a></p>
       {!game?.module && <form onSubmit={e => { e.preventDefault(); void command('/module', { module_id: moduleId }) }}>
@@ -74,6 +77,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
       {(!game?.module || seats.some(m => !game.bindings.some(b => b.member_id === m.id))) && <p>开始 Agent 回合前，请选择模组、绑定 AI KP，并给每个 AI 队友分配角色和档案。</p>}
     </section>}
     {error && <p role="alert">{error}</p>}
+    {game?.preparation && <InvestigationBoard entities={game.public_entities || []} />}
     {game?.module && <section className="agent-game"><h2>{game.module.title}</h2><p>{game.module.public_introduction}</p>
       <p role="status" data-testid="agent-cycle-status">{game.module.completed ? '调查已结束' : !cycle || cycle.status === 'completed' ? '等待真人行动' : cycle.status === 'cancelled' ? '回合已取消，可提交新行动' : cycle.status === 'failed' ? 'Agent 回合失败' : nodeLabels[cycle.current_node] || cycle.status}</p>
       {cycle?.safe_error && <p role="alert">{cycle.safe_error}</p>}

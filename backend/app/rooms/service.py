@@ -383,7 +383,7 @@ class RoomService:
             await self.broadcast(room_id, events)
             if self.agent_service:
                 runtime = self.agent_service.runtime
-                if action in {"agent.action", "agent.check.roll", "agent.retry"}:
+                if action in {"agent.action", "agent.check.roll", "agent.retry", "resume"}:
                     runtime.schedule(room_id)
                 elif action in {"agent.cancel", "agent.check.cancel"}:
                     runtime.cancel_task(room_id)
@@ -730,6 +730,8 @@ class RoomService:
                 await self.agent_service.load(session, room, snapshot)
             require(set(map(str, data.assignments)) == set(slot_by_id), "存档角色席位不兼容")
             room.session_state = data.state.model_dump(mode="json")
+            if self.agent_service:
+                await self.agent_service.entities.reconcile_scene(session, room)
             # Clear first to support swaps with the unique member assignment constraint.
             for slot in slots:
                 slot.member_id = None

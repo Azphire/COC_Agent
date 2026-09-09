@@ -10,7 +10,7 @@ export default function RoomTimelineEvent({ event, room }: { event: RoomEvent; r
   const teammate = ['agent.spoke', 'agent.action_proposed'].includes(event.type)
   const system = event.type.startsWith('check.') || event.type === 'agent.cycle_changed' || event.type === 'clue.revealed'
   const actor = String(p.actor_name || (isKP || teammate ? binding?.name : member?.display_name) || '系统')
-  const role = isKP ? 'KP' : teammate ? 'AI队友' : system ? '系统' : member?.controller_type === 'agent' ? 'AI队友' : member ? '真人' : '系统'
+  const role = event.type.startsWith('review.') ? '主机审阅' : event.type.startsWith('entity.') ? '线索' : event.type === 'scene.updated' ? '场景' : event.type.startsWith('check.') ? '检定' : event.type === 'agent.cycle_changed' ? 'Agent' : isKP ? 'KP' : teammate ? 'AI队友' : system ? '系统' : member?.controller_type === 'agent' ? 'AI队友' : member ? '真人' : '系统'
   const cycle = String(p.cycle_id || '').slice(0, 8)
   const textTypes = ['chat.message', 'action.submitted', 'keeper.narration', 'agent.spoke', 'agent.action_proposed', 'module.completed', 'agent.needs_host_ruling']
   const result = p.result as { total: number; level: string; passed: boolean } | undefined
@@ -21,6 +21,8 @@ export default function RoomTimelineEvent({ event, room }: { event: RoomEvent; r
       : event.type === 'check.requested' ? <p>KP 请求“{String(p.name)}”检定 · {room.members.find(m => m.id === p.target_member_id)?.display_name}</p>
       : event.type === 'check.resolved' ? <p>1D100={result?.total}，结果：{resultLabels[result?.level || '']} · {result?.passed ? '通过' : '未通过'}</p>
       : event.type === 'clue.revealed' ? <p>公开线索：{String(p.title)} · {String(p.content)}</p>
+      : event.type === 'entity.revealed' || event.type === 'entity.corrected' ? <p>{event.type === 'entity.corrected' ? '公开修正' : '公开发现'}：{String(p.title)} · {String(p.public_summary)}</p>
+      : event.type === 'review.waiting' || event.type === 'review.status' ? <p>{String(p.text)}</p>
       : event.type === 'agent.cycle_changed' ? <p>cycle {labels[String(p.status)] || String(p.status)} · {nodeLabels[String(p.current_node)] || String(p.current_node)}{p.status === 'completed' && `，模型调用 ${p.call_count ?? '—'} 次`}{p.safe_error ? ` · ${p.safe_error}` : ''}</p>
       : event.type === 'scene.updated' ? <p>场景：{String(p.scene_title)} · {String(p.scene_summary)}</p>
       : event.type === 'dice.rolled' ? <p>{String(p.reason)} · {String(p.expression)} → [{(p.dice as number[]).join(', ')}] {Number(p.modifier) >= 0 ? '+' : ''}{String(p.modifier)} = <strong>{String(p.total)}</strong></p>

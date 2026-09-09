@@ -148,6 +148,16 @@ class AgentCycleState(TypedDict):
     current_node: str
     keeper_run_id: str | None
     pending_check_id: str | None
+    wait_reason: str | None
+    pending_review_id: str | None
+    approved_entity_ids_used: list[str]
+    proposed_entity_ids: list[str]
+    revealed_entity_ids: list[str]
+    scene_transition: str | None
+    review_count: int
+    review_result: dict | None
+    deferred_tools: list[dict]
+    rejection_rewrite_called: bool
     tool_results: list[str]
     teammate_queue: list[str]
     completed_teammate_ids: list[str]

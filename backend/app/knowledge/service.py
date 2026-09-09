@@ -69,6 +69,16 @@ class KnowledgeService:
         )
 
     async def bind(self, session, room, body, member_id):
+        prepared = await self.agents.entities.binding(session, room.id)
+        if prepared:
+            require(
+                body.enabled
+                and body.module
+                and (body.module.source_id, body.module.source_hash)
+                == (prepared.source_id, prepared.source_hash),
+                "准备房间必须保留绑定的精确模组版本",
+                422,
+            )
         document = body.model_dump(exclude={"opening_scene"})
         module_source = None
         for ref in document["rules"]:
@@ -272,9 +282,25 @@ class KnowledgeService:
                 scene = next(
                     (s for s in context["module"].get("scenes", []) if s["id"] == current_id), {}
                 )
+                if context.get("prepared_module"):
+                    scene = next(
+                        (
+                            e
+                            for e in context["module"].get("approved_entities", [])
+                            if e["id"] == current_id
+                        ),
+                        {},
+                    )
                 search_query = (
-                    scene.get("public_description", "")[:100] or scene.get("title") or "开场"
+                    (scene.get("public_description") or scene.get("public_summary", ""))[:100]
+                    or scene.get("title")
+                    or "开场"
                 )
+                if context.get("prepared_module"):
+                    # Approved scene titles are stable retrieval anchors; public
+                    # prose may contain many atmospheric words absent in the source.
+                    action_topic = re.split(r"[，,。.!！?？;；\n]", query, maxsplit=1)[0][:80]
+                    search_query = " ".join(filter(None, (scene.get("title"), action_topic)))
             evidence, record = await self.search(
                 session,
                 room,
@@ -290,7 +316,17 @@ class KnowledgeService:
         # Apply permission first, then source diversity, score and bounded JSON size.
         selected = KnowledgeContextBuilder.select(collected, budget, public)
         selected_ids = {e["evidence_id"] for e in selected}
+        injected = {e["evidence_id"]: e for e in selected}
         for record in records:
+            # Validation must use exactly the bounded excerpts supplied to this
+            # run, not discarded candidates or their longer pre-budget versions.
+            record.source_filters = {
+                **record.source_filters,
+                "candidate_count": len(record.evidence),
+            }
+            record.evidence = [
+                injected[e["evidence_id"]] for e in record.evidence if e["evidence_id"] in injected
+            ]
             record.injected_ids = [
                 e["evidence_id"] for e in record.evidence if e["evidence_id"] in selected_ids
             ]
@@ -326,6 +362,11 @@ class KnowledgeService:
         public_entities = {
             e["id"]: e for e in [visible["scene"], *visible["npcs"], *visible["clues"]]
         }
+        if await self.agents.entities.binding(session, room.id):
+            all_entities = {e["id"]: e for e in await self.agents.entities.host(session, room.id)}
+            public_entities = {
+                e["id"]: e for e in await self.agents.entities.public(session, room.id)
+            }
         if claim.category == "rule":
             require(len(claim.statement) >= 12, "needs_host_ruling：章节标题不是规则说明", 422)
             require(
@@ -361,8 +402,10 @@ class KnowledgeService:
                 entity = entities[entity_id]
                 supporting += [
                     str(entity.get(key, ""))
-                    for key in ("public_description", "content", "title", "name")
+                    for key in ("public_description", "public_summary", "content", "title", "name")
                 ]
+                if claim.visibility == "keeper_only":
+                    supporting.append(str(entity.get("keeper_summary", "")))
             require(
                 any(normalize(claim.statement) in normalize(text) for text in supporting),
                 "needs_host_ruling：事实陈述超出来源",
@@ -402,6 +445,18 @@ class KnowledgeService:
         claim_id = run.id + ":" + document["claim_id"]
         if await session.get(ClaimRecord, claim_id):
             return
+        if document["entity_ids"]:
+            from app.persistence.agent_models import AgentCycle
+
+            cycle = await session.get(AgentCycle, run.cycle_id)
+            cycle.state = {
+                **cycle.state,
+                "approved_entity_ids_used": list(
+                    dict.fromkeys(
+                        [*cycle.state.get("approved_entity_ids_used", []), *document["entity_ids"]]
+                    )
+                ),
+            }
         memory_id = None
         if document["category"] != "flavor":
             memory_id = str(uuid4())
@@ -478,6 +533,18 @@ class KnowledgeContextBuilder:
                 )
             )
         scene = context["module"]["scene"]
+        for entity in context.get("public_entities", []):
+            if entity["type"] != "scene":
+                options.append(
+                    dict(
+                        claim_id="entity_" + entity["id"],
+                        category="module_fact",
+                        statement=entity["public_summary"][:200],
+                        evidence_ids=[],
+                        entity_ids=[entity["id"]],
+                        visibility="public",
+                    )
+                )
         options.append(
             dict(
                 claim_id="scene",

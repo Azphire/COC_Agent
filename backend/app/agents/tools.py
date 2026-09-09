@@ -19,6 +19,7 @@ from app.persistence.agent_models import (
     ProfileRecord,
     ToolReceipt,
 )
+from app.preparation.schemas import EntityArgs, ProposalArgs
 from app.rooms.service import RoomError, require
 
 
@@ -35,6 +36,20 @@ KEEPER, INVESTIGATOR, BOTH = (
     frozenset({"keeper", "investigator"}),
 )
 TOOLS = {
+    "inspect_approved_entities": ToolDefinition(s.Empty, KEEPER, "查看当前房间批准实体与公开条件"),
+    "inspect_public_entities": ToolDefinition(s.Empty, BOTH, "读取与真人调查板相同的公开实体"),
+    "reveal_entity": ToolDefinition(
+        EntityArgs, KEEPER, "按批准条件揭示当前房间实体，不接受自行编写的文本"
+    ),
+    "transition_scene": ToolDefinition(
+        s.SceneArgs, KEEPER, "进入批准场景；缺少 leads_to 时请求主机审阅"
+    ),
+    "propose_module_fact": ToolDefinition(
+        ProposalArgs, KEEPER, "用当前 run 模组证据提出未批准事实，暂停等待主机"
+    ),
+    "request_host_review": ToolDefinition(
+        ProposalArgs, KEEPER, "提交实体公开或场景转换的主机审阅请求"
+    ),
     "search_rules": ToolDefinition(SearchArgs, BOTH, "检索房间绑定版本的公开规则；返回可引用证据"),
     "search_module": ToolDefinition(
         SearchArgs, KEEPER, "仅检索当前绑定模组及 hash；资料保持 keeper_only"
@@ -220,8 +235,25 @@ class AgentTools:
             )
         module = await service.module(session, room.id)
         require(module and module.enabled, "模组没有启用")
+        prepared = await service.entities.binding(session, room.id)
+        if name == "inspect_public_entities":
+            return await service.entities.public(session, room.id)
+        if name == "inspect_approved_entities":
+            return await service.entities.host(session, room.id)
+        if name in {"propose_module_fact", "request_host_review"}:
+            return await service.entities.propose(session, room, run, args)
+        if name == "reveal_entity" or prepared and name == "reveal_clue":
+            entity_id = args.entity_id if name == "reveal_entity" else args.clue_id
+            return await service.entities.reveal(
+                session, room, entity_id, binding.member_id, run.cycle_id
+            )
+        if name == "transition_scene" or prepared and name == "update_scene":
+            return await service.entities.transition(session, room, run, args.scene_id)
         if name == "inspect_public_state":
-            return public_module(module)
+            return {
+                **public_module(module),
+                "public_entities": await service.entities.public(session, room.id),
+            }
         if name in {"inspect_character", "inspect_own_character"}:
             member_id = str(args.member_id) if name == "inspect_character" else binding.member_id
             slot = next(

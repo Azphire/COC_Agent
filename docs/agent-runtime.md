@@ -114,3 +114,13 @@ Profile：GET/POST `/api/agent-profiles`，GET/PATCH `/{id}`，POST `/generate-d
 ## 第四批接入点
 
 规则书／模组 RAG 应接在 `memory.service.build_context` 的已授权资料检索阶段，返回带来源与可见性的数据，再进入相同预算与脱敏流程。检索器不能替代确定性检定或修改模块快照。先支持小范围关键词／章节检索并测试来源隔离，必要时再考虑 embedding；不要把整本规则书或 KP 内容直接拼入调查员上下文。
+
+## 第五批准入与审阅
+
+准备模组使用已批准实体的房间快照；草稿和拒绝项不进入游戏上下文。KP 可检索原始证据，但新 `module_fact` 必须先经过主机审阅，不能直接写 canonical memory。公开叙事和调查员只获得与真人相同的公开实体。完整模型、工具和权限说明见[模组准备文档](module-preparation.md)。
+
+图新增 `wait_for_host_review`、`execute_deferred_tools`、`wait_for_late_host_review`。初始决策同时请求审阅和检定时，先持久化并 interrupt 审阅，批准后才执行延后的检定工具。检定后的新事实也经过审阅门，但同 cycle 总计最多一次。`wait_reason` 严格区分 `host_review` 和 `human_roll`；活动回合唯一约束包含 `waiting_for_review`。
+
+主机结果先落库，再使用相同 checkpoint 和 cycle ID 恢复；重复提交和工具执行幂等。拒绝分支只尝试一次安全公开改写，失败即返回待裁定并结束，不再执行新提议或队友动作。审阅等待可暂停、保存和重启，不占用模型信号量；取消会取消 pending 审阅。
+
+准备生成独立于游戏 cycle，但与游戏共用串行模型网关。上下文对准备模组省略空条件、重复来源元数据和检定存储字段，保留实际检定值、结果与实体 ID；超预算仍明确拒绝。房间专属批准 proposal 不回写全局准备版本。读档不撤销已公开／修正事实，当前场景与兼容投影一致恢复。
