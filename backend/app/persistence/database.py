@@ -2,7 +2,9 @@ from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.persistence.character_models import Base
 
 
 class Database:
@@ -10,10 +12,11 @@ class Database:
         url = make_url(database_url)
         Path(url.database).parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_async_engine(url)
+        self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
 
     async def initialize(self) -> None:
-        # Opening SQLite creates the local file; no business tables are needed yet.
-        await self.check_connection()
+        async with self.engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
 
     async def check_connection(self) -> None:
         async with self.engine.connect() as connection:

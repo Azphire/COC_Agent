@@ -1,8 +1,31 @@
 # CoC 跑团 Agent
 
-Windows 原生运行的本地主机型 CoC 5 跑团 Agent。目标是由一名玩家在本地启动主机，支持单人游戏和其他玩家通过局域网浏览器加入；模型可选择 Ollama 或外部兼容 API。
+Windows 原生运行的本地主机型 CoC 第七版跑团 Agent。目标是由一名玩家在本地启动主机，支持单人游戏和其他玩家通过局域网浏览器加入；模型可选择 Ollama 或外部兼容 API。
 
 当前支持 FastAPI 健康检查、异步 SQLite 连接、WebSocket JSON echo、模型状态显示，以及统一模型适配层的普通生成、流式文本、结构化输出和工具调用解析。启动、健康检查和单元测试不触发模型推理；真实模型检查由本地脚本单独执行。
+
+本批新增数据驱动的第七版车卡：随机／购点创建、年龄调整、属性与派生值计算、职业／兴趣技能分配、草稿持久化、最终确认及 JSON 导入导出。全部车卡计算由后端确定性代码完成，不使用模型。
+
+## 第七版角色创建
+
+打开页面后默认进入“角色列表”，导航可切换“系统状态”和“创建角色”。选择规则集、模式，填写姓名及年龄，然后创建草稿。随机模式一次生成整组属性；购点模式实时预估剩余点数，保存后的后端余额、派生值和校验结果为准。超支或越界可以保存为草稿，但不能最终确认。保存并通过完整校验后，点击“最终确认”；已确认的角色只读。
+
+规则文件位于 `backend/app/rules/definitions/`：
+
+- `coc7_character_creation.yaml`：当前默认启用，`verification_status: verified`，指已核对本批实现的车卡子集。依据用户本地的《克苏鲁的呼唤第七版规则书1907》和《克苏鲁的呼唤第七版调查员手册1.20》，文件名、PDF页码和公式边界见同目录 [SOURCES.md](backend/app/rules/definitions/SOURCES.md)。不再使用 CoC 5 配置。
+- `development_character_creation.yaml`：保留为离线测试 fixture，`verification_status: unverified`；只含少量程序测试示例，界面明确提示不代表第七版规则。
+
+第七版当前提供八项属性、教授和图书馆管理员两种职业，以及27项技能／专业。随机模式使用3d6或2d6+6后乘5；购点使用规则书3.7方案四的**460点可选规则**，八项基础属性总和必须为460，范围15–90，INT/SIZ至少40，购点EDU至少15。幸运独立掷骰，不占属性池。规则配置使用 Pydantic 校验和安全 YAML 读取；公式仅接受封闭运算，没有 Python `eval`／`exec`。
+
+创建前选择15–89岁年龄；生成后锁定年龄，避免重复获取幸运或教育增强检定。按年龄分配STR/SIZ或STR/CON/DEX扣减，其他固定扣减由后端执行。教育增强按顺序比较当时EDU并封顶99；每轮检定骰和条件增长骰一并保存，失败时增长骰不生效。购点编辑复用已保存的骰子，不重新掷骰。属性编辑区显示年龄调整前值和后端已保存的调整后值；HP、MP、SAN、MOV、DB、体格及技能基础值使用调整后值。
+
+职业点（当前两种职业均为EDU×4）和兴趣点（INT×2）分别记账；技能值为基础值加两类投入。信用评级须满足职业范围，母语基础值为EDU，闪避为DEX半值，创建时禁止给克苏鲁神话技能加点。未分配技能点在确认时放弃。当前不启用75技能上限、属性重骰、经历包等其他可选方案；没有逐项重骰入口。
+
+JSON 可通过页面下载、粘贴或选择文件导入，导出含 `schema_version: 1`、导出时间、角色和规则集版本。导入会创建**新的草稿ID**，记录 `original_id`，将掷骰记录标记为 `imported`，重新计算属性调整、派生值、余额及合法性，不能覆盖原角色。导入记录仅验证内部一致性，不作为外部掷骰真实性证明。导入后需要再次最终确认。
+
+API：`GET /api/character-rulesets`、`GET /api/character-rulesets/{id}`；`GET /api/characters`、`POST /api/characters/random`、`POST /api/characters/point-buy`、`POST /api/characters/import`；`GET/PATCH /api/characters/{id}`、`POST /api/characters/{id}/finalize`、`GET /api/characters/{id}/export`。PATCH和finalize必须携带当前整数`version`，旧版本返回409；无效请求字段返回422，不存在的角色返回404。没有角色删除接口。完整请求模型可在后端 `/docs` 查看。
+
+刷新页面或重启后可继续读取草稿和确认后的角色；每次读取保留原始骰子结果。尚未覆盖全部职业／技能专业、90岁及以上年龄、背景、装备、资金明细和完整战斗。
 
 ## 环境
 
@@ -35,7 +58,7 @@ uv run --directory backend python -m app.main
 npm --prefix frontend run dev
 ```
 
-打开 `http://localhost:5173`。页面应显示后端 `ok`、SQLite `ok`、WebSocket 已连接。输入文本并点击“发送测试消息”，即可查看 echo JSON。使用 `Ctrl+C` 分别停止两端。
+打开 `http://localhost:5173` 创建角色，或切换到“系统状态”查看后端 `ok`、SQLite `ok`、WebSocket 已连接。输入文本并点击“发送测试消息”，即可查看 echo JSON。使用 `Ctrl+C` 分别停止两端。
 
 后端默认地址为 `http://127.0.0.1:8000`；`python -m app.main` 会读取 `.env` 的 `APP_HOST` 和 `APP_PORT`。修改配置后重启对应服务并刷新页面。前端固定使用 5173 端口，端口占用时会报错，避免自动切换后与 CORS 配置不一致。
 
@@ -130,11 +153,14 @@ VITE_WS_URL=ws://192.168.1.100:8000/ws
 backend/
   app/
     main.py, config.py         # 应用启动与配置
-    api/                      # 健康检查与 WebSocket
+    api/                      # 角色、规则集、健康、模型状态与 WebSocket
     models/                   # 统一接口、OpenAI 兼容适配器与 factory
-    persistence/database.py   # SQLAlchemy 异步 SQLite
-    agents/, character/, rules/, memory/, rooms/  # 预留空包
+    persistence/              # SQLAlchemy 异步 SQLite 与角色、骰子、事件三表
+    domain/, dice/            # 领域对象与封闭骰式解析器
+    character/, rules/        # 车卡业务、持久化仓库、规则校验及计算
+    agents/, memory/, rooms/  # 预留空包
   scripts/check_local_model.py # 四项真实本地模型检查
+  scripts/check_character_creation.py # 独立数据库 + 真实Chrome离线车卡验证
   tests/                      # 原有测试及离线模型单元测试
   pyproject.toml, uv.lock, .python-version
 frontend/                     # React / TypeScript / Vite
@@ -145,13 +171,13 @@ data/
   logs/                       # 预留日志导出目录
 ```
 
-后端依赖：FastAPI、Uvicorn standard、Pydantic Settings、SQLAlchemy asyncio、aiosqlite、LangGraph、LangGraph SQLite Checkpointer、OpenAI Python SDK、HTTPX、PyMuPDF、python-multipart。开发依赖：pytest、pytest-asyncio、Ruff。
+后端依赖：FastAPI、Uvicorn standard、Pydantic Settings、SQLAlchemy asyncio、aiosqlite、LangGraph、LangGraph SQLite Checkpointer、OpenAI Python SDK、HTTPX、PyMuPDF、python-multipart、PyYAML。开发依赖：pytest、pytest-asyncio、Ruff。
 
 前端保留 Vite 模板的 React、React DOM、TypeScript、Vite、React 插件、类型声明和 Oxlint。使用原生 WebSocket 和普通 CSS。
 
-SQLite 默认为 `data/game.db`，启动时通过 `SELECT 1` 验证连接，暂不创建业务表。`data/agent_checkpoints.db` 仅预留配置，尚未初始化 checkpointer。数据内容、数据库文件及其附属文件均不提交，各数据目录用 `.gitkeep` 保留。没有下载规则书或模组。
+SQLite 默认为 `data/game.db`，启动时用 `metadata.create_all` 增量创建 `character_drafts`、`character_roll_records`、`character_events`，保留已有表和数据。写入角色、骰子和事件在同一事务内完成，版本条件更新防止旧页面覆盖新内容。`data/agent_checkpoints.db` 仅预留配置，尚未初始化 checkpointer。数据内容、数据库文件及其附属文件均不提交，各数据目录用 `.gitkeep` 保留。没有下载规则书或模组。
 
-尚未实现：KP Agent、AI 队友、随机/购点车卡、CoC 规则工具、模组检索、分层记忆、存档读档、私密信息和 Log 导出。
+尚未实现：KP Agent、AI 队友、完整CoC规则工具、模组检索、分层记忆、游戏进度存档、私密信息和 Log 导出。
 
 ## 验证
 
@@ -164,7 +190,15 @@ npm run lint
 npm run build
 ```
 
-原有两项测试仍使用临时 SQLite 文件：健康接口返回 200 和 `status=ok`；WebSocket 收到 `connected` 事件并完成一次 JSON echo。新增测试验证模型 factory、未知 provider、普通响应和工具参数解析，以及模型存在、缺失、离线时的状态接口。模型调用全部使用 mock，pytest 不要求 Ollama 在线，也不改动本地游戏数据库。
+全部测试使用临时 SQLite 文件，保留原有15项健康、WebSocket、模型适配器和目录状态测试。新增测试覆盖骰式、种子注入、规则配置、舍入、年龄分段、职业与信用评级、两类技能点、持久化、版本冲突、最终确认和JSON往返。HTTP网络传输在测试中被禁止，模型全部使用mock，不要求Ollama在线，也不改动本地游戏数据库。
+
+Windows 已安装 Chrome 时，可在后端目录运行完整浏览器流程：
+
+```powershell
+uv run python scripts/check_character_creation.py
+```
+
+该脚本临时使用8000和5173端口，启动真实无界面Chrome、前后端和独立测试数据库，验证随机、购点超支与修正、技能分配、最终确认、刷新、下载／导入JSON、后端重启和WebSocket echo。**模型目录响应由测试启动器模拟**，不访问Ollama或外部API。成功或失败后均关闭临时进程；截图、报告和测试数据库保留在忽略目录`.cache/character-smoke-<uuid>/`，不会删除用户文件。正常启动的系统状态接口仍保留原来的目录查询行为。
 
 后端运行时，也可在 PowerShell 执行 `Invoke-RestMethod http://127.0.0.1:8000/api/health`。预期结果：
 

@@ -1,0 +1,130 @@
+id: coc7-character-creation
+version: "1.0.0"
+display_name: CoC 第七版角色创建
+edition: coc7
+enabled: true
+verification_status: verified
+source_reference:
+  - filename: 克苏鲁的呼唤第七版规则书1907.pdf
+    section: 第三章 3.1、3.3、3.6、3.7；PDF页24–31、38–40（印刷页23–30、37–39）
+    notes: 核对八项属性、年龄调整、幸运、教育增强、HP/MP/SAN/MOV/DB/体格、职业与兴趣点、信用评级、半值及五分之一值；购点使用3.7方案四的460点可选规则。
+  - filename: 克苏鲁的呼唤第七版规则书1907.pdf
+    section: PDF页30–31职业列表；第四章PDF页47、53、58技能表及说明
+    notes: 首批职业为图书馆管理员和教授；基础技能来自技能表，母语使用EDU，闪避使用DEX半值。技能专业当前列出拉丁语、摄影和部分科学专业。
+  - filename: 克苏鲁的呼唤第七版调查员手册1.20.pdf
+    section: 第三章，PDF页34–35
+    notes: 核对职业与背景创建边界；本批不启用有故事的调查员经历包。
+notice: 已按本地第七版资料核对。购点采用460点可选规则；支持15–89岁、教授和图书馆管理员及已列出的技能专业。未分配技能点在确认时放弃。
+reroll_policy: none
+attributes:
+  - {key: str, display_name: 力量 STR, minimum: 15, maximum: 90, random_formula: 3d6, random_multiplier: 5, point_buy_cost: 1}
+  - {key: con, display_name: 体质 CON, minimum: 15, maximum: 90, random_formula: 3d6, random_multiplier: 5, point_buy_cost: 1}
+  - {key: siz, display_name: 体型 SIZ, minimum: 40, maximum: 90, random_formula: 2d6+6, random_multiplier: 5, point_buy_cost: 1}
+  - {key: dex, display_name: 敏捷 DEX, minimum: 15, maximum: 90, random_formula: 3d6, random_multiplier: 5, point_buy_cost: 1}
+  - {key: app, display_name: 外貌 APP, minimum: 15, maximum: 90, random_formula: 3d6, random_multiplier: 5, point_buy_cost: 1}
+  - {key: int, display_name: 智力 INT, minimum: 40, maximum: 90, random_formula: 2d6+6, random_multiplier: 5, point_buy_cost: 1}
+  - {key: pow, display_name: 意志 POW, minimum: 15, maximum: 90, random_formula: 3d6, random_multiplier: 5, point_buy_cost: 1}
+  - {key: edu, display_name: 教育 EDU, minimum: 40, point_buy_minimum: 15, maximum: 90, random_formula: 2d6+6, random_multiplier: 5, point_buy_cost: 1}
+derived_values:
+  - {key: hp_sum, display_name: 体质与体型合计, operation: sum, sources: [con, siz], visible: false}
+  - {key: hp, display_name: 生命值 HP, operation: multiply, source: hp_sum, factor: 0.1, rounding: floor}
+  - {key: mp, display_name: 魔法值 MP, operation: multiply, source: pow, factor: 0.2, rounding: floor}
+  - {key: san, display_name: 初始理智 SAN, operation: copy, source: pow}
+  - {key: str_siz, display_name: 力量与体型合计, operation: sum, sources: [str, siz], visible: false}
+  - key: build
+    display_name: 体格
+    operation: table_lookup
+    source: str_siz
+    lookup_table:
+      - {upper_bound: 64, value: -2}
+      - {upper_bound: 84, value: -1}
+      - {upper_bound: 124, value: 0}
+      - {upper_bound: 164, value: 1}
+      - {upper_bound: null, value: 2}
+  - key: damage_bonus
+    display_name: 伤害加值 DB
+    operation: table_lookup
+    source: str_siz
+    lookup_table:
+      - {upper_bound: 64, value: "-2"}
+      - {upper_bound: 84, value: "-1"}
+      - {upper_bound: 124, value: "0"}
+      - {upper_bound: 164, value: "+1d4"}
+      - {upper_bound: null, value: "+1d6"}
+  - {key: mov, display_name: 移动速度 MOV, operation: movement, sources: [str, dex, siz]}
+points:
+  attribute_pool: 460
+  attribute_cost_origin: zero
+  allow_unspent_attribute_points: false
+  occupation_skill_pool_rule: {operation: multiply, source: edu, factor: 4, rounding: floor}
+  interest_skill_pool_rule: {operation: multiply, source: int, factor: 2, rounding: floor}
+  allow_unspent_points: true
+age_rules:
+  education_attribute: edu
+  education_cap: 99
+  check_formula: 1d100
+  gain_formula: 1d10
+  luck_formula: 3d6
+  luck_multiplier: 5
+  movement_key: mov
+  bands:
+    - {minimum: 15, maximum: 19, education_checks: 0, luck_rolls: 2, flat_adjustments: {edu: -5}, deduction_pool: 5, deduction_attributes: [str, siz]}
+    - {minimum: 20, maximum: 39, education_checks: 1}
+    - {minimum: 40, maximum: 49, education_checks: 2, flat_adjustments: {app: -5}, deduction_pool: 5, deduction_attributes: [str, con, dex], movement_penalty: 1}
+    - {minimum: 50, maximum: 59, education_checks: 3, flat_adjustments: {app: -10}, deduction_pool: 10, deduction_attributes: [str, con, dex], movement_penalty: 2}
+    - {minimum: 60, maximum: 69, education_checks: 4, flat_adjustments: {app: -15}, deduction_pool: 20, deduction_attributes: [str, con, dex], movement_penalty: 3}
+    - {minimum: 70, maximum: 79, education_checks: 4, flat_adjustments: {app: -20}, deduction_pool: 40, deduction_attributes: [str, con, dex], movement_penalty: 4}
+    - {minimum: 80, maximum: 89, education_checks: 4, flat_adjustments: {app: -25}, deduction_pool: 80, deduction_attributes: [str, con, dex], movement_penalty: 5}
+skills:
+  - {key: accounting, display_name: 会计, base_value: 5, maximum: 99, category: 知识}
+  - {key: anthropology, display_name: 人类学, base_value: 1, maximum: 99, category: 知识}
+  - {key: archaeology, display_name: 考古学, base_value: 1, maximum: 99, category: 知识}
+  - {key: history, display_name: 历史, base_value: 5, maximum: 99, category: 知识}
+  - {key: library_use, display_name: 图书馆使用, base_value: 20, maximum: 99, category: 探索}
+  - {key: language_latin, display_name: 其他语言（拉丁语）, base_value: 1, maximum: 99, category: 语言}
+  - key: own_language
+    display_name: 母语
+    base_value: 0
+    base_rule: {operation: copy, source: edu, rounding: floor}
+    maximum: 99
+    category: 语言
+  - {key: psychology, display_name: 心理学, base_value: 10, maximum: 99, category: 社交}
+  - {key: law, display_name: 法律, base_value: 5, maximum: 99, category: 知识}
+  - {key: medicine, display_name: 医学, base_value: 1, maximum: 99, category: 知识}
+  - {key: biology, display_name: 科学（生物学）, base_value: 1, maximum: 99, category: 科学}
+  - {key: chemistry, display_name: 科学（化学）, base_value: 1, maximum: 99, category: 科学}
+  - {key: occult, display_name: 神秘学, base_value: 5, maximum: 99, category: 知识}
+  - {key: natural_world, display_name: 博物学, base_value: 10, maximum: 99, category: 知识}
+  - {key: photography, display_name: 艺术与手艺（摄影）, base_value: 5, maximum: 99, category: 艺术}
+  - {key: first_aid, display_name: 急救, base_value: 30, maximum: 99, category: 实践}
+  - {key: listen, display_name: 聆听, base_value: 20, maximum: 99, category: 探索}
+  - {key: spot_hidden, display_name: 侦查, base_value: 25, maximum: 99, category: 探索}
+  - {key: persuade, display_name: 说服, base_value: 10, maximum: 99, category: 社交}
+  - {key: charm, display_name: 取悦, base_value: 15, maximum: 99, category: 社交}
+  - {key: fast_talk, display_name: 话术, base_value: 5, maximum: 99, category: 社交}
+  - {key: intimidate, display_name: 恐吓, base_value: 15, maximum: 99, category: 社交}
+  - key: dodge
+    display_name: 闪避
+    base_value: 0
+    base_rule: {operation: multiply, source: dex, factor: 0.5, rounding: floor}
+    maximum: 99
+    category: 行动
+  - {key: brawl, display_name: 格斗（斗殴）, base_value: 25, maximum: 99, category: 行动}
+  - {key: handgun, display_name: 射击（手枪）, base_value: 20, maximum: 99, category: 行动}
+  - {key: credit_rating, display_name: 信用评级, base_value: 0, maximum: 99, category: 资产}
+  - {key: cthulhu_mythos, display_name: 克苏鲁神话, base_value: 0, maximum: 99, category: 神话, allocatable: false}
+occupations:
+  - key: professor
+    display_name: 教授
+    fixed_skills: [library_use, language_latin, own_language, psychology]
+    selectable_skills: [accounting, anthropology, archaeology, history, law, medicine, biology, chemistry, occult, natural_world, photography]
+    required_selection_count: 4
+    credit_rating_minimum: 20
+    credit_rating_maximum: 70
+  - key: librarian
+    display_name: 图书馆管理员
+    fixed_skills: [accounting, library_use, language_latin, own_language]
+    selectable_skills: [anthropology, archaeology, history, psychology, law, medicine, biology, chemistry, occult, natural_world, photography]
+    required_selection_count: 4
+    credit_rating_minimum: 9
+    credit_rating_maximum: 35

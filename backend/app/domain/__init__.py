@@ -1,0 +1,1 @@
+"""Character creation domain objects."""

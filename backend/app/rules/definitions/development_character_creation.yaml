@@ -1,0 +1,47 @@
+# Synthetic examples for software verification only. These are NOT CoC rules.
+id: development-character-creation
+version: "1.0.0"
+display_name: Development Character Creation Rules
+edition: development
+enabled: true
+verification_status: unverified
+source_reference: null
+notice: 开发测试规则集，仅用于程序验证，不代表CoC第七版规则
+reroll_policy: none
+attributes:
+  - {key: vigor, display_name: 体力（示例）, minimum: 2, maximum: 12, random_formula: 2d6, point_buy_cost: 1}
+  - {key: insight, display_name: 洞察（示例）, minimum: 2, maximum: 12, random_formula: 2d6, point_buy_cost: 1}
+  - {key: learning, display_name: 学识（示例）, minimum: 2, maximum: 12, random_formula: 2d6, point_buy_cost: 2}
+derived_values:
+  - {key: endurance, display_name: 耐力（示例）, operation: average, sources: [vigor, insight], rounding: ceil}
+  - {key: focus, display_name: 专注（示例）, operation: multiply, source: insight, factor: 2, rounding: none}
+  - key: capacity
+    display_name: 负荷等级（示例）
+    operation: table_lookup
+    source: vigor
+    lookup_table:
+      - {upper_bound: 5, value: 1}
+      - {upper_bound: 9, value: 2}
+      - {upper_bound: null, value: 3}
+points:
+  # Pay only for increases above each attribute's minimum.
+  attribute_pool: 20
+  occupation_skill_pool_rule: {operation: multiply, source: learning, factor: 2, rounding: floor}
+  interest_skill_pool_rule: {operation: copy, source: insight, rounding: floor}
+  allow_unspent_points: true
+skills:
+  - {key: observe, display_name: 观察（示例）, base_value: 10, maximum: 50, category: 探索}
+  - {key: research, display_name: 研究（示例）, base_value: 5, maximum: 50, category: 知识}
+  - {key: converse, display_name: 交谈（示例）, base_value: 5, maximum: 50, category: 社交}
+  - {key: craft, display_name: 手艺（示例）, base_value: 0, maximum: 50, category: 实践}
+occupations:
+  - key: researcher
+    display_name: 研究者（示例）
+    fixed_skills: [research]
+    selectable_skills: [observe, converse]
+    required_selection_count: 1
+  - key: artisan
+    display_name: 工匠（示例）
+    fixed_skills: [craft]
+    selectable_skills: [observe, converse]
+    required_selection_count: 1
