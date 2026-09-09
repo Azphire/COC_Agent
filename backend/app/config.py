@@ -31,15 +31,28 @@ class Settings(BaseSettings):
     model_name: str = "qwen3:8b"
     model_api_key: SecretStr = SecretStr("ollama")
     model_timeout_seconds: float = Field(default=120.0, gt=0)
+    model_temperature: float = Field(default=0.3, ge=0, le=2)
+    model_context_limit: int = Field(default=8192, ge=2048, le=32768)
+    model_output_limit: int = Field(default=900, ge=128, le=4096)
+    model_keep_alive: str = "5m"
+    agent_max_calls: int = Field(default=6, ge=1, le=6)
+    agent_context_chars: int = Field(default=12000, ge=4000, le=24000)
+    agent_event_window: int = Field(default=25, ge=20, le=30)
 
     database_url: str = "sqlite+aiosqlite:///../data/game.db"
-    checkpoint_db_path: Path = Path("../data/agent_checkpoints.db")
+    checkpoint_db_path: Path | None = None
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     @field_validator("data_dir", "checkpoint_db_path", mode="before")
     @classmethod
-    def resolve_paths(cls, value: str | Path) -> Path:
-        return resolve_backend_path(value)
+    def resolve_paths(cls, value: str | Path | None) -> Path | None:
+        return resolve_backend_path(value) if value is not None else None
+
+    @property
+    def agent_checkpoint_path(self) -> Path:
+        return self.checkpoint_db_path or Path(make_url(self.database_url).database).with_suffix(
+            ".checkpoints.db"
+        )
 
     @field_validator("database_url")
     @classmethod

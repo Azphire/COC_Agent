@@ -58,7 +58,11 @@ class BrowserPage(SmokeCheck):
         target = next(
             t for t in self.http.get(f"http://127.0.0.1:{port}/json").json() if t["type"] == "page"
         )
-        self.cdp = connect(target["webSocketDebuggerUrl"], proxy=None, open_timeout=5)
+        # CDP events may remain unread while a local model runs. Disable transport
+        # pings so a full debug-event queue cannot cause a spurious ping timeout.
+        self.cdp = connect(
+            target["webSocketDebuggerUrl"], proxy=None, open_timeout=5, ping_interval=None
+        )
         for method in ("Page.enable", "Network.enable", "Runtime.enable"):
             self.command(method)
         self.command(

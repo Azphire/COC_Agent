@@ -139,3 +139,6 @@ pre {
     padding: 16px;
   }
 }
+.check-card { padding: 1rem; border: 1px solid #b6aa92; border-radius: .5rem; margin: .8rem 0; background: #fbf8ef; }
+.agent-binding { border-top: 1px solid #d7d2c6; padding: .8rem 0; }
+.agent-game [role="status"] { font-weight: 600; color: #36564d; }

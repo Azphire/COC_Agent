@@ -1,0 +1,336 @@
+"""Closed tool registry. Only this layer translates model plans into domain commands."""
+
+import re
+from dataclasses import dataclass
+from uuid import uuid4
+
+from pydantic import ValidationError
+from sqlalchemy import select
+
+from app.agents import schemas as s
+from app.agents.modules import Module, content_hash, public_module
+from app.memory.service import write_memory
+from app.persistence.agent_models import (
+    AgentCycle,
+    AgentMemory,
+    AgentRun,
+    CheckRecord,
+    ProfileRecord,
+    ToolReceipt,
+)
+from app.rooms.service import RoomError, require
+
+
+@dataclass(frozen=True)
+class ToolDefinition:
+    arguments: type
+    roles: frozenset[str]
+    description: str
+
+
+KEEPER, INVESTIGATOR, BOTH = (
+    frozenset({"keeper"}),
+    frozenset({"investigator"}),
+    frozenset({"keeper", "investigator"}),
+)
+TOOLS = {
+    "inspect_public_state": ToolDefinition(s.Empty, BOTH, "读取当前公开场景、NPC 和已公开线索"),
+    "inspect_character": ToolDefinition(s.CharacterArgs, KEEPER, "读取房间成员的真实角色快照"),
+    "request_skill_check": ToolDefinition(
+        s.CheckRequest, KEEPER, "为角色请求一次服务端检定；不能指定技能值或骰点"
+    ),
+    "reveal_clue": ToolDefinition(s.ClueArgs, KEEPER, "揭示实际存在且满足前置条件的线索"),
+    "update_scene": ToolDefinition(s.SceneArgs, KEEPER, "切换到模组内场景"),
+    "send_narration": ToolDefinition(
+        s.SpeechArgs, KEEPER, "向玩家发送简短叙事；不得泄漏尚未揭示的线索或 KP 秘密"
+    ),
+    "write_memory": ToolDefinition(
+        s.MemoryArgs, KEEPER, "以来源事件记忆事实；无来源推测只能记为 belief"
+    ),
+    "inspect_own_character": ToolDefinition(s.Empty, INVESTIGATOR, "读取自己席位的角色卡"),
+    "speak": ToolDefinition(
+        s.SpeechArgs, INVESTIGATOR, "本轮发言一次，与 propose_action 合计最多一次"
+    ),
+    "propose_action": ToolDefinition(s.SpeechArgs, INVESTIGATOR, "本轮提出行动一次，不触发新回合"),
+    "write_private_memory": ToolDefinition(
+        s.PrivateMemoryArgs, INVESTIGATOR, "将自己的推断记为私有 belief"
+    ),
+}
+
+
+def definitions(role):
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": spec.description,
+                "parameters": spec.arguments.model_json_schema(),
+            },
+        }
+        for name, spec in TOOLS.items()
+        if role in spec.roles
+    ]
+
+
+def validate(name, arguments, role):
+    require(name in TOOLS, "工具未注册", 422)
+    spec = TOOLS[name]
+    require(role in spec.roles, "此角色无权使用该工具", 403)
+    return spec.arguments.model_validate(arguments)
+
+
+def ensure_public_text(module_record, text):
+    """Reject literal private material before it can enter public events.
+
+    This complements prompt separation; it is not a semantic classifier for paraphrases.
+    """
+    module = Module.model_validate(module_record.document)
+    hidden = [module.keeper_brief, *[n.keeper_notes for n in module.npcs]]
+    hidden += [
+        c.content
+        for c in module.clues
+        if c.id not in module_record.state["revealed_clues"] or c.visibility == "keeper_only"
+    ]
+    hidden += [sc.keeper_notes for sc in module.scenes]
+    hidden += [
+        sc.public_description for sc in module.scenes if sc.id != module_record.state["scene_id"]
+    ]
+    for secret in hidden:
+        for phrase in re.split(r"[，。；：、\n]", secret):
+            if len(phrase.strip()) >= 6 and phrase.strip() in text:
+                require(False, "输出包含尚未公开的模组信息", 403)
+
+
+class AgentTools:
+    def __init__(self, service):
+        self.service = service
+
+    async def execute(self, room_id, run_id, index, name, arguments):
+        async def operation(session, room):
+            run = await session.get(AgentRun, run_id)
+            require(run and run.room_id == room.id, "运行记录不属于此房间", 403)
+            profile = await session.get(ProfileRecord, run.profile_id)
+            bindings = await self.service.bindings(session, room.id)
+            binding = next(
+                (
+                    b
+                    for b in bindings
+                    if b.member_id == run.actor_member_id and b.profile_id == run.profile_id
+                ),
+                None,
+            )
+            require(binding, "Agent 绑定不存在或已停用", 403)
+            member = next(
+                (
+                    m
+                    for m in await self.service.rooms.members(session, room)
+                    if m.id == binding.member_id
+                ),
+                None,
+            )
+            require(member and member.active, "Agent 成员已失活", 403)
+            cycle = await session.get(AgentCycle, run.cycle_id)
+            require(cycle.status == "running" and room.status == "running", "回合已停止")
+            key = f"{run_id}:{index}"
+            fingerprint = content_hash({"name": name, "arguments": arguments})
+            previous = await session.get(ToolReceipt, key)
+            if previous:
+                require(
+                    previous.run_id == run_id
+                    and previous.room_id == room.id
+                    and previous.request_hash == fingerprint,
+                    "工具幂等键已用于不同参数",
+                )
+                return previous.result
+            require(0 <= index < 4, "每次 Agent run 最多四个工具", 422)
+            try:
+                args = validate(
+                    name, await self.service.sanitize(session, room, arguments), profile.role
+                )
+                async with session.begin_nested():
+                    result = await self.dispatch(session, room, run, binding, profile, name, args)
+                result = {"ok": True, "tool": name, "data": result}
+            except ValidationError:
+                result = {
+                    "ok": False,
+                    "tool": name,
+                    "error": "工具参数不合法",
+                    "code": "invalid_arguments",
+                }
+            except RoomError as error:
+                result = {
+                    "ok": False,
+                    "tool": name,
+                    "error": error.message,
+                    "code": "tool_rejected",
+                }
+            result = await self.service.sanitize(session, room, result)
+            session.add(
+                ToolReceipt(
+                    id=key, room_id=room.id, run_id=run_id, request_hash=fingerprint, result=result
+                )
+            )
+            run.tool_results = [*run.tool_results, {"idempotency_key": key, **result}]
+            cycle.state = {
+                **cycle.state,
+                "tool_count": cycle.state["tool_count"] + 1,
+                "tool_results": [*cycle.state["tool_results"], key],
+            }
+            return result
+
+        return await self.service.mutate(room_id, operation)
+
+    async def dispatch(self, session, room, run, binding, profile, name, args):
+        service, rooms = self.service, self.service.rooms
+        module = await service.module(session, room.id)
+        require(module and module.enabled, "模组没有启用")
+        if name == "inspect_public_state":
+            return public_module(module)
+        if name in {"inspect_character", "inspect_own_character"}:
+            member_id = str(args.member_id) if name == "inspect_character" else binding.member_id
+            slot = next(
+                (slot for slot in await rooms.slots(session, room) if slot.member_id == member_id),
+                None,
+            )
+            require(slot is not None, "角色不在本房间", 404)
+            return slot.character_snapshot
+        if name == "request_skill_check":
+            if args.visibility != "host_only":
+                ensure_public_text(module, args.reason)
+            record = await service.request_check(session, room, run, args)
+            return {"check_id": record.id, "status": record.status}
+        if name == "reveal_clue":
+            definition = Module.model_validate(module.document)
+            clue = next((c for c in definition.clues if c.id == args.clue_id), None)
+            require(clue and clue.visibility != "keeper_only", "线索不存在或仅供 KP 阅读", 422)
+            revealed = module.state["revealed_clues"]
+            if clue.id in revealed:
+                return {"clue_id": clue.id, "already_revealed": True}
+            pre = clue.prerequisites
+            require(
+                not pre.scene_id or pre.scene_id == module.state["scene_id"], "线索不在当前场景"
+            )
+            require(set(pre.clue_ids) <= set(revealed), "线索前置条件未满足")
+            if pre.successful_check:
+                records = list(
+                    await session.scalars(
+                        select(CheckRecord).where(
+                            CheckRecord.room_id == room.id,
+                            CheckRecord.status == "resolved",
+                            CheckRecord.cycle_id == run.cycle_id,
+                        )
+                    )
+                )
+                require(
+                    any(
+                        c.document.get("clue_id") == clue.id and c.document["result"]["passed"]
+                        for c in records
+                    ),
+                    "必须通过关联的真实检定才可揭示此线索",
+                )
+            module.state = {**module.state, "revealed_clues": [*revealed, clue.id]}
+            event = rooms.append(
+                session,
+                room,
+                "clue.revealed",
+                binding.member_id,
+                {"clue_id": clue.id, "title": clue.title, "content": clue.content},
+            )
+            session.add(
+                AgentMemory(
+                    id=str(uuid4()),
+                    room_id=room.id,
+                    profile_id=None,
+                    kind="observation",
+                    scope="public",
+                    content=clue.content,
+                    source_event_ids=[event.seq],
+                    salience=10,
+                    active=True,
+                )
+            )
+            await self.complete(session, room, module)
+            return {"clue_id": clue.id, "event_seq": event.seq}
+        if name == "update_scene":
+            definition = Module.model_validate(module.document)
+            scene = next((sc for sc in definition.scenes if sc.id == args.scene_id), None)
+            require(scene is not None, "模组中没有此场景", 422)
+            if module.state["scene_id"] == scene.id:
+                return {"scene_id": scene.id, "unchanged": True}
+            module.state = {**module.state, "scene_id": scene.id}
+            room.session_state = {
+                **room.session_state,
+                "scene_title": scene.title,
+                "scene_summary": scene.public_description,
+            }
+            rooms.append(
+                session,
+                room,
+                "scene.updated",
+                binding.member_id,
+                {
+                    "scene_id": scene.id,
+                    "scene_title": scene.title,
+                    "scene_summary": scene.public_description,
+                },
+            )
+            await self.complete(session, room, module)
+            return {"scene_id": scene.id}
+        if name in {"send_narration", "speak", "propose_action"}:
+            if name == "send_narration":
+                # Do not publish or forward text written with access to KP secrets.
+                # A separate public-context run writes the actual narration after tools/checks.
+                return {"narration_requested": True}
+            ensure_public_text(module, args.text)
+            if name in {"speak", "propose_action"}:
+                prior = [
+                    r
+                    for r in run.tool_results
+                    if r.get("ok") and r.get("tool") in {"speak", "propose_action"}
+                ]
+                require(not prior, "每个队友每轮只能发言或行动一次")
+            event = rooms.append(
+                session,
+                room,
+                {
+                    "send_narration": "keeper.narration",
+                    "speak": "agent.spoke",
+                    "propose_action": "agent.action_proposed",
+                }[name],
+                binding.member_id,
+                {"text": args.text, "cycle_id": run.cycle_id},
+            )
+            return {"event_seq": event.seq}
+        if name in {"write_memory", "write_private_memory"}:
+            if name == "write_private_memory":
+                args = s.MemoryArgs(**args.model_dump(), kind="belief", scope="agent_private")
+            if args.scope == "public":
+                ensure_public_text(module, args.content)
+            memory = await write_memory(session, rooms, room, binding, profile, args)
+            rooms.append(
+                session,
+                room,
+                "agent.memory_written",
+                binding.member_id,
+                {"memory_id": memory.id, "kind": memory.kind},
+                "host_only",
+            )
+            return {"memory_id": memory.id}
+        require(False, "未实现工具", 422)
+
+    async def complete(self, session, room, module):
+        condition = Module.model_validate(module.document).completion_conditions
+        if (
+            not module.state.get("completed")
+            and module.state["scene_id"] == condition.scene_id
+            and set(condition.clue_ids) <= set(module.state["revealed_clues"])
+        ):
+            module.state = {**module.state, "completed": True}
+            self.service.rooms.append(
+                session,
+                room,
+                "module.completed",
+                room.host_member_id,
+                {"text": condition.public_text},
+            )

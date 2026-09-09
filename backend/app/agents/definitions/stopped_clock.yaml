@@ -1,0 +1,65 @@
+id: stopped-clock
+title: 停摆的钟楼
+version: "1.0"
+public_introduction: >-
+  雨夜，河湾镇的钟楼停在十一点十七分。管理员请你们检查钟楼，
+  找到失踪的维修记录，并在天亮前让钟声恢复。这是一段原创调查练习。
+keeper_brief: >-
+  守秘真相：管理员为了保护巢中的雨燕，偷偷卸下了传动销。
+  没有超自然怪物。不要提前公开这一动机；调查员只应从已揭示的现场线索推断。
+initial_scene: square
+scenes:
+  - id: square
+    title: 钟楼广场
+    public_description: 雨水沿石阶流下，钟面停着。门边的公告被风掀起一角，可以走近检查。
+    keeper_notes: 公告下面夹着维修路线，检查公告可直接揭示。
+  - id: workshop
+    title: 维修间
+    public_description: 工作台覆着灰尘，抽屉半开。楼梯通向齿轮平台，墙边有一本交接簿。
+    keeper_notes: 检查工作台需要侦查检定，成功才发现布袋。
+  - id: platform
+    title: 齿轮平台
+    public_description: 黎明前的风穿过木窗。巨大的齿轮一动不动，旁边有一个空槽。
+    keeper_notes: 找到传动销及交接记录后，安回销子便满足结束条件。
+npcs:
+  - id: caretaker
+    name: 林守时
+    public_description: 钟楼管理员，穿着湿透的灰色外套，请你们查明停摆原因。
+    keeper_notes: 管理员知道传动销的位置，但怕伤害雨燕而不肯直接说出。
+  - id: apprentice
+    name: 许小禾
+    public_description: 修表学徒，愿意借出手电，并告诉你们维修间的位置。
+    keeper_notes: 学徒没有参与卸销。
+clues:
+  - id: notice
+    title: 维修路线
+    content: 公告背面画着从维修间到齿轮平台的路线，旁注“先查交接簿”。
+    visibility: hidden
+    prerequisites:
+      scene_id: square
+  - id: pin
+    title: 布袋中的传动销
+    content: 工作台后找到一个布袋，里面是一枚完好的传动销，边缘留着新鲜的油迹。
+    visibility: hidden
+    prerequisites:
+      scene_id: workshop
+      successful_check: {kind: skill, name: spot_hidden, difficulty: regular}
+  - id: logbook
+    title: 交接簿
+    content: 交接簿写着“将传动销插回平台空槽，再缓慢转动手轮即可恢复钟声”。
+    visibility: hidden
+    prerequisites:
+      scene_id: workshop
+  - id: nest
+    title: 管理员的秘密
+    content: 密封备忘：窗沿雨燕巢中的三枚蓝斑卵是管理员卸销的唯一原因。
+    visibility: keeper_only
+    prerequisites:
+      scene_id: platform
+suggested_checks:
+  - {kind: skill, name: spot_hidden, difficulty: regular}
+  - {kind: attribute, name: dex, difficulty: regular}
+completion_conditions:
+  clue_ids: [pin, logbook]
+  scene_id: platform
+  public_text: 传动销归位，手轮缓缓转动。第一缕晨光里，河湾镇重新听见了钟声。调查结束。

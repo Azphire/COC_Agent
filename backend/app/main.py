@@ -8,7 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.api import characters, health, model, rooms, websocket
+from app.agents.model import AgentModelClient
+from app.agents.runtime import AgentRuntime
+from app.agents.service import AgentService
+from app.api import agents, characters, health, model, rooms, websocket
 from app.auth import require_host
 from app.character.repository import VersionConflict
 from app.character.service import CharacterError
@@ -33,8 +36,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             application.state.character_rulesets = load_rulesets()
             await database.initialize()
+            agent_service = AgentService(
+                application.state.room_service,
+                AgentModelClient(settings, getattr(application.state, "agent_model_adapter", None)),
+            )
+            application.state.agent_service = agent_service
+            application.state.room_service.agent_service = agent_service
+            agent_service.runtime = AgentRuntime(agent_service)
+            await agent_service.runtime.initialize()
             yield
         finally:
+            if hasattr(application.state, "agent_service"):
+                await application.state.agent_service.runtime.close()
             await database.close()
 
     application = FastAPI(title="CoC Agent", version="0.1.0", lifespan=lifespan)
@@ -51,6 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(characters.router)
     application.include_router(rooms.router)
     application.include_router(rooms.ws_router)
+    application.include_router(agents.router)
 
     @application.middleware("http")
     async def host_boundary(request, call_next):

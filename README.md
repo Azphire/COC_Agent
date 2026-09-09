@@ -6,7 +6,33 @@ Windows 原生运行的本地主机型 CoC 第七版跑团 Agent。目标是由�
 
 支持数据驱动的第七版车卡：随机／购点创建、年龄调整、属性与派生值计算、职业／兴趣技能分配、草稿持久化、最终确认及 JSON 导入导出。全部车卡计算由后端确定性代码完成，不使用模型。
 
-第二批已加入持久化多人房间、主机与远程成员认证、本地真人与 Agent 占位席位、角色快照分配、ready、服务端聊天／掷骰、WebSocket 实时同步和重连、场景与运行时资源、手动存读档及 JSONL／Markdown 日志。**本批没有接入任何 Agent 推理**。完整接口和边界见 [多人协议 v1](docs/multiplayer-protocol.md)。
+已加入持久化多人房间、主机与远程成员认证、角色快照、服务端聊天／掷骰、WebSocket 重连和存读档。第三批实现 AI KP、AI 调查员队友、原创模组、分层记忆，以及通过 LangGraph interrupt/resume 等待真人掷骰的可玩回合。多人底层协议见 [多人协议 v1](docs/multiplayer-protocol.md)，Agent 行为见 [Agent 运行机制](docs/agent-runtime.md)。
+
+## 开始一局 Agent 调查
+
+1. 确认本机 Ollama 已运行、`ollama list` 中已有 `qwen3:8b`。在“系统状态”查看模型是否可用。此步骤不下载模型。
+2. 主机解锁后打开“Agent 档案”，手工创建一个 **AI KP** 和一个 **AI 调查员**。也可输入概念生成结构化草稿；检查、修改并点击“确认保存档案”后才会保存。编辑已绑定档案前先解除绑定。
+3. 创建房间并发布最终确认的角色。至少准备真人及 AI 队友各一张角色卡；给 AI 调查员席位分配角色。主机自己扮演调查员时，要另建“本地真人”席位，管理身份本身不绑定角色。
+4. 在“AI 与模组设置”选择原创 **停摆的钟楼**，绑定 AI KP 档案和 AI 队友档案。远程玩家加入并自己准备；主机给本地真人和 AI 席位设置准备，然后开始游戏。
+5. 真人在“调查行动”输入框提交行动，例如“我进入维修间，仔细检查工作台”。提交后等待 KP；需要检定时出现卡片，显示真实技能值、难度和奖惩骰。目标真人或主机点击“掷骰完成检定”，所有骰点与判定由服务端产生。
+6. KP 根据真实结果推进场景／线索，再以只含公开资料的模型调用生成叙事。AI 队友最多行动一次，然后等待下一次真人输入。聊天输入框只发送聊天，不会触发 Agent 回合。
+7. 模型失败会显示安全错误，主机可“重试 Agent 回合”或“取消 Agent 回合”。重试保留已完成骰点、事件和调用计数；预算耗尽时取消后提交新行动。
+8. 在回合结束或等待检定时存档；暂停后载入。重启后仍可继续待掷检定，已解决的骰子不会再次掷出。载入保留后续历史事件和当前凭据。
+
+主机可展开“Agent 调试面板”并刷新，查看 graph 节点、模型、耗时、结构化输出、工具回执、输入事件与记忆；玩家不能读取这些数据。模组快照在绑定时固定，源 YAML 后续修改不影响旧房间。
+
+8GB 显存下默认所有调用串行复用一个模型，`MODEL_CONTEXT_LIMIT=8192`、`MODEL_OUTPUT_LIMIT=900`、`MODEL_TEMPERATURE=0.3`、`MODEL_KEEP_ALIVE=5m`。建议首次加载使用 `MODEL_TIMEOUT_SECONDS=240`；在根 `.env` 修改后重启后端。`default` 预设来自这些后端配置，不在档案中保存密钥。每轮最多 6 次实际调用（含格式修复、最多一次前置条件计划修正及一次摘要），每次最多 4 个工具。一个队友时，无检定通常 3 次、有检定通常 4 次；增加队友会占用同一预算。
+
+第三批验收命令（仓库根目录，需已安装 Chrome，且 8000／5173 端口空闲）：
+
+```powershell
+# Fake Model：真实 HTTP、SQLite、WebSocket 和三个独立浏览器，不访问 Ollama
+uv run --directory backend python scripts/check_agent_cycle.py
+# 明确执行本地真实模型验收，不安装或下载模型，不调用外部 API
+uv run --directory backend python scripts/check_agent_cycle.py --ollama
+```
+
+两个脚本模式均使用 `.cache/agent-*-smoke-<uuid>/` 内的临时数据库、checkpoint 和测试主机凭据；结束后清理所启动的进程并留下报告、截图、日志。不会启动或修改用户数据库。自动单元测试也只使用 Fake Model。
 
 ## 第七版角色创建
 
@@ -155,7 +181,7 @@ Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -ne '127.0.0.
 
 1. 主机解锁、创建房间，将邀请码分享给玩家。邀请码仅创建／重新生成时显示，数据库只存哈希；刷新后可重新生成，旧码立即失效，已有成员仍能重连。
 2. 主机从已最终确认角色中发布调查员；玩家输入邀请码与显示名加入，选择空闲角色并 ready。主机可增加本地真人与 Agent 占位席位，分配角色并代这些席位 ready。主机管理身份不用选卡；自己扮演调查员时另建本地真人席位。
-3. 所有活动玩家分配角色并 ready 后开始。Agent 显示“尚未接入自动行动”。双方发送消息、掷骰；私密消息只由本人和主机读取。
+3. 所有活动玩家分配角色并 ready 后开始。已绑定档案的 Agent 可以参与调查回合；双方仍可发送聊天、普通骰式掷骰。私密消息只由本人和主机读取。
 4. 主机运行中或暂停时可存档，仅暂停时可读档。载入前有确认框；恢复场景、资源和分配，保留后续历史事件和当前凭据，房间继续暂停。已离开的成员不会被读档复活。
 5. 网络断开自动重连并补发遗漏事件；刷新后从持久化房间恢复。远程重连 token 按房间存在浏览器 localStorage，离开时清除。主机可下载全部日志，玩家只能下载有权限的日志。
 
@@ -175,7 +201,7 @@ backend/
     domain/, dice/            # 领域对象与封闭骰式解析器
     character/, rules/        # 车卡业务、持久化仓库、规则校验及计算
     rooms/                    # 类型化会话、事务命令、可见性和实时同步
-    agents/, memory/          # 预留空包
+    agents/, memory/          # 模组、工具、LangGraph 回合、模型网关、分层记忆
   scripts/check_local_model.py # 四项真实本地模型检查
   scripts/check_character_creation.py # 独立数据库 + 真实Chrome离线车卡验证
   scripts/check_multiplayer.py # 三个隔离Chrome上下文的多人验收
@@ -194,9 +220,9 @@ data/
 
 前端保留 Vite 模板的 React、React DOM、TypeScript、Vite、React 插件、类型声明和 Oxlint。使用原生 WebSocket 和普通 CSS。
 
-SQLite 默认为 `data/game.db`，启动时用 `metadata.create_all` 增量创建 `character_drafts`、`character_roll_records`、`character_events`，以及 `game_rooms`、`room_members`、`room_character_slots`、`room_events`、`room_snapshots`，保留已有表和数据。角色表没有迁移。房间修改在 SQLite `BEGIN IMMEDIATE` 事务中完成，room/seq 联合主键和请求 ID 唯一约束提供并发与幂等保证；提交后按权限广播。`data/agent_checkpoints.db` 仅预留配置，尚未初始化 checkpointer。数据内容、数据库文件及其附属文件均不提交，各数据目录用 `.gitkeep` 保留。
+SQLite 默认为 `data/game.db`，启动时用 `metadata.create_all` 增量创建原有角色／房间八张表及第三批 Agent 九张表，保留已有数据；没有修改旧表列。房间修改在 SQLite `BEGIN IMMEDIATE` 事务中完成，数据库约束保障序号与幂等，提交后按权限广播。`CHECKPOINT_DB_PATH` 指定 LangGraph SQLite 文件；未配置时使用游戏数据库同目录的 `<数据库名>.checkpoints.db`。本地数据和数据库不提交，各数据目录用 `.gitkeep` 保留。
 
-尚未实现：KP Agent、AI 队友实际推理、完整 CoC 规则工具、模组检索、分层记忆、远程角色上传、公网部署和多 worker 广播。下一批应通过统一 RoomService 命令、SessionStateV1 和 RoomEvent 接入，避免直接改数据库或在 WebSocket 中另建业务规则。
+尚未实现：完整 CoC 规则、规则书／模组 RAG、PDF 模组自动解析、战斗／追逐／疯狂／成长、远程角色上传、公网部署和多 worker 广播。当前只提供一个原创练习模组和已核对的最小属性／技能检定，不使用向量数据库或 embedding。
 
 ## 验证
 

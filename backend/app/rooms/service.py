@@ -83,6 +83,7 @@ class RoomService:
         self.locks: dict[str, asyncio.Lock] = {}
         self.dice = DiceService()
         self.hub = None
+        self.agent_service = None
 
     def lock(self, room_id):
         return self.locks.setdefault(str(room_id), asyncio.Lock())
@@ -189,6 +190,11 @@ class RoomService:
                 }
                 for s in slots
             ],
+            **(
+                {"game": await self.agent_service.view(session, room, identity)}
+                if self.agent_service
+                else {}
+            ),
         }
 
     async def events(self, session, room, identity, after_seq=0, limit=None):
@@ -375,9 +381,31 @@ class RoomService:
                 )
                 view = await self.view(session, room, identity)
             await self.broadcast(room_id, events)
+            if self.agent_service:
+                runtime = self.agent_service.runtime
+                if action in {"agent.action", "agent.check.roll", "agent.retry"}:
+                    runtime.schedule(room_id)
+                elif action in {"agent.cancel", "agent.check.cancel"}:
+                    runtime.cancel_task(room_id)
             return {"room": view, **(result or {})}
 
     async def apply(self, session, room, identity, action, body, target):
+        if self.agent_service and action.startswith("agent."):
+            return await self.agent_service.apply(session, room, identity, action, body, target)
+        if self.agent_service and action in {
+            "pause",
+            "end",
+            "state.patch",
+            "assign",
+            "unassign",
+            "member.patch",
+            "member.leave",
+        }:
+            cycle = await self.agent_service.cycle(session, room.id, active=True)
+            require(
+                not cycle or (cycle.status != "running" and action == "pause"),
+                "请先等待或取消活动 Agent 回合",
+            )
         actor = identity.member_id
         host_actions = {
             "invite.rotate",
@@ -678,6 +706,8 @@ class RoomService:
                 created_at=utc_now(),
             )
             session.add(snapshot)
+            if self.agent_service:
+                await self.agent_service.save(session, room, snapshot)
             self.append(
                 session,
                 room,
@@ -696,6 +726,8 @@ class RoomService:
             snapshot = await session.get(RoomSnapshot, target)
             require(snapshot is not None and snapshot.room_id == room.id, "存档不存在", 404)
             data = SnapshotDataV1.model_validate(snapshot.document)
+            if self.agent_service:
+                await self.agent_service.load(session, room, snapshot)
             require(set(map(str, data.assignments)) == set(slot_by_id), "存档角色席位不兼容")
             room.session_state = data.state.model_dump(mode="json")
             # Clear first to support swaps with the unique member assignment constraint.

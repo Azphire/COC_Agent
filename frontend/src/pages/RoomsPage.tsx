@@ -5,6 +5,7 @@ import type { Result, Room, RoomEvent, RoomSummary, Save, SessionState } from '.
 import { charactersApi } from '../api/characters'
 import type { Character } from '../api/characters'
 import HostUnlock from '../components/HostUnlock'
+import AgentGamePanel from '../components/AgentGamePanel'
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : '请求失败，请重试' }
 
@@ -21,7 +22,7 @@ export default function RoomsPage({ roomId, unlocked, onUnlock }: { roomId?: str
   }, [unlocked, roomId])
   if (roomId) return <RoomSession key={`${roomId}:${unlocked}`} roomId={roomId} initialInvite={invites[roomId] || ''} />
   return <>
-    <section><h2>多人房间</h2><p>主机发布调查员，真人玩家通过邀请码加入。Agent 席位尚未接入自动行动。</p></section>
+    <section><h2>多人房间</h2><p>主机发布调查员，真人玩家通过邀请码加入，可配置 AI KP 和调查员队友共同游玩。</p></section>
     {error && <p role="alert">{error}</p>}
     <form onSubmit={async event => {
       event.preventDefault(); setBusy(true); setError('')
@@ -201,7 +202,7 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
         </div>}
       </section>
       <section><h2>玩家与席位</h2><ul className="character-list">{room.members.map(member => <li key={member.id} data-member-id={member.id}>
-        <strong>{member.display_name}</strong> · {member.role === 'host' ? '主机' : member.controller_type === 'agent' ? 'Agent 占位 · 尚未接入自动行动' : member.access_type === 'remote' ? '远程真人' : '本地真人'}
+        <strong>{member.display_name}</strong> · {member.role === 'host' ? '主机' : member.controller_type === 'agent' ? (room.game?.bindings.some(b => b.member_id === member.id) ? 'AI 调查员' : 'Agent · 待绑定档案') : member.access_type === 'remote' ? '远程真人' : '本地真人'}
         <p>{!member.active ? '已离开' : online.includes(member.id) ? '在线' : member.access_type === 'host_managed' && member.role === 'player' ? '主机管理' : '离线'} · {member.ready ? '已准备' : '未准备'}</p>
         {member.active && member.role === 'player' && writable && <div className="action-row">
           {lobby && (member.id === room.self_member_id || (isHost && member.access_type === 'host_managed')) && <button disabled={busy} onClick={() => void command('/ready', { member_id: member.id, ready: !member.ready })}>{member.ready ? '取消准备' : '准备'} · {member.display_name}</button>}
@@ -210,7 +211,7 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
       </li>)}</ul>
       {isHost && lobby && <form onSubmit={async event => { event.preventDefault(); if (await command('/members', { display_name: memberName, controller_type: controller })) setMemberName('') }}>
         <div className="field-grid"><label>席位名称<input id="member-name" value={memberName} maxLength={120} onChange={e => setMemberName(e.target.value)} required /></label>
-        <label>控制器<select id="member-controller" value={controller} onChange={e => setController(e.target.value)}><option value="human">本地真人</option><option value="agent">Agent 占位</option></select></label></div>
+        <label>控制器<select id="member-controller" value={controller} onChange={e => setController(e.target.value)}><option value="human">本地真人</option><option value="agent">AI 调查员席位</option></select></label></div>
         <button disabled={busy}>添加席位</button>
       </form>}
       </section>
@@ -228,6 +229,7 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
           {slot.character_snapshot && <details><summary>完整角色卡 · {slot.public_summary.name}</summary><pre>{JSON.stringify(slot.character_snapshot, null, 2)}</pre></details>}
         </article>)}
       </section>
+      <AgentGamePanel room={room} token={token} acceptRoom={acceptRoom} />
       <section><h2>当前场景</h2><h3 data-testid="scene-title">{room.session_state.scene_title || '尚未设置场景'}</h3><p className="preserve-lines">{room.session_state.scene_summary}</p>
         <p>回合：{room.session_state.round_number ?? '—'} · 当前行动：{room.character_slots.find(s => s.id === room.session_state.active_slot_id)?.public_summary.name || '—'}</p>
         {Object.entries(room.session_state.characters).map(([id, runtime]) => <p key={id} data-runtime-id={id}>{room.character_slots.find(s => s.id === id)?.public_summary.name} · HP {runtime.hp ?? '—'} / MP {runtime.mp ?? '—'} / SAN {runtime.san ?? '—'} / Luck {runtime.luck ?? '—'} · {runtime.conditions.join('、')}</p>)}
@@ -258,7 +260,7 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
       </>}
       <ol className="timeline" data-testid="timeline">{events.map(event => <li key={event.seq} data-event-seq={event.seq}>
         <small>#{event.seq} · {new Date(event.occurred_at).toLocaleTimeString()} · {room.members.find(m => m.id === event.actor_member_id)?.display_name || '系统'} · {event.visibility === 'public' ? '公开' : '私密'} · {event.type}</small>
-        {event.type === 'chat.message' ? <p className="preserve-lines">{String(event.payload.text)}</p> : event.type === 'dice.rolled' ? <p>{String(event.payload.reason)} · {String(event.payload.expression)} → [{(event.payload.dice as number[]).join(', ')}] {Number(event.payload.modifier) >= 0 ? '+' : ''}{String(event.payload.modifier)} = <strong>{String(event.payload.total)}</strong></p> : <details><summary>{eventLabel(event.type)}</summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>}
+        {['chat.message', 'action.submitted', 'keeper.narration', 'agent.spoke', 'agent.action_proposed', 'module.completed'].includes(event.type) ? <p className="preserve-lines">{String(event.payload.text)}</p> : event.type === 'dice.rolled' ? <p>{String(event.payload.reason)} · {String(event.payload.expression)} → [{(event.payload.dice as number[]).join(', ')}] {Number(event.payload.modifier) >= 0 ? '+' : ''}{String(event.payload.modifier)} = <strong>{String(event.payload.total)}</strong></p> : <details><summary>{eventLabel(event.type)}</summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>}
       </li>)}</ol>
       <div className="action-row"><button onClick={() => void exportLog('jsonl')}>导出 JSONL</button><button onClick={() => void exportLog('markdown')}>导出 Markdown</button></div>
       </section>

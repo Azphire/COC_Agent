@@ -21,8 +21,9 @@ class ToolCall(BaseModel):
 class ModelResponse(BaseModel):
     text: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
-    structured: SerializeAsAny[BaseModel] | dict[str, Any] | None = None
+    structured: dict[str, Any] | SerializeAsAny[BaseModel] | None = None
     finish_reason: str | None = None
+    token_usage: dict[str, int | None] | None = None
 
 
 class ModelClient(Protocol):

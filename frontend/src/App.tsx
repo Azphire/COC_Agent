@@ -3,6 +3,7 @@ import CharacterCreationPage from './pages/CharacterCreationPage'
 import CharacterListPage from './pages/CharacterListPage'
 import SystemStatusPage from './pages/SystemStatusPage'
 import RoomsPage from './pages/RoomsPage'
+import AgentProfilesPage from './pages/AgentProfilesPage'
 import HostUnlock from './components/HostUnlock'
 import { hostToken } from './api/session'
 import './App.css'
@@ -24,11 +25,13 @@ function App() {
         <a href="#/characters" aria-current={route === '#/characters' ? 'page' : undefined}>角色列表</a>
         <a href="#/create" aria-current={route === '#/create' ? 'page' : undefined}>创建角色</a>
         <a href="#/rooms" aria-current={route.startsWith('#/rooms') ? 'page' : undefined}>多人房间</a>
+        <a href="#/agents" aria-current={route === '#/agents' ? 'page' : undefined}>Agent 档案</a>
         {unlocked && <button onClick={() => { sessionStorage.removeItem('coc.host'); setUnlocked(false) }}>锁定主机</button>}
       </nav>
       {route.startsWith('#/rooms') ? <RoomsPage roomId={route.startsWith('#/rooms/') ? route.slice(8) : undefined} unlocked={unlocked} onUnlock={() => setUnlocked(true)} />
         : !unlocked ? <HostUnlock onUnlock={() => setUnlocked(true)} />
         : route === '#/status' ? <SystemStatusPage />
+        : route === '#/agents' ? <AgentProfilesPage />
         : route === '#/create' || characterId
           ? <CharacterCreationPage key={route} characterId={characterId} />
           : <CharacterListPage />}
