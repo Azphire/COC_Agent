@@ -20,6 +20,7 @@ from websockets.sync.client import connect
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
+TEST_HOST = "isolated-browser-smoke-host-key-no-user-secrets"
 sys.path.insert(0, str(BACKEND))
 
 
@@ -44,6 +45,7 @@ def serve(database_path: Path):
     )
     settings = Settings(
         _env_file=None,
+        host_admin_token=TEST_HOST,
         data_dir=database_path.parent,
         database_url=f"sqlite+aiosqlite:///{database_path.as_posix()}",
         model_provider="ollama",
@@ -72,12 +74,14 @@ def port_free(port):
 
 
 class SmokeCheck:
-    def __init__(self):
-        self.directory = ROOT / ".cache" / f"character-smoke-{uuid4().hex}"
+    def __init__(self, artifact_prefix="character"):
+        self.directory = ROOT / ".cache" / f"{artifact_prefix}-smoke-{uuid4().hex}"
         self.directory.mkdir(parents=True)
         self.processes = []
         self.logs = []
-        self.http = httpx.Client(trust_env=False, timeout=5)
+        self.http = httpx.Client(
+            trust_env=False, timeout=5, headers={"Authorization": f"Bearer {TEST_HOST}"}
+        )
         self.cdp = None
         self.request_id = 0
         self.requests = []
@@ -255,6 +259,9 @@ class SmokeCheck:
             {"behavior": "allow", "downloadPath": str(self.directory)},
         )
         self.command("Page.navigate", {"url": "http://127.0.0.1:5173/#/characters"})
+        wait_for(lambda: self.contains("主机解锁"))
+        self.fill("#host-key", TEST_HOST)
+        self.click("解锁主机")
         wait_for(lambda: self.contains("还没有角色"))
         self.report["empty_list"] = "passed"
 

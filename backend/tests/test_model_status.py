@@ -32,15 +32,21 @@ def test_status_checks_catalogue_without_inference(monkeypatch, tmp_path: Path, 
     sdk = Mock(side_effect=AssertionError("Status must not create an inference client"))
     monkeypatch.setattr("app.models.openai_compatible.AsyncOpenAI", sdk)
     settings = Settings(
-        _env_file=None, data_dir=tmp_path,
+        _env_file=None,
+        data_dir=tmp_path,
         database_url=f"sqlite+aiosqlite:///{(tmp_path / 'status.db').as_posix()}",
         model_api_key="test-secret-not-for-output",
+        host_admin_token="offline-status-test-host",
     )
-    with TestClient(create_app(settings)) as client:
+    with TestClient(
+        create_app(settings), headers={"Authorization": "Bearer offline-status-test-host"}
+    ) as client:
         response = client.get("/api/model/status")
         assert response.status_code == 200
         assert response.json() == {
-            "provider": "ollama", "model": "qwen3:8b", "available": state == "present",
+            "provider": "ollama",
+            "model": "qwen3:8b",
+            "available": state == "present",
         }
         # Health still works independently and must not even query the model catalogue.
         assert client.get("/api/health").json()["status"] == "ok"

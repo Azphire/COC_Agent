@@ -1,3 +1,5 @@
+import { authHeaders } from './session'
+
 export type ValidationIssue = { field: string; code: string; message: string }
 export type CharacteristicValue = { value: number }
 export type SkillAllocation = { points: number }
@@ -40,13 +42,13 @@ export class CharacterApiError extends Error {
   }
 }
 
-const base = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '')
+const base = ''
 
 async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   let response: Response
   try {
     response = await fetch(`${base}/api${path}`, {
-      method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      method, headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10000),
     })
   } catch {

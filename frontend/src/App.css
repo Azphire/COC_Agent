@@ -4,6 +4,18 @@ main {
   padding: 24px;
 }
 
+.room-character { border-top: 1px solid #dce4e1; padding: 16px 0; }
+.room-character h3 { margin-bottom: 8px; }
+.room-session code { overflow-wrap: anywhere; }
+.room-session .action-row select { width: auto; max-width: 100%; }
+.room-session details { margin-top: 12px; }
+.room-session summary { cursor: pointer; }
+.room-session fieldset { margin: 16px 0; }
+.timeline { padding-left: 24px; max-height: 650px; overflow-y: auto; }
+.timeline li { padding: 12px 0; border-bottom: 1px solid #dce4e1; }
+.timeline pre { min-height: 0; }
+.preserve-lines { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 nav, .action-row, .choice-row {
   display: flex;
   flex-wrap: wrap;

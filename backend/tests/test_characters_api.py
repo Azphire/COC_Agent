@@ -294,14 +294,15 @@ def test_bad_import_schema_and_ruleset(client, mutation):
 
 def test_restart_preserves_drafts_rolls_and_events(character_settings):
     app = create_app(character_settings)
-    with TestClient(app) as client:
+    headers = {"Authorization": f"Bearer {character_settings.host_admin_token.get_secret_value()}"}
+    with TestClient(app, headers=headers) as client:
         random = create(client, "random")
         point = complete(client, create(client))
         endpoint = f"/api/characters/{point['id']}"
         client.post(endpoint + "/finalize", json={"version": point["version"]})
         document = client.get(endpoint + "/export").json()
         client.post("/api/characters/import", json=document)
-    with TestClient(create_app(character_settings)) as restarted:
+    with TestClient(create_app(character_settings), headers=headers) as restarted:
         assert restarted.get(f"/api/characters/{random['id']}").json() == random
         assert restarted.get(endpoint).json()["status"] == "finalized"
         assert len(restarted.get("/api/characters").json()) == 3

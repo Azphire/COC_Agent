@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     app_host: str = "127.0.0.1"
     app_port: int = Field(default=8000, ge=1, le=65535)
+    host_admin_token: SecretStr = SecretStr("")
     data_dir: Path = Path("../data")
 
     model_provider: str = "ollama"

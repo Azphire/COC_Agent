@@ -30,6 +30,7 @@ def development(rulesets):
 def character_settings(tmp_path):
     return Settings(
         _env_file=None,
+        host_admin_token="test-host-credential-for-isolated-database-only",
         data_dir=tmp_path,
         database_url=f"sqlite+aiosqlite:///{(tmp_path / 'characters.db').as_posix()}",
     )
@@ -42,5 +43,9 @@ def character_app(character_settings):
 
 @pytest.fixture
 def client(character_app):
-    with TestClient(character_app) as client:
+    token = character_app.state.settings.host_admin_token.get_secret_value()
+    with TestClient(
+        character_app,
+        headers={"Authorization": f"Bearer {token}"},
+    ) as client:
         yield client

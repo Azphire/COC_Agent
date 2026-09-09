@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { authHeaders, hostToken, socketUrl } from '../api/session'
 
 type Health = {
   status: string
@@ -15,8 +16,8 @@ type ModelStatus = {
 
 type ConnectionStatus = '连接中' | '已连接' | '已断开' | '连接失败'
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '')
-const wsUrl = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:8000/ws'
+const apiBaseUrl = ''
+const wsUrl = socketUrl('/ws')
 
 function SystemStatusPage() {
   const [health, setHealth] = useState<Health | null>(null)
@@ -37,6 +38,7 @@ function SystemStatusPage() {
     async function checkModel() {
       try {
         const response = await fetch(`${apiBaseUrl}/api/model/status`, {
+          headers: authHeaders(),
           signal: controller.signal,
         })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -90,7 +92,7 @@ function SystemStatusPage() {
       socket = new WebSocket(wsUrl)
       socketRef.current = socket
       socket.onopen = () => {
-        if (active) setConnection('已连接')
+        socket?.send(JSON.stringify({ type: 'auth', credential_type: 'host', token: hostToken() }))
       }
       socket.onclose = () => {
         if (active) setConnection((previous) => previous === '连接失败' ? previous : '已断开')
@@ -102,7 +104,9 @@ function SystemStatusPage() {
         if (!active) return
         try {
           const result = JSON.parse(event.data)
-          if (result?.type === 'echo') {
+          if (result?.type === 'connected') {
+            setConnection('已连接')
+          } else if (result?.type === 'echo') {
             setEcho(result)
             setMessageError('')
           } else if (result?.type === 'error') {

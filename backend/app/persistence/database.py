@@ -4,6 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.persistence import room_models  # noqa: F401
 from app.persistence.character_models import Base
 
 
@@ -11,7 +12,7 @@ class Database:
     def __init__(self, database_url: str) -> None:
         url = make_url(database_url)
         Path(url.database).parent.mkdir(parents=True, exist_ok=True)
-        self.engine = create_async_engine(url)
+        self.engine = create_async_engine(url, connect_args={"timeout": 30})
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
 
     async def initialize(self) -> None:
