@@ -41,9 +41,10 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite+aiosqlite:///../data/game.db"
     checkpoint_db_path: Path | None = None
+    knowledge_db_path: Path | None = None
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
-    @field_validator("data_dir", "checkpoint_db_path", mode="before")
+    @field_validator("data_dir", "checkpoint_db_path", "knowledge_db_path", mode="before")
     @classmethod
     def resolve_paths(cls, value: str | Path | None) -> Path | None:
         return resolve_backend_path(value) if value is not None else None
@@ -53,6 +54,10 @@ class Settings(BaseSettings):
         return self.checkpoint_db_path or Path(make_url(self.database_url).database).with_suffix(
             ".checkpoints.db"
         )
+
+    @property
+    def knowledge_path(self) -> Path:
+        return self.knowledge_db_path or self.data_dir / "knowledge" / "knowledge.db"
 
     @field_validator("database_url")
     @classmethod

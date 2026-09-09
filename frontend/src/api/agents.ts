@@ -1,3 +1,5 @@
+import type { KnowledgeBinding } from './knowledge'
+
 export type AgentProfileInput = {
   role: 'keeper' | 'investigator'; name: string; background: string; personality: string;
   goals: string; speaking_style: string; action_tendency: string; model_preset: 'default';
@@ -11,6 +13,7 @@ export type Check = {
   result: { total: number; threshold: number; level: string; passed: boolean; outcome: string } | null;
 }
 export type GameState = {
+  knowledge?: KnowledgeBinding;
   enabled: boolean;
   module: { id: string; title: string; public_introduction: string; scene: { id: string; title: string; public_description: string }; clues: { id: string; title: string; content: string }[]; completed: boolean } | null;
   cycle: { id: string; status: string; current_node: string; safe_error: string | null; state?: Record<string, unknown> } | null;

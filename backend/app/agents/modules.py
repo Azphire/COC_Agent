@@ -58,11 +58,11 @@ class Module(DomainModel):
     public_introduction: Text
     keeper_brief: Text
     initial_scene: str
-    scenes: list[Scene] = Field(min_length=2, max_length=3)
-    npcs: list[NPC] = Field(min_length=2, max_length=2)
-    clues: list[Clue] = Field(min_length=3, max_length=5)
+    scenes: list[Scene] = Field(min_length=1, max_length=3)
+    npcs: list[NPC] = Field(default_factory=list, max_length=2)
+    clues: list[Clue] = Field(default_factory=list, max_length=5)
     suggested_checks: list[SuggestedCheck]
-    completion_conditions: Completion
+    completion_conditions: Completion | None
 
     @model_validator(mode="after")
     def references(self):
@@ -71,9 +71,11 @@ class Module(DomainModel):
             raise ValueError("模组 ID 重复")
         if len({n.id for n in self.npcs}) != len(self.npcs):
             raise ValueError("NPC ID 重复")
-        if self.initial_scene not in scenes or self.completion_conditions.scene_id not in scenes:
+        if self.initial_scene not in scenes or (
+            self.completion_conditions and self.completion_conditions.scene_id not in scenes
+        ):
             raise ValueError("场景引用不存在")
-        if not set(self.completion_conditions.clue_ids) <= clues:
+        if self.completion_conditions and not set(self.completion_conditions.clue_ids) <= clues:
             raise ValueError("结束条件线索不存在")
         for clue in self.clues:
             pre = clue.prerequisites

@@ -106,7 +106,7 @@ async def write_memory(session, rooms, room, binding, profile, args):
 
 
 async def build_context(
-    service, session, room, binding, profile, cycle, phase=None, additions=None
+    service, session, room, binding, profile, cycle, phase=None, additions=None, run_id=None
 ):
     phase = phase or cycle.state["current_node"]
     narrator = phase == "narrate_publicly"
@@ -186,6 +186,35 @@ async def build_context(
     )
     if budget < 2500:
         budget = 2500
+    if run_id:
+        configured = await service.knowledge.binding(session, room.id)
+        if configured and configured["enabled"]:
+            evidence, _ = await service.knowledge.pre_context(
+                session,
+                room,
+                binding,
+                profile,
+                run_id,
+                context,
+                min(
+                    int(budget * 0.3),
+                    max(0, budget - len(json.dumps(context, ensure_ascii=False)) - 100),
+                ),
+            )
+            context["knowledge_enabled"] = True
+            context["RULE_EVIDENCE"] = [e for e in evidence if e["source_kind"] != "module"]
+            context["MODULE_EVIDENCE"] = [e for e in evidence if e["source_kind"] == "module"]
+            if narrator:
+                from app.knowledge.service import KnowledgeContextBuilder
+
+                options = KnowledgeContextBuilder.public_claim_options(context)
+                for option in options:
+                    proposed = {
+                        **context,
+                        "PUBLIC_CLAIM_OPTIONS": [*context.get("PUBLIC_CLAIM_OPTIONS", []), option],
+                    }
+                    if len(json.dumps(proposed, ensure_ascii=False)) <= budget - 400:
+                        context = proposed
     selected = []
     for memory in ranked:
         candidate = memory_view(memory)
@@ -204,4 +233,26 @@ async def build_context(
         "当前模组和角色超过上下文预算，请提高上下文限制或减少席位",
         422,
     )
-    return await service.sanitize(session, room, context), all_events, selected
+    # Stable prompt order: identity/cards/public scene/module, memories/summary/events,
+    # evidence, then the current action. JSON remains explicitly reference data.
+    ordered = {
+        key: context[key]
+        for key in (
+            "role",
+            "profile",
+            "characters",
+            "public_state",
+            "module",
+            "memories",
+            "events",
+            "checks",
+            "RULE_EVIDENCE",
+            "MODULE_EVIDENCE",
+        )
+        if key in context
+    }
+    ordered.update(
+        {k: v for k, v in context.items() if k not in ordered and k != "triggering_action"}
+    )
+    ordered["triggering_action"] = context["triggering_action"]
+    return await service.sanitize(session, room, ordered), all_events, selected

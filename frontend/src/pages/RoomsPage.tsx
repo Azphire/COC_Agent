@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import RoomTimelineEvent from '../components/RoomTimelineEvent'
 import { api, ApiError, authHeaders, hostToken, requestId, socketUrl } from '../api/session'
 import { credentialKey, roomStatus, storedRooms } from '../api/rooms'
 import type { Result, Room, RoomEvent, RoomSummary, Save, SessionState } from '../api/rooms'
@@ -258,17 +259,10 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
         <form onSubmit={e => { e.preventDefault(); void send('messages') }}><label>消息<textarea id="chat-message" value={text} onChange={e => setText(e.target.value)} maxLength={4000} required /></label><button disabled={busy || !text.trim()}>发送消息</button></form>
         <form onSubmit={e => { e.preventDefault(); void send('rolls') }}><div className="field-grid"><label>骰子表达式<input id="dice-expression" value={expression} maxLength={32} onChange={e => setExpression(e.target.value)} required /></label><label>原因<input id="dice-reason" value={reason} maxLength={2000} onChange={e => setReason(e.target.value)} /></label></div><button disabled={busy}>服务端掷骰</button></form>
       </>}
-      <ol className="timeline" data-testid="timeline">{events.map(event => <li key={event.seq} data-event-seq={event.seq}>
-        <small>#{event.seq} · {new Date(event.occurred_at).toLocaleTimeString()} · {room.members.find(m => m.id === event.actor_member_id)?.display_name || '系统'} · {event.visibility === 'public' ? '公开' : '私密'} · {event.type}</small>
-        {['chat.message', 'action.submitted', 'keeper.narration', 'agent.spoke', 'agent.action_proposed', 'module.completed'].includes(event.type) ? <p className="preserve-lines">{String(event.payload.text)}</p> : event.type === 'dice.rolled' ? <p>{String(event.payload.reason)} · {String(event.payload.expression)} → [{(event.payload.dice as number[]).join(', ')}] {Number(event.payload.modifier) >= 0 ? '+' : ''}{String(event.payload.modifier)} = <strong>{String(event.payload.total)}</strong></p> : <details><summary>{eventLabel(event.type)}</summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>}
-      </li>)}</ol>
+      <ol className="timeline" data-testid="timeline">{events.filter(event => event.visibility !== 'host_only').map(event => <RoomTimelineEvent key={event.seq} event={event} room={room} />)}</ol>
+      {isHost && <details data-testid="host-event-debug"><summary>主机私密事件 · HOST_DEBUG</summary><ol>{events.filter(event => event.visibility === 'host_only').map(event => <RoomTimelineEvent key={event.seq} event={event} room={room} />)}</ol></details>}
       <div className="action-row"><button onClick={() => void exportLog('jsonl')}>导出 JSONL</button><button onClick={() => void exportLog('markdown')}>导出 Markdown</button></div>
       </section>
     </>}
   </div>
-}
-
-function eventLabel(type: string) {
-  const names: Record<string, string> = { 'room.created': '房间创建', 'member.joined': '成员加入', 'member.left': '成员离开', 'member.deactivated': '成员失活', 'member.ready': '准备状态变化', 'character.published': '角色发布', 'character.assigned': '角色分配', 'character.unassigned': '角色取消分配', 'game.started': '游戏开始', 'game.paused': '游戏暂停', 'game.resumed': '游戏恢复', 'game.ended': '游戏结束', 'scene.updated': '场景更新', 'session.updated': '运行时状态更新', 'snapshot.created': '存档创建', 'snapshot.loaded': '存档载入', 'invite.rotated': '邀请码已更新' }
-  return names[type] || type
 }

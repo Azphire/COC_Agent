@@ -55,6 +55,33 @@ API：`GET /api/character-rulesets`、`GET /api/character-rulesets/{id}`；`GET 
 
 刷新页面或重启后可继续读取草稿和确认后的角色；每次读取保留原始骰子结果。尚未覆盖全部职业／技能专业、90岁及以上年龄、背景、装备、资金明细和完整战斗。
 
+## 本地规则书与模组 RAG（第四批）
+
+主机解锁后进入“知识库”，点击增量索引，检查来源状态、页数、chunk 数及 hash，再测试查询。规则书放在 `data/rules/`；模组使用 `data/modules/<模组文件夹>/`，每个一级文件夹是独立来源，只递归读取该文件夹内部。文件夹名默认作为标题，已有 `manifest.json` / `manifest.yaml` / `manifest.yml` 优先提供元数据。无 manifest 时 ID 由稳定相对路径生成。
+
+支持 PDF、Markdown、TXT、DOCX 和 DOC。同目录同名版本按 **DOCX → DOC → PDF** 选择；不同名称的受支持文件分别索引。DOC 使用本机已安装的 Microsoft Word，只读打开并禁用宏；缺少 Word 时明确记录失败，不安装转换器。DOCX 使用标准 XML 提取，不伪造物理页码。PDF 保留从 1 开始的 physical page 和文件提供的 page label；无文本层标记 `ocr_required`。图片、压缩包、缓存、输出及未知格式记录后跳过。没有 OCR、embedding 或新模型下载。
+
+在仓库根目录运行：
+
+```powershell
+uv run --directory backend python -m app.knowledge.cli index --kind rules
+uv run --directory backend python -m app.knowledge.cli index --kind modules
+uv run --directory backend python -m app.knowledge.cli status
+uv run --directory backend python -m app.knowledge.cli verify
+uv run --directory backend python -m app.knowledge.cli query --kind rules "奖励骰如何判定"
+uv run --directory backend python -m app.knowledge.cli cleanup --dry-run --game-database ../data/game.db
+```
+
+知识库默认独立存放于 `data/knowledge/knowledge.db`，由 `KNOWLEDGE_DB_PATH` 配置；可用 CLI 全局参数 `--database ../.cache/batch-4/knowledge-v2.db` 指定隔离库，参数放在子命令前。增量索引保留旧 source hash，原始文件不会被移动、改名或覆盖。清理默认仅预览；明确使用 `--apply` 才会清理当前游戏数据库中没有房间、存档或 claim 引用的旧派生版本。多个游戏数据库共用知识库时不要执行清理，当前命令只核查一个游戏库。
+
+在房间大厅或暂停状态的“知识来源”面板选择规则书和可选模组，再绑定 AI KP、AI 队友。原始模组全部为 `keeper_only`；未结构化的本地模组需由主机填写简短公开开场。系统不自动生成 NPC 或线索，后续公开内容仍经既有场景、`reveal_clue` 和房间事件产生。原创《停摆的钟楼》继续供确定性测试使用。
+
+KP 的规则陈述要引用当前 run 的有效规则证据；公开模组事实要引用已公开实体。无依据会显示“需要主持人裁定”。时间线实时显示 actor、cycle、发言、行动、检定与简短引用，展开引用可看页码和受限摘录。主机调试面板显示检索 query、score/rank、返回与实际注入的 evidence ID；玩家看不到隐藏证据或 KP 私密记忆。
+
+存档固定来源 ID 和 hash。源文件变化不会自动更新旧房间；若看到 `knowledge_missing`，旧历史仍可读，新 Agent cycle 暂停。重新索引相同版本，或在暂停状态明确重新绑定可用版本后继续。所有原文、索引、提取缓存和开发记录均由 Git 忽略；第二批的 JSONL / Markdown 日志导出继续沿用，本批没有新增正式导出规范。
+
+实现细节、验收配置与已知限制见 [RAG 架构](docs/rag-architecture.md) 和 [第四批报告](docs/batch-4-report.md)。
+
 ## 环境
 
 - Git、uv；后端限定 Python `>=3.12,<3.13`，虚拟环境位于 `backend/.venv`。
@@ -222,7 +249,7 @@ data/
 
 SQLite 默认为 `data/game.db`，启动时用 `metadata.create_all` 增量创建原有角色／房间八张表及第三批 Agent 九张表，保留已有数据；没有修改旧表列。房间修改在 SQLite `BEGIN IMMEDIATE` 事务中完成，数据库约束保障序号与幂等，提交后按权限广播。`CHECKPOINT_DB_PATH` 指定 LangGraph SQLite 文件；未配置时使用游戏数据库同目录的 `<数据库名>.checkpoints.db`。本地数据和数据库不提交，各数据目录用 `.gitkeep` 保留。
 
-尚未实现：完整 CoC 规则、规则书／模组 RAG、PDF 模组自动解析、战斗／追逐／疯狂／成长、远程角色上传、公网部署和多 worker 广播。当前只提供一个原创练习模组和已核对的最小属性／技能检定，不使用向量数据库或 embedding。
+尚未实现：完整 CoC 规则、PDF 模组自动结构化、战斗／追逐／疯狂／成长、远程角色上传、公网部署和多 worker 广播。当前支持本地文本 RAG、一个原创练习模组和已核对的最小属性／技能检定，不使用向量数据库或 embedding。
 
 ## 验证
 

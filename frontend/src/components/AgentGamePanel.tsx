@@ -3,6 +3,7 @@ import { api, requestId } from '../api/session'
 import type { Result, Room } from '../api/rooms'
 import type { AgentProfile } from '../api/agents'
 import { difficultyLabels, nodeLabels, resultLabels } from '../api/agents'
+import KnowledgeBindingPanel from './KnowledgeBindingPanel'
 
 type Props = { room: Room; token: string; acceptRoom: (room: Room) => void }
 
@@ -17,6 +18,8 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
   const [busy, setBusy] = useState(false)
   const [runs, setRuns] = useState<Record<string, unknown>[]>([])
   const [memory, setMemory] = useState<unknown[]>([])
+  const [retrievals, setRetrievals] = useState<Record<string, unknown[]>>({})
+  const [debugOpen, setDebugOpen] = useState(false)
   const pending = useRef<{ text: string; actor: string; id: string } | null>(null)
   const prefix = `/rooms/${room.id}`
   const game = room.game
@@ -29,6 +32,19 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
       api<{ id: string; title: string }[]>('/modules', token).then(setModules).catch(e => setError(e.message))
     }
   }, [room.is_host, token])
+  useEffect(() => {
+    if (!room.is_host || !debugOpen) return
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      try {
+        const nextRuns = await api<Record<string, unknown>[]>(prefix + '/agent-runs', token)
+        const nextMemory = await api<unknown[]>(prefix + '/memories', token)
+        const audit = await Promise.all(nextRuns.map(async run => [String(run.id), await api<unknown[]>(`${prefix}/agent-runs/${run.id}/retrievals`, token)] as const))
+        if (!cancelled) { setRuns(nextRuns); setMemory(nextMemory); setRetrievals(Object.fromEntries(audit)) }
+      } catch (e) { if (!cancelled) setError(e instanceof Error ? e.message : '加载失败') }
+    }, 200)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [room.is_host, room.revision, debugOpen, prefix, token])
   async function command(path: string, body?: unknown, method = 'POST') {
     setBusy(true); setError('')
     try { const result = await api<Result>(prefix + path, token, method, body); acceptRoom(result.room); return true }
@@ -37,6 +53,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
   }
   const seats = room.members.filter(m => m.active && (m.id === room.host_member_id || m.controller_type === 'agent'))
   return <>
+    {room.is_host && <KnowledgeBindingPanel room={room} token={token} acceptRoom={acceptRoom} />}
     {room.is_host && <section><h2>AI 与模组设置</h2><p><a href="#/agents">创建或编辑 Agent 档案</a></p>
       {!game?.module && <form onSubmit={e => { e.preventDefault(); void command('/module', { module_id: moduleId }) }}>
         <label>原创测试模组<select id="agent-module" value={moduleId} onChange={e => setModuleId(e.target.value)}>{modules.map(m => <option key={m.id} value={m.id}>{m.title}</option>)}</select></label>
@@ -83,7 +100,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
       </article>)}</div>
       <h3>已公开线索</h3>{game.module.clues.length === 0 ? <p>尚未发现线索。</p> : game.module.clues.map(clue => <article key={clue.id}><h4>{clue.title}</h4><p>{clue.content}</p></article>)}
     </section>}
-    {room.is_host && game?.module && <section><details><summary>主机 Agent 调试面板</summary>
+    {room.is_host && game?.module && <section data-testid="host-agent-debug"><details onToggle={e => setDebugOpen(e.currentTarget.open)}><summary>主机 Agent 调试面板 · HOST_DEBUG</summary>
       <button disabled={busy} onClick={async () => {
         try {
           setRuns(await api<Record<string, unknown>[]>(prefix + '/agent-runs', token))
@@ -91,7 +108,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
         } catch (e) { setError(e instanceof Error ? e.message : '加载失败') }
       }}>刷新运行与记忆</button>
       <pre>{JSON.stringify(cycle, null, 2)}</pre>
-      {runs.map(run => <details key={String(run.id)}><summary>{String(run.graph_node)} · {String(run.status)} · {String(run.model)} · {String(run.latency_ms)} ms</summary><pre>{JSON.stringify(run, null, 2)}</pre></details>)}
+      {runs.map(run => <details key={String(run.id)}><summary>{String(run.graph_node)} · {String(run.status)} · {String(run.model)} · {String(run.latency_ms)} ms</summary><pre>{JSON.stringify({ run_id: run.id, cycle_id: run.cycle_id, output: run.structured_output, tools: run.tool_results, error: run.safe_error }, null, 2)}</pre><details><summary>检索证据与实际注入</summary><pre>{JSON.stringify(retrievals[String(run.id)] || [], null, 2)}</pre></details></details>)}
       <details><summary>当前记忆</summary><pre>{JSON.stringify(memory, null, 2)}</pre></details>
     </details></section>}
   </>

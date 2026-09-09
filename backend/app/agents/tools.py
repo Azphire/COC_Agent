@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.agents import schemas as s
 from app.agents.modules import Module, content_hash, public_module
+from app.knowledge.schemas import ExcerptArgs, SearchArgs
 from app.memory.service import write_memory
 from app.persistence.agent_models import (
     AgentCycle,
@@ -34,6 +35,13 @@ KEEPER, INVESTIGATOR, BOTH = (
     frozenset({"keeper", "investigator"}),
 )
 TOOLS = {
+    "search_rules": ToolDefinition(SearchArgs, BOTH, "检索房间绑定版本的公开规则；返回可引用证据"),
+    "search_module": ToolDefinition(
+        SearchArgs, KEEPER, "仅检索当前绑定模组及 hash；资料保持 keeper_only"
+    ),
+    "get_evidence_excerpt": ToolDefinition(
+        ExcerptArgs, BOTH, "读取当前 run 已授权获得的证据短摘录"
+    ),
     "inspect_public_state": ToolDefinition(s.Empty, BOTH, "读取当前公开场景、NPC 和已公开线索"),
     "inspect_character": ToolDefinition(s.CharacterArgs, KEEPER, "读取房间成员的真实角色快照"),
     "request_skill_check": ToolDefinition(
@@ -172,6 +180,15 @@ class AgentTools:
                 )
             )
             run.tool_results = [*run.tool_results, {"idempotency_key": key, **result}]
+            if not result["ok"]:
+                self.service.rooms.append(
+                    session,
+                    room,
+                    "agent.tool_rejected",
+                    binding.member_id,
+                    {"cycle_id": run.cycle_id, "tool": name, "error": result["error"]},
+                    "host_only",
+                )
             cycle.state = {
                 **cycle.state,
                 "tool_count": cycle.state["tool_count"] + 1,
@@ -183,6 +200,24 @@ class AgentTools:
 
     async def dispatch(self, session, room, run, binding, profile, name, args):
         service, rooms = self.service, self.service.rooms
+        if name in {"search_rules", "search_module"}:
+            evidence, _ = await service.knowledge.search(
+                session,
+                room,
+                run_id=run.id,
+                profile=profile,
+                actor_id=binding.member_id,
+                query=args.query,
+                kind="rules" if name == "search_rules" else "module",
+                top_k=args.top_k,
+                scene_id=args.scene_id,
+                entity_id=args.entity_id,
+            )
+            return {"evidence": evidence}
+        if name == "get_evidence_excerpt":
+            return await service.knowledge.get_excerpt(
+                session, room, run, args.evidence_id, profile
+            )
         module = await service.module(session, room.id)
         require(module and module.enabled, "模组没有启用")
         if name == "inspect_public_state":
@@ -235,7 +270,12 @@ class AgentTools:
                 room,
                 "clue.revealed",
                 binding.member_id,
-                {"clue_id": clue.id, "title": clue.title, "content": clue.content},
+                {
+                    "clue_id": clue.id,
+                    "title": clue.title,
+                    "content": clue.content,
+                    "cycle_id": run.cycle_id,
+                },
             )
             session.add(
                 AgentMemory(
@@ -273,6 +313,7 @@ class AgentTools:
                     "scene_id": scene.id,
                     "scene_title": scene.title,
                     "scene_summary": scene.public_description,
+                    "cycle_id": run.cycle_id,
                 },
             )
             await self.complete(session, room, module)
@@ -299,7 +340,12 @@ class AgentTools:
                     "propose_action": "agent.action_proposed",
                 }[name],
                 binding.member_id,
-                {"text": args.text, "cycle_id": run.cycle_id},
+                {
+                    "text": args.text,
+                    "cycle_id": run.cycle_id,
+                    "actor_name": profile.document["name"],
+                    "controller_type": "agent",
+                },
             )
             return {"event_seq": event.seq}
         if name in {"write_memory", "write_private_memory"}:
@@ -321,6 +367,8 @@ class AgentTools:
 
     async def complete(self, session, room, module):
         condition = Module.model_validate(module.document).completion_conditions
+        if condition is None:
+            return
         if (
             not module.state.get("completed")
             and module.state["scene_id"] == condition.scene_id

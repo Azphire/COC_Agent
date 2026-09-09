@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.persistence import agent_models, room_models  # noqa: F401
+from app.persistence import agent_models, knowledge_models, room_models  # noqa: F401
 from app.persistence.character_models import Base
 
 

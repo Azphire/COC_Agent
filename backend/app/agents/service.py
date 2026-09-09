@@ -19,6 +19,7 @@ from app.persistence.agent_models import (
     ProfileRecord,
     RoomAgentBinding,
 )
+from app.persistence.knowledge_models import AgentModelCall
 from app.persistence.room_models import RoomEvent, RoomMember
 from app.rooms.service import event_view, iso_utc, require
 from app.rules.checks import check_value, roll_check
@@ -31,6 +32,9 @@ class AgentService:
         self.rooms, self.settings, self.model = rooms, rooms.settings, model
         self.modules = load_modules()
         self.runtime = None
+        from app.knowledge.service import KnowledgeService
+
+        self.knowledge = KnowledgeService(self)
 
     async def sanitize(self, session, room, value):
         members = await self.rooms.members(session, room)
@@ -102,6 +106,7 @@ class AgentService:
         cycle = await self.cycle(session, room.id)
         checks = await self.check_views(session, room, identity)
         result = {
+            "knowledge": await self.knowledge.view(session, room.id),
             "module": public_module(module) if module else None,
             "enabled": module.enabled if module else False,
             "checks": checks,
@@ -170,11 +175,19 @@ class AgentService:
                     }
                     for run in runs
                 ]
+                for view in views:
+                    view["model_calls"] = [
+                        c.document
+                        for c in await session.scalars(
+                            select(AgentModelCall).where(AgentModelCall.run_id == view["id"])
+                        )
+                    ]
                 return views[0] if target else views
             view = await self.view(session, room, identity)
             return view["cycle"] if kind == "cycle" else view
 
     async def ensure_config(self, session, room):
+        await self.knowledge.require_available(session, room.id)
         module = await self.module(session, room.id)
         require(module and module.enabled, "请先选择测试模组并启用 Agent")
         require(not module.state.get("completed"), "测试模组已结束")
@@ -203,12 +216,14 @@ class AgentService:
         if action not in {"action", "check.roll"}:
             require(identity.is_host, "仅主机可以执行此操作", 403)
         cycle = await self.cycle(session, room.id, active=True)
-        if action in {"module", "binding", "unbind", "config"}:
+        if action in {"module", "binding", "unbind", "config", "knowledge"}:
             require(
                 room.status in {"lobby", "paused"} and cycle is None,
                 "请在无活动回合的大厅或暂停状态配置",
             )
-        if action == "module":
+        if action == "knowledge":
+            await self.knowledge.bind(session, room, body, identity.member_id)
+        elif action == "module":
             require(body.module_id in self.modules, "模组不存在", 404)
             require(
                 await self.module(session, room.id) is None,
@@ -461,6 +476,7 @@ class AgentService:
                 "status": cycle.status,
                 "current_node": cycle.state["current_node"],
                 "safe_error": cycle.state.get("safe_error"),
+                "call_count": cycle.state.get("call_count", 0),
             },
         )
 
@@ -563,7 +579,7 @@ class AgentService:
             room,
             "check.requested",
             target.id,
-            self.check_public(record.document),
+            {**self.check_public(record.document), "cycle_id": cycle.id},
             args.visibility,
         )
         return record
@@ -599,11 +615,12 @@ class AgentService:
             room,
             "check.resolved",
             member.id,
-            self.check_public(record.document),
+            {**self.check_public(record.document), "cycle_id": record.cycle_id},
             check.visibility,
         )
 
     async def save(self, session, room, snapshot):
+        await self.knowledge.save(session, room, snapshot)
         module = await self.module(session, room.id)
         if module is None:
             return
@@ -646,6 +663,7 @@ class AgentService:
         return {key: document[key] for key in s.ProfileInput.model_fields}
 
     async def load(self, session, room, snapshot):
+        await self.knowledge.load(session, room, snapshot)
         saved = await session.get(AgentSaveState, snapshot.id)
         current = await self.cycle(session, room.id, active=True)
         require(not current or current.status != "running", "正在执行的回合不能读档")

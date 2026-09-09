@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from pydantic import Field, StrictInt, StringConstraints
 
 from app.domain.character import DomainModel, utc_now
+from app.knowledge.schemas import GroundedClaim
 from app.rooms.schemas import Name, Visibility
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
@@ -131,6 +132,8 @@ class PlannedTool(DomainModel):
 class AgentDecision(DomainModel):
     # This is an action plan, never hidden reasoning or a model-generated dice result.
     tools: list[PlannedTool] = Field(max_length=4)
+    claims: list[GroundedClaim] = Field(default_factory=list, max_length=5)
+    needs_host_ruling: bool = False
 
 
 class SummaryOutput(DomainModel):

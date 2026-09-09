@@ -27,7 +27,9 @@ class AgentModelClient:
         self.settings, self.adapter = settings, adapter
         self.calls = []
 
-    async def generate(self, messages, response_schema=None, tools=None, on_call=None):
+    async def generate(
+        self, messages, response_schema=None, tools=None, on_call=None, on_result=None
+    ):
         started = time.monotonic()
         if self.adapter is None:
             self.adapter = (
@@ -86,13 +88,15 @@ class AgentModelClient:
                 except TimeoutError:
                     raise ModelError("模型请求超时") from None
                 finally:
-                    self.calls.append(
-                        {
-                            "provider": self.settings.model_provider,
-                            "model": self.settings.model_name,
-                            "latency_ms": int((time.monotonic() - call_started) * 1000),
-                        }
-                    )
+                    call = {
+                        "provider": self.settings.model_provider,
+                        "model": self.settings.model_name,
+                        "latency_ms": int((time.monotonic() - call_started) * 1000),
+                        "attempt": attempt + 1,
+                    }
+                    self.calls.append(call)
+                    if on_result:
+                        await on_result(call)
 
     async def close(self):
         if self.adapter:
