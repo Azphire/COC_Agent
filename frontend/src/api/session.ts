@@ -22,7 +22,8 @@ export class ApiError extends Error {
 export async function api<T>(path: string, token: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(`/api${path}`, {
     method, headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(15000),
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(path.endsWith('/structure/build') ? 180000 : 15000),
   })
   if (!response.ok) {
     const data = await response.json().catch(() => ({}))

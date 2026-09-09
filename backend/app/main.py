@@ -11,7 +11,17 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.agents.model import AgentModelClient
 from app.agents.runtime import AgentRuntime
 from app.agents.service import AgentService
-from app.api import agents, characters, health, knowledge, model, preparation, rooms, websocket
+from app.api import (
+    agents,
+    characters,
+    health,
+    knowledge,
+    model,
+    module_ir,
+    preparation,
+    rooms,
+    websocket,
+)
 from app.auth import require_host
 from app.character.repository import VersionConflict
 from app.character.service import CharacterError
@@ -69,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(agents.router)
     application.include_router(knowledge.router)
     application.include_router(preparation.router)
+    application.include_router(module_ir.router)
 
     @application.middleware("http")
     async def host_boundary(request, call_next):

@@ -6,6 +6,7 @@ import { difficultyLabels, nodeLabels, resultLabels } from '../api/agents'
 import KnowledgeBindingPanel from './KnowledgeBindingPanel'
 import HostEntityPanel from './HostEntityPanel'
 import InvestigationBoard from './InvestigationBoard'
+import ModuleNavigationPanel from './ModuleNavigationPanel'
 
 type Props = { room: Room; token: string; acceptRoom: (room: Room) => void }
 
@@ -55,6 +56,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
   }
   const seats = room.members.filter(m => m.active && (m.id === room.host_member_id || m.controller_type === 'agent'))
   return <>
+    {room.is_host && <ModuleNavigationPanel room={room} token={token} acceptRoom={acceptRoom} />}
     {room.is_host && <HostEntityPanel room={room} token={token} acceptRoom={acceptRoom} />}
     {room.is_host && <KnowledgeBindingPanel room={room} token={token} acceptRoom={acceptRoom} />}
     {room.is_host && <section><h2>AI 与模组设置</h2><p><a href="#/agents">创建或编辑 Agent 档案</a></p>

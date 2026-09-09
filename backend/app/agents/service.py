@@ -40,6 +40,13 @@ class AgentService:
 
         self.preparation = PreparationService(self)
         self.entities = RoomEntityService(self)
+        from app.module_ir.context import ModuleContextResolver
+        from app.module_ir.navigation import ModuleNavigationService
+        from app.module_ir.service import ModuleStructureService
+
+        self.structure = ModuleStructureService(self)
+        self.navigation = ModuleNavigationService(self)
+        self.module_context = ModuleContextResolver(self)
 
     async def sanitize(self, session, room, value):
         members = await self.rooms.members(session, room)
@@ -202,6 +209,7 @@ class AgentService:
             return view["cycle"] if kind == "cycle" else view
 
     async def ensure_config(self, session, room):
+        await self.navigation.require_available(session, room.id)
         await self.knowledge.require_available(session, room.id)
         module = await self.module(session, room.id)
         require(module and module.enabled, "请先选择测试模组并启用 Agent")
@@ -672,6 +680,7 @@ class AgentService:
         )
 
     async def save(self, session, room, snapshot):
+        await self.navigation.save(session, room, snapshot)
         await self.knowledge.save(session, room, snapshot)
         await self.entities.save(session, room, snapshot)
         module = await self.module(session, room.id)
@@ -783,3 +792,4 @@ class AgentService:
                     }
                 self.cycle_event(session, room, restored)
         await self.entities.load(session, room, snapshot)
+        await self.navigation.load(session, room, snapshot)

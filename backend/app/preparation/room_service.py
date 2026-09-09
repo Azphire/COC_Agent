@@ -190,6 +190,7 @@ class RoomEntityService:
         for entity in entities:
             if entity.id != scene.id and entity.document["initial_visibility"] == "revealed":
                 await self.reveal(session, room, entity.id, room.host_member_id)
+        await self.agents.navigation.bind(session, room, prep)
         return row_view(binding)
 
     async def entity(self, session, room_id, entity_id):
@@ -203,6 +204,17 @@ class RoomEntityService:
 
     async def check_conditions(self, session, room, entity, cycle_id=None, for_check=False):
         binding = await self.binding(session, room.id)
+        if await self.agents.navigation.state(session, room.id) and not entity.snapshot.get(
+            "approved_review_id"
+        ):
+            _, snapshot, _, local, _, _ = await self.agents.module_context.allowed(session, room)
+            require(
+                any(
+                    b.entity_id == entity.source_entity_id and b.node_id in local
+                    for b in snapshot.entity_bindings
+                ),
+                "实体未绑定当前场景",
+            )
         pre = entity.snapshot["reveal_conditions"]
         require(not pre["scene_id"] or pre["scene_id"] == binding.current_scene, "实体不在当前场景")
         visible = {e["id"] for e in await self.public(session, room.id)}
@@ -257,6 +269,12 @@ class RoomEntityService:
                     dict.fromkeys([*cycle.state.get("approved_entity_ids_used", []), entity_id])
                 ),
             }
+        navigation = await self.agents.navigation.state(session, room.id)
+        if navigation and not navigation.module_structure_missing:
+            snapshot, _ = await self.agents.navigation.snapshot(session, navigation)
+            await self.agents.navigation.refresh(session, room, navigation, snapshot)
+            navigation.updated_event_seq = event.seq
+            await self.agents.navigation.persist(session, navigation)
         return {"entity_id": entity_id, "event_seq": event.seq}
 
     async def observe(self, session, room, entity, event, correction=False):
@@ -345,6 +363,26 @@ class RoomEntityService:
         )
 
     async def transition(self, session, room, run, entity_id, host_override=False):
+        navigation = await self.agents.navigation.state(session, room.id)
+        if navigation:
+            from app.module_ir.schemas import TransitionRequest
+
+            snapshot, _ = await self.agents.navigation.snapshot(session, navigation)
+            node = next(
+                (b.node_id for b in snapshot.entity_bindings if b.entity_id == entity_id), None
+            )
+            require(node, "entity_scene_node_binding_missing", 422)
+            return await self.agents.navigation.transition(
+                session,
+                room,
+                TransitionRequest(
+                    target_scene_node_id=node,
+                    expected_revision=navigation.navigation_revision,
+                    request_id=f"{run.id}:{entity_id}",
+                ),
+                run=run,
+                host=host_override,
+            )
         entity = await self.entity(session, room.id, entity_id)
         require(entity.entity_type == "scene", "目标必须是批准场景", 422)
         binding = await self.binding(session, room.id)
@@ -520,6 +558,27 @@ class RoomEntityService:
         if review.document.get("applied"):
             return review.document.get("result", {})
         require(review.status in {"approved", "edited", "rejected"}, "审阅尚未解决")
+        if review.document.get("navigation_request"):
+            cycle = await session.get(AgentCycle, run.cycle_id)
+            await self.agents.navigation.check_cycle(session, room, cycle)
+            if review.status == "rejected":
+                result = {"status": "rejected", "needs_host_ruling": True}
+                state = await self.agents.navigation.state(session, room.id)
+                state.pending_transition, state.pending_review_id = None, None
+                await self.agents.navigation.persist(session, state)
+            else:
+                result = await self.agents.navigation.transition(
+                    session,
+                    room,
+                    review.document["navigation_request"],
+                    run=run,
+                    host=True,
+                    reviewed=True,
+                )
+                result = {**result, "status": review.status}
+            review.document = {**review.document, "applied": True, "result": result}
+            cycle.state = {**cycle.state, "review_result": result}
+            return result
         if review.status == "rejected":
             result = {"status": "rejected", "needs_host_ruling": True}
         else:
@@ -685,6 +744,8 @@ class RoomEntityService:
                 memory.active = doc.get("public_summary") == row.frozen_public_summary
 
     async def reconcile_scene(self, session, room):
+        if await self.agents.navigation.reconcile(session, room):
+            return
         binding = await self.binding(session, room.id)
         if not binding:
             return

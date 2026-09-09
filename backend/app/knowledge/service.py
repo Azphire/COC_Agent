@@ -268,7 +268,11 @@ class KnowledgeService:
             or context["checks"]
         ):
             kinds.append("rules")
-        if not public and configured.get("module"):
+        if (
+            not public
+            and configured.get("module")
+            and (not context.get("structure_navigation") or context.get("structure_incomplete"))
+        ):
             kinds.append("module")
         collected, records = [], []
         for kind in kinds:
@@ -313,6 +317,17 @@ class KnowledgeService:
             )
             collected.extend(evidence)
             records.append(record)
+            if kind == "module" and context.get("structure_navigation"):
+                record.source_filters = {
+                    **record.source_filters,
+                    "scope": "global",
+                    "reason": "structure_incomplete",
+                }
+                context["module_context_audit"] = {
+                    **context["module_context_audit"],
+                    "context_mode": "global_fallback",
+                    "fallback_reason": "structure_incomplete",
+                }
         # Apply permission first, then source diversity, score and bounded JSON size.
         selected = KnowledgeContextBuilder.select(collected, budget, public)
         selected_ids = {e["evidence_id"] for e in selected}
@@ -334,6 +349,11 @@ class KnowledgeService:
 
     async def validate_claim(self, session, room, run, claim, public_only=False):
         claim = GroundedClaim.model_validate(claim)
+        if claim.node_ids:
+            require(claim.category == "module_fact", "node 只能支持 module_fact", 422)
+            return await self.agents.module_context.validate_node_claim(
+                session, room, run, claim, public_only
+            )
         evidence = await self.evidence_for_run(
             session, run.id, room.id, run.profile_id, public_only
         )

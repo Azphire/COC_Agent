@@ -141,6 +141,15 @@ class SummaryOutput(DomainModel):
 
 
 class AgentCycleState(TypedDict):
+    current_scene_node_id: str
+    selected_node_ids: list[str]
+    selected_block_ids: list[str]
+    structure_snapshot_id: str
+    module_source_hash: str
+    module_fallback_mode: str
+    navigation_revision: int
+    transition_request: dict | None
+    transition_result: dict | None
     cycle_id: str
     room_id: str
     triggering_member_id: str

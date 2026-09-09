@@ -8,7 +8,7 @@ from pathlib import Path
 import pymupdf
 
 
-def extract(path):
+def extract(path, structure=False):
     extension = path.suffix.lower()
     if extension == ".pdf":
         with pymupdf.open(path) as document:
@@ -42,23 +42,10 @@ def extract(path):
     if extension == ".doc":
         if os.name != "nt":
             raise ValueError("word_required")
-        result = subprocess.run(
-            [
-                "powershell.exe",
-                "-NoProfile",
-                "-NonInteractive",
-                "-File",
-                str(Path(__file__).with_name("word_extract.ps1")),
-                "-InputDocument",
-                str(path),
-            ],
-            capture_output=True,
-            timeout=120,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        if result.returncode:
-            raise ValueError("word_extraction_failed")
-        return json.loads(result.stdout.decode("utf-8-sig"))
+        try:
+            return _extract_word(path, structure)
+        except subprocess.TimeoutExpired as error:
+            raise ValueError("word_extraction_timeout") from error
     if extension == ".docx":
         with zipfile.ZipFile(path) as archive:
             info = archive.getinfo("word/document.xml")
@@ -79,3 +66,24 @@ def extract(path):
         except UnicodeDecodeError:
             continue
     raise ValueError("text_encoding_failed")
+
+
+def _extract_word(path, structure):
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(Path(__file__).with_name("word_extract.ps1")),
+            "-InputDocument",
+            str(path),
+            *(["-Structure"] if structure else []),
+        ],
+        capture_output=True,
+        timeout=120,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    if result.returncode:
+        raise ValueError("word_extraction_failed")
+    return json.loads(result.stdout.decode("utf-8-sig"))

@@ -604,6 +604,8 @@ class RoomService:
             sources, destination, event_type = transitions[action]
             require(room.status in sources, "房间状态不允许此转换")
             if action in ("start", "resume"):
+                if self.agent_service:
+                    await self.agent_service.navigation.require_available(session, room.id)
                 players = [m for m in members if m.active and m.role == "player"]
                 require(players, "至少需要一个活动玩家席位")
                 require(
@@ -626,6 +628,8 @@ class RoomService:
                 422,
             )
             room.session_state = body.state.model_dump(mode="json")
+            if self.agent_service:
+                await self.agent_service.navigation.reconcile(session, room)
             # Runtime resources travel only in filtered snapshots, never public event payloads.
             self.append(
                 session, room, "session.updated", actor, {"state": room.session_state}, "host_only"
@@ -635,7 +639,10 @@ class RoomService:
                 room,
                 "scene.updated",
                 actor,
-                {"scene_title": body.state.scene_title, "scene_summary": body.state.scene_summary},
+                {
+                    "scene_title": room.session_state["scene_title"],
+                    "scene_summary": room.session_state["scene_summary"],
+                },
             )
         elif action in ("message", "roll"):
             if body.actor_member_id:

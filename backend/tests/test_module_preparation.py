@@ -93,7 +93,7 @@ def preparation(client):
     source_file = folder / "开场.md"
     source_file.write_text(
         "# 开场\n候车厅里有站台、公告和车票。私密标记紫月机关。\n"
-        "公告提醒旅客保留车票。站台边有一本尚未批准的时刻表。",
+        "公告提醒旅客保留车票。站台边有一本尚未批准的时刻表。\n# 通道\n通道里很安静。",
         encoding="utf-8",
     )
     other = data / "modules/另一模组"
@@ -130,7 +130,13 @@ def approve_opening(client, data):
             json={"initial_scene_entity_id": scene["id"], "required_entity_ids": required},
         )
     )
-    return ok(client.post(f"/api/module-preparations/{prep_id}/approve"))
+    approved = ok(client.post(f"/api/module-preparations/{prep_id}/approve"))
+    from module_ir_helpers import approve_structure
+
+    # This fixture's short source is incomplete. Keep testing the existing evidence
+    # review path under explicit host approval of its global fallback capability.
+    approve_structure(client, prep_id, incomplete=True)
+    return approved
 
 
 def test_generation_bounded_provenance_dedup_and_host_review(client, preparation):
@@ -371,6 +377,11 @@ def test_preparation_relation_validation_and_frozen_binding(client, preparation,
     approve_opening(client, preparation)
     ok(client.post(f"/api/module-relations/{relation['id']}/approve"))
     ok(client.post(f"/api/module-preparations/{prep_id}/approve"))
+    ok(
+        client.post(
+            f"/api/module-preparations/{prep_id}/structure/approve", json={"incomplete": True}
+        )
+    )
     ok(client.patch(lobby["prefix"] + "/module-preparation", json={"preparation_id": prep_id}))
     ok(client.post(f"/api/module-relations/{relation['id']}/reject"))
     assert ok(client.get(f"/api/module-preparations/{prep_id}"))["status"] == "review_ready"

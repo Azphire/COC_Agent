@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.persistence import (  # noqa: F401
     agent_models,
     knowledge_models,
+    module_ir_models,
     preparation_models,  # noqa: F401
     room_models,
 )

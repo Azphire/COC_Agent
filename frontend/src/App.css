@@ -147,3 +147,8 @@ pre {
 .entity-card h4 { margin-top: 0; }
 .entity-card textarea { min-height: 90px; }
 .host-review { border-left: 4px solid #a97729; }
+.structure-workspace { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(300px, 1.4fr); gap: 1rem; }
+.structure-workspace nav { max-height: 75vh; overflow: auto; }
+.structure-children { padding-left: 1rem; border-left: 1px solid #46505c; }
+.structure-workspace summary { overflow-wrap: anywhere; }
+@media (max-width: 800px) { .structure-workspace { grid-template-columns: 1fr; } }

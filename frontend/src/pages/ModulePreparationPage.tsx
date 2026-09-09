@@ -3,6 +3,7 @@ import { api, hostToken } from '../api/session'
 import type { KnowledgeSource } from '../api/knowledge'
 import { entityLabels } from '../api/preparation'
 import type { Entity, EntityType, Preparation, Relation } from '../api/preparation'
+import ModuleStructurePanel from '../components/ModuleStructurePanel'
 
 export default function ModulePreparationPage() {
   const token = hostToken()
@@ -73,6 +74,7 @@ export default function ModulePreparationPage() {
     </form>
     <section><label>准备任务<select id="preparation-select" value={selected} onChange={e => setSelected(e.target.value)}><option value="">选择任务</option>{preparations.map(p => <option key={p.id} value={p.id}>{p.display_title} · {p.status} · v{p.version}</option>)}</select></label></section>
     {current && <>
+      <ModuleStructurePanel key={current.id} preparationId={current.id} token={token} entities={entities} />
       <section data-testid="preparation-status"><h3>{current.display_title}</h3><p>{current.source_hash.slice(0, 12)} · {current.source?.file_types?.join(' / ') || current.source?.mime_type} · {current.source?.page_count} 页 / {current.source?.chunk_count} 块</p><p>范围：{current.scope.page_start || '起始'}–{current.scope.page_end || '末尾'} {current.scope.section || ''} · 状态：{current.status}</p><p>生成进度 {current.completed_batches}/{current.total_batches} 批 · 模型调用 {current.model_call_count} 次 · 生成 {current.generated_entity_count} · 批准 {current.approved_entity_count} · 拒绝 {current.rejected_entity_count}</p>
         {current.safe_error && <p role="alert">{current.safe_error}</p>}{current.status === 'stale' && <p>来源已变化。已有房间保持原快照；请按当前来源创建新的准备任务。</p>}
         <div className="action-row"><button disabled={busy || ['extracting', 'approved', 'stale'].includes(current.status)} onClick={() => void command(`/module-preparations/${current.id}/generate`)}>生成实体草稿</button><button disabled={busy || !current.initial_scene_entity_id || current.status === 'extracting' || current.status === 'stale'} onClick={() => void command(`/module-preparations/${current.id}/approve`)}>批准准备版本</button><button onClick={() => void refresh()}>刷新状态</button></div>

@@ -271,6 +271,44 @@ def test_scene_transition_uses_approved_relation_or_interrupt(
                         "status": "approved",
                     }
                 ]
+            # The synthetic runtime entity must also exist in the frozen structure.
+            # Seed a new approved snapshot, as a host would before starting this room.
+            from app.module_ir.schemas import EntityNodeBinding, SceneTransition
+            from app.persistence.module_ir_models import ApprovedStructure
+
+            nav = await svc.navigation.state(session, binding.room_id)
+            snapshot, _ = await svc.navigation.snapshot(session, nav)
+            target = next(n for n in snapshot.nodes if n.title == "通道")
+            target.approved_type = "scene"
+            target.public_title = fields["title"]
+            target.public_summary = fields["public_summary"]
+            snapshot.entity_bindings.append(
+                EntityNodeBinding(
+                    binding_id=str(uuid4()),
+                    entity_id=entity_id,
+                    node_id=target.node_id,
+                    source_hash=snapshot.source_hash,
+                )
+            )
+            if approved_relation:
+                snapshot.transitions.append(
+                    SceneTransition(
+                        transition_id=str(uuid4()),
+                        source_scene_node_id=nav.current_scene_node_id,
+                        target_scene_node_id=target.node_id,
+                        approved=True,
+                    )
+                )
+            snapshot.snapshot_id = str(uuid4())
+            session.add(
+                ApprovedStructure(
+                    id=snapshot.snapshot_id,
+                    preparation_id=snapshot.preparation_id,
+                    document=snapshot.model_dump(mode="json"),
+                )
+            )
+            nav.structure_snapshot_id = snapshot.snapshot_id
+            await svc.navigation.persist(session, nav)
 
     client.portal.call(seed_scene)
 

@@ -282,6 +282,32 @@ async def build_context(
     )
     if budget < 2500:
         budget = 2500
+    navigation = await service.navigation.state(session, room.id)
+    if navigation:
+        base_size = len(
+            json.dumps(
+                {k: v for k, v in context.items() if k not in {"module", "public_entities"}},
+                ensure_ascii=False,
+            )
+        )
+        resolved = await service.module_context.resolve(
+            session,
+            room,
+            "keeper" if keeper else "investigator",
+            recent_action=(trigger or {}).get("payload", {}).get("text", ""),
+            budget=max(700, budget - base_size - 1300),
+            cycle=cycle if keeper else None,
+        )
+        context.update(resolved)
+        if keeper:
+            service.rooms.append(
+                session,
+                room,
+                "module.context_selected",
+                binding.member_id,
+                {"cycle_id": cycle.id, **resolved["module_context_audit"]},
+                "host_only",
+            )
     if run_id:
         configured = await service.knowledge.binding(session, room.id)
         if configured and configured["enabled"]:
@@ -300,6 +326,11 @@ async def build_context(
             context["knowledge_enabled"] = True
             context["RULE_EVIDENCE"] = [e for e in evidence if e["source_kind"] != "module"]
             context["MODULE_EVIDENCE"] = [e for e in evidence if e["source_kind"] == "module"]
+            if keeper and context.get("module_context_audit"):
+                cycle.state = {
+                    **cycle.state,
+                    "module_fallback_mode": context["module_context_audit"]["context_mode"],
+                }
             if narrator:
                 from app.knowledge.service import KnowledgeContextBuilder
 

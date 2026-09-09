@@ -11,6 +11,13 @@ from app.agents import schemas as s
 from app.agents.modules import Module, content_hash, public_module
 from app.knowledge.schemas import ExcerptArgs, SearchArgs
 from app.memory.service import write_memory
+from app.module_ir.schemas import (
+    LookupArgs,
+    ModuleSearchArgs,
+    NodeArgs,
+    SceneToolArgs,
+    TransitionRequest,
+)
 from app.persistence.agent_models import (
     AgentCycle,
     AgentMemory,
@@ -36,13 +43,23 @@ KEEPER, INVESTIGATOR, BOTH = (
     frozenset({"keeper", "investigator"}),
 )
 TOOLS = {
+    "get_current_scene": ToolDefinition(s.Empty, KEEPER, "按权威导航读取当前场景"),
+    "list_scene_contents": ToolDefinition(s.Empty, KEEPER, "当前场景内的节点与区块索引"),
+    "open_module_node": ToolDefinition(NodeArgs, KEEPER, "读取当前、祖先或显式关联节点的受限内容"),
+    "lookup_module_entity": ToolDefinition(
+        LookupArgs, KEEPER, "按实体 ID 或准确标题查找，返回同名候选"
+    ),
+    "list_scene_transitions": ToolDefinition(s.Empty, KEEPER, "列出当前场景的批准转换及条件"),
+    "get_public_scene": ToolDefinition(s.Empty, BOTH, "读取当前公开场景"),
+    "list_public_entities": ToolDefinition(s.Empty, BOTH, "读取公开调查板"),
+    "lookup_public_entity": ToolDefinition(LookupArgs, BOTH, "仅查询已公开实体"),
     "inspect_approved_entities": ToolDefinition(s.Empty, KEEPER, "查看当前房间批准实体与公开条件"),
     "inspect_public_entities": ToolDefinition(s.Empty, BOTH, "读取与真人调查板相同的公开实体"),
     "reveal_entity": ToolDefinition(
         EntityArgs, KEEPER, "按批准条件揭示当前房间实体，不接受自行编写的文本"
     ),
     "transition_scene": ToolDefinition(
-        s.SceneArgs, KEEPER, "进入批准场景；缺少 leads_to 时请求主机审阅"
+        SceneToolArgs, KEEPER, "按导航 revision 转场；缺少批准转换或条件时等待主机"
     ),
     "propose_module_fact": ToolDefinition(
         ProposalArgs, KEEPER, "用当前 run 模组证据提出未批准事实，暂停等待主机"
@@ -52,7 +69,7 @@ TOOLS = {
     ),
     "search_rules": ToolDefinition(SearchArgs, BOTH, "检索房间绑定版本的公开规则；返回可引用证据"),
     "search_module": ToolDefinition(
-        SearchArgs, KEEPER, "仅检索当前绑定模组及 hash；资料保持 keeper_only"
+        ModuleSearchArgs, KEEPER, "默认仅搜索当前场景；linked_nodes 必须显式关联；global 需主机授权"
     ),
     "get_evidence_excerpt": ToolDefinition(
         ExcerptArgs, BOTH, "读取当前 run 已授权获得的证据短摘录"
@@ -81,14 +98,18 @@ TOOLS = {
 }
 
 
-def definitions(role):
+def definitions(role, *, structure_navigation=False):
     return [
         {
             "type": "function",
             "function": {
                 "name": name,
                 "description": spec.description,
-                "parameters": spec.arguments.model_json_schema(),
+                "parameters": (
+                    TransitionRequest
+                    if structure_navigation and name == "transition_scene"
+                    else spec.arguments
+                ).model_json_schema(),
             },
         }
         for name, spec in TOOLS.items()
@@ -188,6 +209,11 @@ class AgentTools:
                     "error": error.message,
                     "code": "tool_rejected",
                 }
+            if not result["ok"]:
+                # A savepoint rollback expires objects changed during dispatch, including
+                # the navigation revision audit. Refresh explicitly before async ORM reads.
+                for record in (room, run, cycle, binding, profile):
+                    await session.refresh(record)
             result = await self.service.sanitize(session, room, result)
             session.add(
                 ToolReceipt(
@@ -215,6 +241,44 @@ class AgentTools:
 
     async def dispatch(self, session, room, run, binding, profile, name, args):
         service, rooms = self.service, self.service.rooms
+        navigation = await service.navigation.state(session, room.id)
+        if navigation:
+            cycle = await session.get(AgentCycle, run.cycle_id)
+            await service.navigation.check_cycle(session, room, cycle)
+        if name == "get_public_scene":
+            return await service.navigation.public_scene(session, room)
+        if name in {"list_public_entities", "inspect_public_entities"}:
+            return await service.entities.public(session, room.id)
+        if name in {"lookup_module_entity", "lookup_public_entity"}:
+            return await service.module_context.lookup(
+                session, room, args.query, public=name == "lookup_public_entity"
+            )
+        if name == "open_module_node":
+            return await service.module_context.open_node(session, room, run, args)
+        if name in {"get_current_scene", "list_scene_contents", "list_scene_transitions"}:
+            require(navigation, "module_structure_missing", 422)
+            resolved = await service.module_context.resolve(session, room, "keeper", budget=2000)
+            if name == "get_current_scene":
+                return resolved["module"]["current_scene"]
+            if name == "list_scene_transitions":
+                return resolved["module"]["outgoing_transitions"]
+            _, _, ir, local, _, _ = await service.module_context.allowed(session, room)
+            return {
+                "nodes": local,
+                "blocks": [
+                    {"block_id": b.block_id, "node_id": b.node_id, "type": b.block_type}
+                    for b in ir.blocks
+                    if b.node_id in local
+                ],
+            }
+        if name == "search_module" and navigation:
+            return await service.module_context.search(session, room, run, args)
+        if name == "transition_scene" and navigation:
+            if args.scene_id:
+                return await service.entities.transition(session, room, run, args.scene_id)
+            return await service.navigation.transition(
+                session, room, args.model_dump(exclude={"scene_id"}), run=run
+            )
         if name in {"search_rules", "search_module"}:
             evidence, _ = await service.knowledge.search(
                 session,
@@ -225,8 +289,8 @@ class AgentTools:
                 query=args.query,
                 kind="rules" if name == "search_rules" else "module",
                 top_k=args.top_k,
-                scene_id=args.scene_id,
-                entity_id=args.entity_id,
+                scene_id=getattr(args, "scene_id", None),
+                entity_id=getattr(args, "entity_id", None),
             )
             return {"evidence": evidence}
         if name == "get_evidence_excerpt":
@@ -239,6 +303,10 @@ class AgentTools:
         if name == "inspect_public_entities":
             return await service.entities.public(session, room.id)
         if name == "inspect_approved_entities":
+            if navigation:
+                return (await service.module_context.resolve(session, room, "keeper", budget=3000))[
+                    "module"
+                ]["approved_entities"]
             return await service.entities.host(session, room.id)
         if name in {"propose_module_fact", "request_host_review"}:
             return await service.entities.propose(session, room, run, args)

@@ -261,6 +261,16 @@ SQLite 默认为 `data/game.db`，启动时用 `metadata.create_all` 增量创�
 
 来源 hash 改变会使旧准备任务变为 `stale`；已有房间保留冻结版本，新房间须使用当前来源的新准备任务。当前只处理文本信息，不含图片、地图或 OCR。《常暗之厢》开场可选择 Word 物理页 2–3，并按同样步骤人工核对证据；实际验收结果见[第五批报告](docs/batch-5-report.md)。完整生命周期、API、存档和权限说明见[模组准备文档](docs/module-preparation.md)。
 
+## 文档结构与场景导航（第六批）
+
+新准备房间在绑定前，需要在「模组准备 → 文档结构」构建 ModuleIR：展开目录、核对低置信度标题与来源位置，选择节点校正类型和父节点，填写场景公开标题与摘要，再标记 initial scene。将第五批已批准的 NPC、地点、线索和物品绑定到节点，配置并批准场景转换，最后批准结构快照。原 DOC 和正文顺序不变。
+
+房间保存 current scene、已访问场景和导航 revision。KP 按当前节点及必要子节点读取；调查员和玩家只接收公开场景、调查板与公开事件。普通回合不搜索整个模组，长场景在当前子树内选取受限片段。主机跨章节搜索或主机批准的 incomplete 结构允许 FTS5 补充；规则书继续走原 RAG。
+
+主机游戏界面的「当前场景导航」显示路径、前一场景、NPC、转换条件、审阅状态和实际 cycle 节点审计。无合法转换时沿用主机审阅；主机也可批准一次性转场。存读档固定 snapshot、source hash 和位置；出现 `module_structure_missing` 时保留调查板和历史，暂停新回合。恢复匹配知识库或在原 hash 未变时重建原准备任务，再调用 `POST /api/rooms/{id}/module-navigation/reload` 并恢复房间。
+
+《常暗之厢》可复用本地 Word 只读提取，构建完整基础目录后仅校正开场与一次邻接转换，绑定第五批已批准开场实体。没有已批准 NPC 时不要自动批准未来人物。Fake 三浏览器验收命令为 `backend/.venv/Scripts/python.exe backend/scripts/check_module_navigation.py`；真实验收加 `--real --config .cache/batch-6/real-config.json`，配置参考[ModuleIR 文档](docs/module-ir.md)，结果见[第六批报告](docs/batch-6-report.md)。脚本只在 `.cache` 的独立数据库运行并清理临时服务，真实模型固定使用已有 `qwen3:8b`。
+
 ## 验证
 
 ```powershell

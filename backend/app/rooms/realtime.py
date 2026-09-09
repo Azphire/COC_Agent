@@ -51,7 +51,7 @@ class RoomHub:
             for connection in list(self.connections.get(room_id, set())):
                 member = await session.get(RoomMember, connection.identity.member_id)
                 if member is None or not member.active:
-                    self.connections[room_id].discard(connection)
+                    self.connections.get(room_id, set()).discard(connection)
                     while not connection.queue.empty():
                         connection.queue.get_nowait()
                     connection.put({"close": 4401})
@@ -148,13 +148,15 @@ class RoomHub:
             except RuntimeError:
                 pass
         finally:
+            # Clear presence before any cancellation point. The ASGI task can itself
+            # be cancelled while awaiting writer cleanup or the room command lock.
+            # These in-memory mutations contain no await and run on the hub's loop.
+            if connection:
+                self.connections.get(room_id, set()).discard(connection)
+                self.presence_changed(room_id)
+                if not self.connections.get(room_id):
+                    self.connections.pop(room_id, None)
             for task in tasks:
                 task.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
-            if connection:
-                async with self.service.lock(room_id):
-                    self.connections.get(room_id, set()).discard(connection)
-                    self.presence_changed(room_id)
-                    if not self.connections.get(room_id):
-                        self.connections.pop(room_id, None)

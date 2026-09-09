@@ -87,6 +87,10 @@ class GroundedClaim(DomainModel):
     statement: str = Field(min_length=1, max_length=700)
     evidence_ids: list[str] = Field(default_factory=list, max_length=6)
     entity_ids: list[str] = Field(default_factory=list, max_length=6)
+    node_ids: list[str] = Field(default_factory=list, max_length=6)
+    basis_type: (
+        Literal["module_evidence", "approved_entity", "module_node", "host_authored"] | None
+    ) = None
     visibility: Literal["public", "keeper_only"] = "public"
 
     @field_validator("evidence_ids", "entity_ids")
