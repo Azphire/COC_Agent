@@ -8,6 +8,7 @@ import json
 
 from app.agents.action_policy import explicit_movement
 from app.agents.model import FakeModelAdapter
+from app.agents.schemas import CheckRequest
 
 
 class ScenarioAdapter(FakeModelAdapter):
@@ -84,7 +85,14 @@ class ScenarioAdapter(FakeModelAdapter):
                 "expected_navigation_revision": ids["expected_navigation_revision"],
                 "parsed_intent": intent,
                 "proposed_tool_calls": tools,
-                "proposed_check": None,
+                "proposed_check": next(
+                    (
+                        proposal_for(t["arguments"], context)
+                        for t in tools
+                        if t["name"] == "request_skill_check"
+                    ),
+                    None,
+                ),
                 "proposed_transition_id": transition["transition_id"] if transition else None,
             }
         elif schema.__name__ == "KeeperNarration" and (
@@ -116,3 +124,19 @@ class ScenarioAdapter(FakeModelAdapter):
                     "speech_text" if speech["name"] == "speak" else "action_text"
                 ] = speech["arguments"]["text"]
         return response
+
+
+def proposal_for(args, context):
+    """Explicit risk fixture for historical transport/interrupt tests."""
+    return {
+        **{k: v for k, v in args.items() if k in CheckRequest.model_fields},
+        "necessity": "required",
+        "uncertainty": "风险下能否完成动作",
+        "success_effect": "完成本次动作",
+        "failure_consequence": "动作受阻，未能完成",
+        "target_entity_id": args.get("clue_id")
+        or context["action_identifiers"]["current_scene_id"],
+        "basis_entity_id": args.get("clue_id"),
+        "rule_topic_id": "coc7.skill_check",
+        "risk_quote": context["triggering_action"]["payload"]["text"],
+    }

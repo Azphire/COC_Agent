@@ -117,7 +117,18 @@ class AgentService:
 
     @staticmethod
     def check_public(document):
-        return {key: value for key, value in document.items() if key != "clue_id"}
+        from app.rules.display import check_display
+
+        display = check_display(document)
+        return {
+            **{
+                key: value
+                for key, value in document.items()
+                if key not in {"clue_id", "policy_fingerprint", "policy_target_id"}
+            },
+            **display,
+            "name": display["display_name"],
+        }
 
     async def view(self, session, room, identity):
         module = await self.module(session, room.id)
@@ -650,6 +661,24 @@ class AgentService:
 
     async def request_check(self, session, room, run, args):
         cycle = await session.get(AgentCycle, run.cycle_id)
+        from app.agents.adjudication_schemas import AdjudicationRecord
+        from app.agents.check_policy import CheckPolicyEvaluator
+        from app.persistence.adjudication_models import ActionPlanRecord
+        from app.rules.display import resolve_check_name
+
+        action_record = await session.get(ActionPlanRecord, cycle.id)
+        require(action_record is not None, "检定缺少服务端行动计划")
+        doc = AdjudicationRecord.model_validate(action_record.document)
+        facts = await self.adjudication.facts(session, room, cycle, run)
+        from app.agents.check_policy import CheckProposal
+
+        proposal = doc.plan.proposed_check or CheckProposal(**args.model_dump())
+        require(
+            all(getattr(proposal, k) == getattr(args, k) for k in s.CheckRequest.model_fields),
+            "检定参数与已裁决提案不一致",
+        )
+        policy = CheckPolicyEvaluator().evaluate(proposal, doc.plan.parsed_intent, facts)
+        require(policy.allowed, policy.reason)
         require(
             run.graph_node in {"keeper_decide", "keeper_decide_repair", "plan_keeper_action"},
             "每轮仅允许 KP 首次决策请求一次检定",
@@ -714,6 +743,12 @@ class AgentService:
             )
         check = s.PendingCheck(
             **args.model_dump(),
+            display_name=resolve_check_name(
+                args.name, args.kind, slot.character_snapshot["ruleset_id"]
+            )["display_name"],
+            ruleset_id=slot.character_snapshot["ruleset_id"],
+            policy_fingerprint=policy.state_fingerprint,
+            policy_target_id=policy.target_entity_id,
             room_id=room.id,
             slot_id=slot.id,
             value=value,

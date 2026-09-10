@@ -7,7 +7,7 @@ export type AgentProfileInput = {
 }
 export type AgentProfile = AgentProfileInput & { id: string; created_at: string; updated_at: string }
 export type Check = {
-  id: string; target_member_id: string; name: string; kind: string; value: number;
+  id: string; target_member_id: string; name: string; display_name?: string; display_text?: string; kind: string; value: number;
   difficulty: 'regular' | 'hard' | 'extreme'; bonus_dice: number; penalty_dice: number;
   reason: string; visibility: string; status: 'pending' | 'resolved' | 'cancelled';
   dice: { units: number; tens: number[]; candidates: number[]; selected: number } | null;

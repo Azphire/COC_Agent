@@ -14,6 +14,13 @@ from app.persistence.adjudication_models import SummaryRecoveryRecord
 from app.persistence.agent_models import AgentCycle, AgentMemory, AgentRun, ProfileRecord
 from app.rooms.service import Identity, require
 
+SUMMARY_INSTRUCTION = (
+    "只依据这批列出的可见事件和旧摘要更新简短摘要，区分事实与推测；"
+    "不得添加新的实体、证据或事件 ID，不推断事件列表之后的安排。"
+    "角色发布和角色分配是不同事件；只有明确的分配事件才能说已分配。"
+    "不确定的安排直接省略。返回 content，不输出推理。"
+)
+
 
 class SummaryRecoveryService:
     def __init__(self, agents):
@@ -94,6 +101,19 @@ class SummaryRecoveryService:
                     .limit(1)
                 )
                 cutoff = old.coverage_end if old else 0
+                unsummarized = [e for e in events if e["seq"] > cutoff]
+                if (
+                    not manual
+                    and not recovery.stale
+                    and (
+                        len(unsummarized)
+                        < self.agents.settings.agent_event_window
+                        + self.agents.settings.summary_event_threshold
+                        and len(json.dumps(unsummarized, ensure_ascii=False))
+                        < self.agents.settings.summary_context_threshold
+                    )
+                ):
+                    return None
                 eligible = [
                     e
                     for e in (
@@ -195,10 +215,7 @@ class SummaryRecoveryService:
                     [
                         {
                             "role": "system",
-                            "content": (
-                                "只依据可见事件和旧摘要更新简短摘要，区分事实与推测；"
-                                "不得添加新的实体、证据或事件 ID。返回 content，不输出推理。"
-                            ),
+                            "content": SUMMARY_INSTRUCTION,
                         },
                         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
                     ],

@@ -219,6 +219,27 @@ class RoomEntityService:
                 "实体未绑定当前场景",
             )
         pre = entity.snapshot["reveal_conditions"]
+        access = pre.get("access_policy")
+        if access == "host_review":
+            approved = await session.scalar(
+                select(HostReviewRequest).where(
+                    HostReviewRequest.room_id == room.id,
+                    HostReviewRequest.cycle_id == cycle_id,
+                    HostReviewRequest.status.in_(["approved", "edited"]),
+                )
+            )
+            require(
+                approved and approved.document.get("entity_id") == entity.source_entity_id,
+                "实体访问需要主机审阅",
+            )
+        require(
+            access != "requires_check" or pre.get("successful_check"),
+            "实体要求检定但尚未配置检定，请主机处理",
+        )
+        require(
+            access != "requires_condition" or pre.get("required_entity_ids") or pre.get("scene_id"),
+            "实体访问条件尚未配置，请主机处理",
+        )
         require(not pre["scene_id"] or pre["scene_id"] == binding.current_scene, "实体不在当前场景")
         visible = {e["id"] for e in await self.public(session, room.id)}
         require(set(pre["required_entity_ids"]) <= visible, "实体前置条件尚未满足")

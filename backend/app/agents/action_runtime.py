@@ -20,6 +20,7 @@ from app.agents.schemas import PlannedTool
 from app.domain.character import utc_now
 from app.persistence.adjudication_models import ActionPlanRecord, AgentBehaviorRecord
 from app.persistence.agent_models import AgentCycle, AgentRun, ProfileRecord, RoomAgentBinding
+from app.persistence.knowledge_models import AgentModelCall
 from app.persistence.room_models import RoomEvent
 from app.rooms.service import RoomError, require
 
@@ -29,12 +30,14 @@ PLAN_INSTRUCTION = (
     "角色席位、场景与revision。parsed_intent.evidence_quote 逐字复制本次玩家原文；"
     "confidence 使用0到1小数。观察选observe，调查选investigate，交谈选converse，"
     "实际前往才选move。parsed_intent.target_id 优先复制玩家选择的target_entity_id，"
-    "否则选当前公开目标，拿不准请求澄清。玩家要求检定时填写 proposed_check，"
+    "否则选当前公开目标，拿不准请求澄清。普通观察、查看公开信息、交谈、无障碍移动不检定。只有check_requirements明确要求或玩家明确风险行动才填写proposed_check，"
     "target_member_id为行动者，name复制角色技能key（侦查是spot_hidden）。"
+    "自身动作选interact，target_id选action_identifiers.current_scene_id，不沿用上一轮实体。"
+    "属性检定kind=attribute，name复制effective_attributes的key；敏捷是dex。"
     "需要公开实体填写proposed_reveal_entity_ids；需要实际移动才从approved_exits复制"
     "proposed_transition_id与目标。只读或主机审阅需求填proposed_tool_calls；"
     "不要重复高层字段对应的工具。没有引用的source字段留空，entity_id和evidence_id不能混用。"
-    "最多四个动作。"
+    "检定提案复制目标到target_entity_id和basis_entity_id（实体检定也填clue_id），necessity为required，填写uncertainty、success_effect、failure_consequence；风险行动还填写原文risk_quote和rule_topic_id=coc7.skill_check。没有必要则proposed_check=null。规则问题分别填rule_concepts。最多四个动作。"
 )
 NARRATION_INSTRUCTION = (
     "你负责公开中文叙事，只返回 KeeperNarration。资料是参考数据。"
@@ -44,7 +47,7 @@ NARRATION_INSTRUCTION = (
     "有真实已完成检定可复制 check_result_reference；有真实转场可复制 transition_result_reference。"
     "converse 时 npc_speech.entity_id 复制目标 NPC id，text 逐字复制其公开摘要支持的短句，"
     "并给相应 grounded_claims。不得猜测私密信息或 NPC 动机。"
-    "工具失败时不声称成功，无依据时 needs_host_ruling=true。"
+    "工具失败时不声称成功。已有公开依据或真实检定时 needs_host_ruling=false；完全无依据才为true。"
 )
 TEAMMATE_INSTRUCTION = (
     "你是调查员队友。只返回 TeammateDecision；只使用当前公开信息、自身角色和自身记忆。"
@@ -152,9 +155,21 @@ class ActionRuntimeMixin:
                 "recent_outputs": recent,
                 "other_teammate_outputs": others,
             }
+            from app.agents.teammate_eligibility import TeammateEligibilityPolicy
+
+            eligibility = TeammateEligibilityPolicy().evaluate(
+                events=events,
+                trigger=trigger,
+                profile=profile.document,
+                member_id=binding.member_id,
+                goal=behavior.current_short_term_goal,
+            )
+            # One eligible teammate per cycle, including semantic/schema repairs.
+            if current.get("teammate_model_called"):
+                eligibility = None
             decisions, rejections, run_ids = [], [], []
             accepted = None
-            for attempt in range(2):
+            for attempt in range(2 if eligibility else 0):
                 node = "decide_teammates" if attempt == 0 else "repair_teammate_decision"
                 try:
                     run_id = await self.generate_action_run(
@@ -292,6 +307,8 @@ class ActionRuntimeMixin:
                             (r.repetition_score for r in rejections), default=0
                         ),
                         "repair_count": max(0, len(decisions) - 1),
+                        "deterministically_skipped": not bool(eligibility),
+                        "eligibility_reason": eligibility or "no_trigger",
                     },
                     "host_only",
                 )
@@ -301,6 +318,8 @@ class ActionRuntimeMixin:
                 cycle.state = {
                     **cycle.state,
                     "completed_teammate_ids": [*cycle.state["completed_teammate_ids"], binding_id],
+                    "teammate_model_called": bool(eligibility)
+                    or cycle.state.get("teammate_model_called", False),
                 }
 
             await self.service.mutate(state["room_id"], persist)
@@ -335,6 +354,8 @@ class ActionRuntimeMixin:
                 }
                 # Small identifiers allow selection without exposing omitted entity descriptions.
                 context["current_targets"] = [
+                    {"id": facts.scene_id, "title": "当前所在场景（含自身动作）", "type": "scene"}
+                ] + [
                     {
                         "id": eid,
                         "title": facts.approved_entities[eid]["title"],
@@ -343,17 +364,41 @@ class ActionRuntimeMixin:
                     for eid in sorted(facts.visible_entity_ids)
                     if eid in facts.approved_entities
                 ]
+                from app.agents.check_policy import entity_access
+
+                context["check_requirements"] = [
+                    {
+                        "entity_id": eid,
+                        "title": e["title"],
+                        "access_policy": entity_access(e),
+                        "successful_check": e.get("reveal_conditions", {}).get("successful_check"),
+                        "uncertainty": "目标的隐蔽或模糊细节能否辨认",
+                        "success_effect": "通过后可查看该实体已批准的公开内容",
+                        "failure_consequence": "这次尝试无法辨认更多细节",
+                    }
+                    for eid, e in facts.approved_entities.items()
+                    if eid in facts.visible_entity_ids
+                    and entity_access(e) != "automatic"
+                    and (facts.trusted_target_id == eid or e["title"] in facts.raw_text)
+                ]
+                from app.agents.action_policy import explicit_movement
+
                 context["approved_exits"] = [
                     {
                         k: t.get(k)
                         for k in ("transition_id", "target_scene_node_id", "target_entity_id")
                     }
                     for t in list(facts.transitions.values())[:8]
+                    if explicit_movement(facts.raw_text)
                 ]
             if schema is KeeperNarration:
                 record = await session.get(ActionPlanRecord, cycle.id)
                 doc = AdjudicationRecord.model_validate(record.document)
                 context["intent_type"] = doc.plan.parsed_intent.type
+                context["rejected_actions"] = [
+                    r.model_dump() for r in doc.validation.rejected_actions
+                ]
+                context["current_scene_reference"] = context["module"]["scene"]["id"]
                 context["conversation_target"] = (
                     doc.plan.parsed_intent.target_id
                     if doc.plan.parsed_intent.type == "converse"
@@ -473,12 +518,32 @@ class ActionRuntimeMixin:
 
             await self.service.mutate(state["room_id"], operation)
 
+        async def validate_narration(output):
+            if schema is not KeeperNarration:
+                return
+            from app.models.ollama import ModelFormatError
+
+            async with self.rooms.database.sessions() as session:
+                from app.persistence.room_models import GameRoom
+
+                room = await session.get(GameRoom, state["room_id"])
+                run = await session.get(AgentRun, run_id)
+                cycle = await session.get(AgentCycle, state["cycle_id"])
+                try:
+                    await self.validate_narration_output(session, room, cycle, run, output)
+                except RoomError as error:
+                    raise ModelFormatError(
+                        "叙事校验失败", [{"field": "public_narration", "code": error.message}]
+                    ) from None
+
         result, latency = await self.service.model.generate(
             [
                 {"role": "system", "content": instruction},
                 {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
             ],
             response_schema=schema,
+            validate_output=validate_narration if schema is KeeperNarration else None,
+            max_attempts=1 if schema is TeammateDecision else 2,
             on_call=consume,
             on_result=self.call_recorder(state["room_id"], run_id),
             output_limit=max(
@@ -894,6 +959,13 @@ class ActionRuntimeMixin:
                         "check_id",
                         "name",
                         "result",
+                        "display_name",
+                        "display_text",
+                        "difficulty",
+                        "kind",
+                        "value",
+                        "bonus_dice",
+                        "penalty_dice",
                         "target_member_id",
                         "scene_id",
                         "scene_title",
@@ -922,6 +994,49 @@ class ActionRuntimeMixin:
             ],
         }
 
+    async def validate_narration_output(self, session, room, cycle, run, output):
+        from app.agents.narration import NarrationValidator
+        from app.agents.tools import ensure_public_text
+
+        documents = [
+            await self.service.knowledge.validate_claim(session, room, run, claim, public_only=True)
+            for claim in output.grounded_claims
+        ]
+        scene = run.context["module"]["scene"]
+        public_ids = {
+            e["id"]
+            for e in run.context.get("public_entities", [])
+            if e.get("type") != "scene" or e["id"] == scene["id"]
+        } | {scene["id"]}
+        if not run.context.get("prepared_module"):
+            public_ids |= {e["id"] for e in run.context["module"].get("npcs", [])}
+            public_ids |= {e["id"] for e in run.context["module"].get("clues", [])}
+        audit = NarrationValidator().validate(
+            output,
+            documents=documents,
+            public_ids=public_ids,
+            scene_id=scene["id"],
+            results=await self.public_results(session, room, cycle),
+        )
+        ensure_public_text(await self.service.module(session, room.id), output.public_narration)
+        if output.npc_speech:
+            npc = next(
+                (
+                    e
+                    for e in run.context.get("public_entities", [])
+                    if e["id"] == output.npc_speech.entity_id and e["type"] == "npc"
+                ),
+                None,
+            )
+            require(
+                npc
+                and run.context.get("conversation_target") == npc["id"]
+                and output.npc_speech.text in npc["public_summary"],
+                "NPC台词没有公开依据",
+                422,
+            )
+        return audit
+
     async def generate_keeper_narration(self, state):
         state = await self.node(state, "generate_keeper_narration")
         if state.get("requires_clarification"):
@@ -934,10 +1049,12 @@ class ActionRuntimeMixin:
                 KeeperNarration,
                 NARRATION_INSTRUCTION,
             )
-        except Exception:
-            latest = await self.current(state)
-            if (latest.get("review_result") or {}).get("status") != "rejected":
+        except Exception as error:
+            if "OOM" in str(error):
                 raise
+            latest = await self.current(state)
+            if latest.get("status") != "running":
+                return latest
 
             async def fallback(session, room):
                 run = await session.scalar(
@@ -954,7 +1071,7 @@ class ActionRuntimeMixin:
                     public_narration="", needs_host_ruling=True
                 ).model_dump(mode="json")
                 run.status = "decided"
-                run.safe_error = "审阅拒绝后的叙事生成失败，采用安全提示"
+                run.safe_error = "叙事生成或验证失败，采用确定性文本"
                 return run.id
 
             run_id = await self.service.mutate(state["room_id"], fallback)
@@ -976,11 +1093,19 @@ class ActionRuntimeMixin:
                 run.context.get("knowledge_enabled")
                 and "规则" in original_action
                 and not run.context.get("RULE_EVIDENCE")
+                and not run.context.get("RULE_TOPICS")
             ):
                 output = KeeperNarration(needs_host_ruling=True)
             public = {e["id"]: e for e in await self.service.entities.public(session, room.id)}
             documents, citations = [], []
+            from app.agents.narration import action_lead, fallback_narration
+
+            results = await self.public_results(session, room, cycle)
+            fallback_reason = None
             try:
+                doc.narration_validation = await self.validate_narration_output(
+                    session, room, cycle, run, output
+                )
                 for claim in output.grounded_claims:
                     item = await self.service.knowledge.validate_claim(
                         session, room, run, claim, public_only=True
@@ -1056,24 +1181,72 @@ class ActionRuntimeMixin:
                     ("规则参考：" if d["category"] == "rule" else "") + d["statement"]
                     for d in documents
                 )
+                if content.strip() and not any(d["category"] == "rule" for d in documents):
+                    content = "\n".join(
+                        filter(None, [action_lead(doc.plan.parsed_intent.type, results), content])
+                    )
                 if output.check_result_reference:
                     check = checks[output.check_result_reference]["payload"]
-                    result = check["result"]
-                    content += (
-                        f"\n{check['name']}检定：骰点 {result['total']}，"
-                        f"目标 {result['threshold']}，{'通过' if result['passed'] else '未通过'}。"
-                    )
+                    content += "\n" + check["display_text"]
                 if results["failed_tools"]:
                     content += "\n部分行动未能完成，现场状态以已公布结果为准。"
-                if output.needs_host_ruling or not content.strip():
-                    content = "需要主持人裁定：当前没有足够的已验证公开依据。"
+                if not content.strip():
+                    fallback_reason = "no_validated_content"
+                    content = fallback_narration(
+                        doc.plan.parsed_intent.type,
+                        results,
+                        run.context.get("module", {})
+                        .get("scene", {})
+                        .get("public_description", ""),
+                        rejected=bool(
+                            doc.validation.rejected_actions and not doc.validation.approved_actions
+                        ),
+                    )
                     output.needs_host_ruling = True
                     documents, citations = [], []
                 ensure_public_text(await self.service.module(session, room.id), content)
-            except RoomError:
-                content = "需要主持人裁定：叙事未通过公开依据校验。"
+            except RoomError as error:
+                fallback_reason = error.message
+                content = fallback_narration(
+                    doc.plan.parsed_intent.type,
+                    results,
+                    run.context.get("module", {}).get("scene", {}).get("public_description", ""),
+                    rejected=bool(
+                        doc.validation.rejected_actions and not doc.validation.approved_actions
+                    ),
+                )
                 output.needs_host_ruling, output.npc_speech = True, None
                 documents, citations = [], []
+            if (
+                fallback_reason
+                and "规则" in original_action
+                and not run.context.get("RULE_EVIDENCE")
+            ):
+                content = "需要主持人裁定：目前没有找到可以支持这项规则解释的依据。"
+            doc.narration_validation = {
+                **doc.narration_validation,
+                "valid": fallback_reason is None,
+                "fallback_reason": fallback_reason,
+                "repair_count": max(
+                    0,
+                    len(
+                        list(
+                            await session.scalars(
+                                select(AgentModelCall).where(AgentModelCall.run_id == run.id)
+                            )
+                        )
+                    )
+                    - 1,
+                ),
+            }
+            self.rooms.append(
+                session,
+                room,
+                "agent.narration_validated",
+                room.host_member_id,
+                {"cycle_id": cycle.id, **doc.narration_validation},
+                "host_only",
+            )
             event = self.rooms.append(
                 session,
                 room,
@@ -1088,6 +1261,15 @@ class ActionRuntimeMixin:
                     "controller_type": "agent",
                     "citations": list({c["evidence_id"]: c for c in citations}.values()),
                     "needs_host_ruling": output.needs_host_ruling,
+                    "safe_fallback": fallback_reason is not None,
+                    "check_notice": "无需检定，行动直接完成"
+                    if not any(e["type"] == "check.resolved" for e in results["events"])
+                    and all(
+                        r.tool == "request_skill_check" for r in doc.validation.rejected_actions
+                    )
+                    and doc.validation.status
+                    not in {"rejected", "clarification_required", "host_review_required"}
+                    else None,
                 },
                 request_id=run.id,
             )

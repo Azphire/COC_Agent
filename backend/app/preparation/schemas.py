@@ -30,6 +30,9 @@ class PreparationInput(SourceRef):
 
 
 class RevealConditions(DomainModel):
+    access_policy: (
+        Literal["automatic", "requires_check", "requires_condition", "host_review"] | None
+    ) = None
     scene_id: str | None = Field(default=None, max_length=80)
     required_entity_ids: list[str] = Field(default_factory=list, max_length=12)
     successful_check: SuggestedCheck | None = None

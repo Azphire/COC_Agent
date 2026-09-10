@@ -138,7 +138,7 @@ def rag_game(client, game):  # noqa: F811
 
 def test_rag_fake_cycle_interrupt_tools_claims_visibility_and_exports(client, rag_game):
     game = rag_game  # noqa: F811
-    ok(submit(client, game, "奖励骰规则；检查维修间工作台并请求检定"))
+    ok(submit(client, game, "奖励骰规则；检查维修间工作台并请求检定；我冒着失去平衡的风险尝试。"))
     cycle = wait_cycle(client, game)
     assert cycle["status"] == "waiting_for_roll", cycle
     check = ok(client.get(game["prefix"] + "/checks"))[-1]

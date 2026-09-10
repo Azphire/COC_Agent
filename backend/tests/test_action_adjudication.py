@@ -2,6 +2,7 @@ import json
 from uuid import uuid4
 
 import pytest
+from adjudication_helpers import proposal_for
 from test_agent_runtime import game, submit, wait_cycle  # noqa: F401
 from test_module_navigation import navigation_game, structure_data  # noqa: F401
 from test_module_navigation_runtime import act, running_navigation  # noqa: F401
@@ -246,6 +247,8 @@ def modern_response(messages, kwargs):
                 "name": "spot_hidden",
                 "reason": "观察当前现场",
             }
+        if plan.get("proposed_check"):
+            plan["proposed_check"] = proposal_for(plan["proposed_check"], c)
         return plan
     if schema == "KeeperNarration":
         claim = c["PUBLIC_CLAIM_OPTIONS"][-1]
@@ -297,7 +300,7 @@ def test_two_stages_and_clarification_permissions(client, game):  # noqa: F811
 def test_check_wait_precedes_narration_and_duplicate_roll(client, game):  # noqa: F811
     adapter = FakeModelAdapter(responder=modern_response)
     client.app.state.agent_service.model.adapter = adapter
-    ok(submit(client, game, "我观察现场，请进行侦查检定"))
+    ok(submit(client, game, "我冒着失去平衡的风险检查现场，请进行侦查检定"))
     cycle = wait_cycle(client, game)
     assert cycle["status"] == "waiting_for_roll", cycle
     assert len(adapter.prompts) == 1

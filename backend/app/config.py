@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     model_context_limit: int = Field(default=8192, ge=2048, le=32768)
     model_output_limit: int = Field(default=900, ge=128, le=4096)
     model_keep_alive: str = "5m"
+    model_think: bool = False
+    summary_event_threshold: int = Field(default=20, ge=1, le=200)
+    summary_context_threshold: int = Field(default=12000, ge=2000, le=100000)
     agent_max_calls: int = Field(default=12, ge=1, le=24)
     teammate_similarity_threshold: float = Field(default=0.65, ge=0.5, le=1)
     teammate_cooldown_cycles: int = Field(default=2, ge=1, le=10)

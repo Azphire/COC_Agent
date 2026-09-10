@@ -212,7 +212,11 @@ def test_tool_receipt_idempotency(client, game):  # noqa: F811
 
 def test_concurrent_human_actions_one_cycle(client, game):  # noqa: F811
     with ThreadPoolExecutor(max_workers=2) as pool:
-        responses = list(pool.map(lambda _: submit(client, game, "侦查检定"), range(2)))
+        responses = list(
+            pool.map(
+                lambda _: submit(client, game, "我冒着失去平衡的风险调查并请求侦查检定"), range(2)
+            )
+        )
     assert sorted(r.status_code for r in responses) == [200, 409]
     assert wait_cycle(client, game)["status"] == "waiting_for_roll"
     check = ok(client.get(game["prefix"] + "/checks"))[0]
@@ -221,7 +225,7 @@ def test_concurrent_human_actions_one_cycle(client, game):  # noqa: F811
         results = list(pool.map(lambda _: ok(client.post(path, json={})), range(2)))
     assert results[0]["check"]["dice"] == results[1]["check"]["dice"]
     assert wait_cycle(client, game)["status"] == "completed"
-    assert len(game["adapter"].prompts) == 3
+    assert len(game["adapter"].prompts) == 2
 
 
 def test_profile_draft_is_not_persisted_until_confirmation(client, game):  # noqa: F811

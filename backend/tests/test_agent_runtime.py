@@ -227,11 +227,11 @@ def test_no_check_cycle_and_private_context(client, game):
 
 def test_interrupt_roll_resume_and_duplicate(client, game):
     request_id = str(uuid4())
-    ok(submit(client, game, "对工作台进行侦查检定", request_id))
+    ok(submit(client, game, "对工作台进行侦查检定；我冒着失去平衡的风险尝试。", request_id))
     cycle = wait_cycle(client, game)
     assert cycle["status"] == "waiting_for_roll", cycle
     assert len(game["adapter"].prompts) == 1
-    ok(submit(client, game, "对工作台进行侦查检定", request_id))
+    ok(submit(client, game, "对工作台进行侦查检定；我冒着失去平衡的风险尝试。", request_id))
     assert submit(client, game, "重复新行动").status_code == 409
     check = ok(client.get(game["prefix"] + "/checks"))[0]
     path = game["prefix"] + f"/checks/{check['id']}/roll"
@@ -239,10 +239,10 @@ def test_interrupt_roll_resume_and_duplicate(client, game):
     ok(client.post(path, json={}, headers=headers(game["remote"]["member_token"])))
     final = wait_cycle(client, game)
     assert final["status"] == "completed", final
-    assert final["id"] == cycle["id"] and final["state"]["call_count"] == 3
+    assert final["id"] == cycle["id"] and final["state"]["call_count"] == 2
     resolved = ok(client.post(path, json={}))
     assert resolved["check"]["status"] == "resolved"
-    assert len(game["adapter"].prompts) == 3
+    assert len(game["adapter"].prompts) == 2
     events = ok(client.get(game["prefix"] + "/events"))["events"]
     assert sum(e["type"] == "check.resolved" for e in events) == 1
 
@@ -263,9 +263,9 @@ def test_argument_repair_is_bounded_and_precedes_tools(client, game, repair_succ
         return plan
 
     game["adapter"].responder = responder
-    ok(submit(client, game, "对当前现场进行侦查检定"))
+    ok(submit(client, game, "对当前现场进行侦查检定；我冒着失去平衡的风险尝试。"))
     cycle = wait_cycle(client, game)
-    assert cycle["state"]["call_count"] == (2 if repair_succeeds else 4)
+    assert cycle["state"]["call_count"] == (2 if repair_succeeds else 3)
     assert cycle["status"] == ("waiting_for_roll" if repair_succeeds else "completed"), cycle
     checks = ok(client.get(game["prefix"] + "/checks"))
     if repair_succeeds:
@@ -273,7 +273,7 @@ def test_argument_repair_is_bounded_and_precedes_tools(client, game, repair_succ
         ok(client.post(game["prefix"] + f"/checks/{checks[0]['id']}/roll", json={}))
         final = wait_cycle(client, game)
         assert final["status"] == "completed", final
-        assert final["state"]["call_count"] == 4
+        assert final["state"]["call_count"] == 3
     else:
         assert checks == []
 
@@ -285,7 +285,7 @@ def test_model_failure_retry_and_cancel(client, game):
     assert cycle["status"] == "failed"
     ok(client.post(game["prefix"] + "/agent-cycle/retry"))
     assert wait_cycle(client, game)["status"] == "completed"
-    ok(submit(client, game, "做一次侦查检定"))
+    ok(submit(client, game, "做一次侦查检定；我冒着失去平衡的风险尝试。"))
     assert wait_cycle(client, game)["status"] == "waiting_for_roll"
     ok(client.post(game["prefix"] + "/agent-cycle/cancel"))
     assert ok(client.get(game["prefix"] + "/agent-cycle"))["status"] == "cancelled"

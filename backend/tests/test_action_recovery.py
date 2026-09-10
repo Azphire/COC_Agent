@@ -298,7 +298,7 @@ def test_teammate_one_repair_then_adopt_or_pass(client, game, repair_success):  
 
     adapter = FakeModelAdapter(responder=response)
     client.app.state.agent_service.model.adapter = adapter
-    ok(submit(client, game, "我查看当前环境"))
+    ok(submit(client, game, "investigator，请告诉我你的看法"))
     cycle = wait_cycle(client, game)
     assert cycle["status"] == "completed"
     events = ok(client.get(game["prefix"] + "/events"))["events"]
@@ -338,10 +338,8 @@ def test_narration_failure_retry_does_not_repeat_reveal(client, game):  # noqa: 
     client.app.state.agent_service.model.adapter = FakeModelAdapter(responder=response)
     ok(submit(client, game, "我查看公告"))
     first = wait_cycle(client, game)
-    assert first["status"] == "failed"
-    failed = False
-    ok(client.post(game["prefix"] + "/agent-cycle/retry", json={}))
-    assert wait_cycle(client, game)["status"] == "completed"
+    assert first["status"] == "completed"
+    assert client.post(game["prefix"] + "/agent-cycle/retry", json={}).status_code == 409
     events = ok(client.get(game["prefix"] + "/events"))["events"]
     assert sum(e["type"] == "clue.revealed" for e in events) == 1
     assert sum(e["type"] == "keeper.narration" for e in events) == 1

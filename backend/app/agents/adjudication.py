@@ -5,7 +5,7 @@ from sqlalchemy import select
 from app.agents.action_policy import ActionFacts, ActionPolicyValidator
 from app.agents.adjudication_schemas import AdjudicationRecord, RecoveryDecision, SupplementContent
 from app.agents.modules import Module
-from app.agents.schemas import PlannedTool
+from app.agents.schemas import CheckRequest, PlannedTool
 from app.persistence.adjudication_models import ActionPlanRecord
 from app.persistence.agent_models import AgentCycle, AgentRun, CheckRecord
 from app.persistence.room_models import RoomEvent
@@ -146,6 +146,7 @@ class ActionAdjudicationService:
                 if e.snapshot.get("status") == "approved"
             }
             facts.visible_entity_ids = {e.source_entity_id for e in rows if e.state != "hidden"}
+            facts.revealed_entity_ids = set(facts.visible_entity_ids)
             facts.local_entity_ids = set(facts.approved_entities)
             for entity in rows:
                 for for_check, errors in (
@@ -202,12 +203,20 @@ class ActionAdjudicationService:
                     "type": "clue",
                     "title": clue.title,
                     "public_summary": clue.content,
+                    "reveal_conditions": {
+                        "scene_id": clue.prerequisites.scene_id,
+                        "required_entity_ids": clue.prerequisites.clue_ids,
+                        "successful_check": clue.prerequisites.successful_check.model_dump()
+                        if clue.prerequisites.successful_check
+                        else None,
+                    },
                 }
                 pre = clue.prerequisites
                 if not pre.scene_id or pre.scene_id == facts.scene_id:
                     facts.local_entity_ids.add(clue.id)
                 if clue.id in module.state["revealed_clues"]:
                     facts.visible_entity_ids.add(clue.id)
+                    facts.revealed_entity_ids.add(clue.id)
                 if clue.id not in facts.local_entity_ids or not set(pre.clue_ids) <= set(
                     module.state["revealed_clues"]
                 ):
@@ -275,19 +284,56 @@ class ActionAdjudicationService:
         facts.observed_evidence_ids = set(
             await agents.knowledge.evidence_for_run(session, run.id, room.id, run.profile_id)
         )
+        facts.completed_checks = [
+            {**c.document, "cycle_id": c.cycle_id}
+            for c in await session.scalars(
+                select(CheckRecord).where(
+                    CheckRecord.room_id == room.id, CheckRecord.status == "resolved"
+                )
+            )
+        ]
+        facts.check_state = {
+            "module_state": module.state,
+            "entities": {
+                e["id"]: e.get("public_summary", "")
+                for e in await agents.entities.public(session, room.id)
+            },
+        }
         return facts
 
     @staticmethod
     def actions(plan, facts):
+        from app.agents.check_policy import entity_access
+
+        proposal = plan.proposed_check
+        if proposal and proposal.clue_id is None:
+            target = proposal.target_entity_id
+            if (
+                target
+                and proposal.basis_entity_id == target
+                and entity_access(facts.approved_entities.get(target, {})) == "requires_check"
+            ):
+                # The approved entity is authoritative; this is an interface alias,
+                # never an inferred check requirement or invented target.
+                proposal.clue_id = target
         actions = list(plan.proposed_tool_calls)
         if plan.proposed_check and not any(t.name == "request_skill_check" for t in actions):
             actions.append(
                 PlannedTool(
                     name="request_skill_check",
-                    arguments=plan.proposed_check.model_dump(mode="json"),
+                    arguments={
+                        k: v
+                        for k, v in plan.proposed_check.model_dump(mode="json").items()
+                        if k in CheckRequest.model_fields
+                    },
                 )
             )
-        for eid in plan.proposed_reveal_entity_ids:
+        reveals = list(plan.proposed_reveal_entity_ids)
+        if plan.proposed_check and plan.proposed_check.clue_id:
+            eid = plan.proposed_check.clue_id
+            if entity_access(facts.approved_entities.get(eid, {})) == "requires_check":
+                reveals = list(dict.fromkeys([*reveals, eid]))
+        for eid in reveals:
             if not any(
                 t.name in {"reveal_entity", "reveal_clue"} and eid in t.arguments.values()
                 for t in actions

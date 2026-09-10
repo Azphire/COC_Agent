@@ -48,7 +48,7 @@ def test_other_player_and_private_check(client, game):  # noqa: F811
             await session.commit()
 
     client.portal.call(start)
-    ok(submit(client, game, "私密侦查检定"))
+    ok(submit(client, game, "私密侦查检定；我冒着失去平衡的风险尝试。"))
     assert wait_cycle(client, game)["status"] == "waiting_for_roll"
     check = ok(client.get(game["prefix"] + "/checks"))[0]
     assert (
@@ -72,7 +72,7 @@ def test_other_player_and_private_check(client, game):  # noqa: F811
 
 
 def test_checkpoint_restart_pending_save_load(client, game, character_settings):  # noqa: F811
-    ok(submit(client, game, "侦查检定"))
+    ok(submit(client, game, "我冒着失去平衡的风险调查并请求侦查检定"))
     cycle = wait_cycle(client, game)
     assert cycle["status"] == "waiting_for_roll"
     save = ok(client.post(game["prefix"] + "/snapshots", json={"name": "等骰存档"}))["snapshot"]
@@ -91,7 +91,7 @@ def test_checkpoint_restart_pending_save_load(client, game, character_settings):
         ok(second.post(game["prefix"] + "/resume"))
         ok(second.post(game["prefix"] + f"/checks/{check['id']}/roll", json={}))
         assert wait_cycle(second, game)["status"] == "completed"
-        assert len(adapter.prompts) == 2
+        assert len(adapter.prompts) == 1
         result = ok(second.get(game["prefix"] + "/checks"))[0]
         ok(second.post(game["prefix"] + "/pause"))
         ok(second.post(game["prefix"] + f"/snapshots/{save['id']}/load"))
@@ -122,7 +122,7 @@ def test_agent_target_uses_same_check_service(client, game):  # noqa: F811
             ]
         }
     )
-    ok(submit(client, game))
+    ok(submit(client, game, "我请同伴冒着失去平衡的风险保持稳定。"))
     assert wait_cycle(client, game)["status"] == "completed"
     check = ok(client.get(game["prefix"] + "/checks"))[0]
     assert (
@@ -172,7 +172,7 @@ def test_investigator_cannot_use_keeper_tools_and_only_one_speech(client, game):
             },
         ]
     )
-    ok(submit(client, game))
+    ok(submit(client, game, "investigator，请告诉我你的看法。"))
     assert wait_cycle(client, game)["status"] == "completed"
     run = ok(client.get(game["prefix"] + "/agent-runs"))[-1]
     assert run["structured_output"]["mode"] == "speak" and run["tool_results"] == []
@@ -199,9 +199,8 @@ def test_call_budget_and_cancel_during_model(client, game):  # noqa: F811
     svc.settings.agent_max_calls = 1
     ok(submit(client, game))
     cycle = wait_cycle(client, game)
-    assert cycle["status"] == "failed" and len(game["adapter"].prompts) == 1
+    assert cycle["status"] == "completed" and len(game["adapter"].prompts) == 1
     assert client.post(game["prefix"] + "/agent-cycle/retry").status_code == 409
-    ok(client.post(game["prefix"] + "/agent-cycle/cancel"))
     svc.settings.agent_max_calls = 6
 
     async def slow():

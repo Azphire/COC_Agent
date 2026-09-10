@@ -19,8 +19,8 @@ export default function RoomTimelineEvent({ event, room }: { event: RoomEvent; r
     <small>#{event.seq} [{new Date(event.occurred_at).toLocaleTimeString()}] [{role}{!system && actor !== '系统' ? `：${actor}` : ''}] {cycle && `[${cycle}]`} {event.visibility !== 'public' && '私密'}</small>
     {textTypes.includes(event.type) ? <p className="preserve-lines">{event.type === 'agent.spoke' ? '发言：' : event.type === 'agent.action_proposed' ? '行动：' : ''}{String(p.text)}</p>
       : event.type === 'action.clarification_requested' ? <p>需要澄清：{String(p.question)}</p>
-      : event.type === 'check.requested' ? <p>KP 请求“{String(p.name)}”检定 · {room.members.find(m => m.id === p.target_member_id)?.display_name}</p>
-      : event.type === 'check.resolved' ? <p>1D100={result?.total}，结果：{resultLabels[result?.level || '']} · {result?.passed ? '通过' : '未通过'}</p>
+      : event.type === 'check.requested' ? <p>KP 请求“{String(p.display_name || p.name)}”检定 · {room.members.find(m => m.id === p.target_member_id)?.display_name}</p>
+      : event.type === 'check.resolved' ? <p>{p.display_text ? String(p.display_text) : <>1D100={result?.total}，结果：{resultLabels[result?.level || '']} · {result?.passed ? '通过' : '未通过'}</>}</p>
       : event.type === 'clue.revealed' ? <p>公开线索：{String(p.title)} · {String(p.content)}</p>
       : event.type === 'entity.revealed' || event.type === 'entity.corrected' ? <p>{event.type === 'entity.corrected' ? '公开修正' : '公开发现'}：{String(p.title)} · {String(p.public_summary)}</p>
       : event.type === 'review.waiting' || event.type === 'review.status' ? <p>{String(p.text)}</p>
@@ -28,6 +28,7 @@ export default function RoomTimelineEvent({ event, room }: { event: RoomEvent; r
       : event.type === 'scene.updated' ? <p>场景：{String(p.scene_title)} · {String(p.scene_summary)}</p>
       : event.type === 'dice.rolled' ? <p>{String(p.reason)} · {String(p.expression)} → [{(p.dice as number[]).join(', ')}] {Number(p.modifier) >= 0 ? '+' : ''}{String(p.modifier)} = <strong>{String(p.total)}</strong></p>
       : <details><summary>{event.type}</summary><pre>{JSON.stringify(p, null, 2)}</pre></details>}
-    {(p.citations as Citation[] | undefined)?.map(c => <details className="rule-citation" key={c.evidence_id}><summary>《{c.source_title}》{c.page_kind === 'pdf' ? 'PDF' : c.page_kind === 'word' ? 'Word' : '文本'} {c.physical_page ? `p.${c.physical_page}` : ''}</summary><p>{c.section} {c.page_label && `· 页标签 ${c.page_label}`}</p><p className="preserve-lines">{c.excerpt}</p><small>{c.evidence_id}</small></details>)}
+    {p.check_notice ? <p>{String(p.check_notice)}</p> : null}
+    {(p.citations as Citation[] | undefined)?.map(c => <details className="rule-citation" key={c.evidence_id}><summary>《{c.source_title}》{c.page_kind === 'pdf' ? 'PDF' : c.page_kind === 'word' ? 'Word' : '文本'} {c.physical_page ? `p.${c.physical_page}` : ''}</summary><p>{c.section} {c.page_label && `· 页标签 ${c.page_label}`}</p><p className="preserve-lines">{c.excerpt}</p></details>)}
   </li>
 }

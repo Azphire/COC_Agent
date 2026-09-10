@@ -186,17 +186,35 @@ class KnowledgeService:
         )
         query = await self.agents.sanitize(session, room, query[:500])
         start = time.monotonic()
-        evidence = self.retriever.search(
-            query,
-            refs=refs,
-            run_id=run_id,
-            kind=kind,
-            keeper=keeper,
-            top_k=top_k,
-            scene_id=scene_id,
-            entity_id=entity_id,
+        from app.rules.topics import RuleTopicRegistry, relevant_evidence
+
+        concepts = RuleTopicRegistry.concepts(query)
+        evidence = (
+            RuleTopicRegistry.evidence(concepts, refs, self.repository, run_id)
+            if kind == "rules"
+            else []
+        )
+        structured = bool(evidence) and not RuleTopicRegistry.unstructured(concepts)
+        evidence = (
+            evidence
+            if structured
+            else self.retriever.search(
+                query,
+                refs=refs,
+                run_id=run_id,
+                kind=kind,
+                keeper=keeper,
+                top_k=top_k,
+                scene_id=scene_id,
+                entity_id=entity_id,
+            )
         )
         evidence = await self.agents.sanitize(session, room, evidence)
+        returned = list(evidence)
+        if kind == "rules" and not structured:
+            evidence = [
+                e for e in evidence if any(relevant_evidence(c, e["excerpt"]) for c in concepts)
+            ]
         record = RetrievalRecord(
             id=str(uuid4()),
             room_id=room.id,
@@ -205,7 +223,20 @@ class KnowledgeService:
             actor_member_id=actor_id,
             query=query,
             query_hash=hashlib.sha256(query.encode()).hexdigest(),
-            source_filters={"kind": kind, "refs": refs, "edition": "coc7", "keeper": keeper},
+            source_filters={
+                "kind": kind,
+                "refs": refs,
+                "edition": "coc7",
+                "keeper": keeper,
+                "mode": "structured" if structured else "rag",
+                "concepts": concepts,
+                "returned_evidence": returned,
+                "excluded": [
+                    {"evidence_id": e["evidence_id"], "reason": "irrelevant"}
+                    for e in returned
+                    if e not in evidence
+                ],
+            },
             evidence=evidence,
             injected_ids=[],
             latency_ms=int((time.monotonic() - start) * 1000),
@@ -240,34 +271,26 @@ class KnowledgeService:
         if not configured or not configured["enabled"]:
             return [], []
         await self.require_available(session, room.id)
-        public = context["phase"] == "narrate_publicly" or profile.role != "keeper"
+        public = (
+            context["phase"] in {"narrate_publicly", "generate_keeper_narration"}
+            or profile.role != "keeper"
+        )
         trigger = context.get("triggering_action") or {}
         action = trigger.get("payload", {}).get("text", "")
         query = action[:400]
-        kinds = []
-        if (
-            any(
-                word in action
-                for word in (
-                    "规则",
-                    "检定",
-                    "骰",
-                    "成功",
-                    "失败",
-                    "技能",
-                    "属性",
-                    "车卡",
-                    "职业",
-                    "年龄",
-                    "教育",
-                    "幸运",
-                    "判定",
-                    "侦查",
-                )
-            )
-            or context["checks"]
-        ):
-            kinds.append("rules")
+        from app.rules.topics import RuleTopicRegistry
+
+        planned = context.get("rule_concepts", [])
+        concepts = RuleTopicRegistry.concepts(action, planned)
+        rule_request = any(w in action for w in ("规则", "解释", "区别")) or (
+            any(w in action for w in ("如何", "怎么"))
+            and any(c in TERMS for c in RuleTopicRegistry.concepts(action))
+        )
+        if context.get("current_check") and not any(w in action for w in ("规则", "解释", "区别")):
+            concepts = ["技能检定", "难度"]
+        if context.get("current_check"):
+            concepts = list(dict.fromkeys([*concepts, "技能检定", "难度"]))
+        kinds = ["rules"] if rule_request or context.get("current_check") else []
         if (
             not public
             and configured.get("module")
@@ -278,9 +301,20 @@ class KnowledgeService:
         for kind in kinds:
             search_query = query or "开场"
             if kind == "rules":
-                concepts = [term for term in TERMS if term in action]
-                if concepts:
-                    search_query = " ".join(concepts)
+                for concept in concepts:
+                    evidence, record = await self.search(
+                        session,
+                        room,
+                        run_id=run_id,
+                        profile=profile,
+                        actor_id=binding.member_id,
+                        query=concept,
+                        kind="rules",
+                        public_only=public,
+                    )
+                    collected.extend(evidence)
+                    records.append(record)
+                continue
             elif kind == "module":
                 current_id = context["public_state"].get("scene_id")
                 scene = next(
@@ -329,7 +363,11 @@ class KnowledgeService:
                     "fallback_reason": "structure_incomplete",
                 }
         # Apply permission first, then source diversity, score and bounded JSON size.
+        collected = list(
+            {(e["source_id"], e["source_hash"], e["chunk_id"]): e for e in collected}.values()
+        )
         selected = KnowledgeContextBuilder.select(collected, budget, public)
+        context["RULE_TOPICS"] = [e["mechanic_id"] for e in selected if e.get("mechanic_id")]
         selected_ids = {e["evidence_id"] for e in selected}
         injected = {e["evidence_id"]: e for e in selected}
         for record in records:
@@ -338,6 +376,14 @@ class KnowledgeService:
             record.source_filters = {
                 **record.source_filters,
                 "candidate_count": len(record.evidence),
+                "excluded": [
+                    *record.source_filters.get("excluded", []),
+                    *[
+                        {"evidence_id": e["evidence_id"], "reason": "budget_or_duplicate"}
+                        for e in record.evidence
+                        if e["evidence_id"] not in selected_ids
+                    ],
+                ],
             }
             record.evidence = [
                 injected[e["evidence_id"]] for e in record.evidence if e["evidence_id"] in injected
@@ -537,7 +583,12 @@ class KnowledgeContextBuilder:
         options = []
         action = (context.get("triggering_action") or {}).get("payload", {}).get("text", "")
         concepts = [term for term in TERMS if term in action]
-        for evidence in context.get("RULE_EVIDENCE", [])[:2]:
+        rule_evidence = (
+            context.get("RULE_EVIDENCE", [])
+            if any(w in action for w in ("规则", "解释", "如何", "怎么", "区别"))
+            else []
+        )
+        for evidence in rule_evidence[:2]:
             sentences = re.findall(r"[^。！？]{11,160}[。！？]", normalize(evidence["excerpt"]))
             if not sentences:
                 continue

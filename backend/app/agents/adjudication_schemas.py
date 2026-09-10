@@ -5,7 +5,8 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from app.agents.schemas import CheckRequest, PlannedTool
+from app.agents.check_policy import CheckPolicyDecision, CheckProposal
+from app.agents.schemas import PlannedTool
 from app.domain.character import DomainModel, utc_now
 from app.knowledge.schemas import GroundedClaim
 from app.module_ir.schemas import SceneTransition
@@ -65,7 +66,7 @@ class KeeperPlan(DomainModel):
     target_node_ids: list[str] = Field(default_factory=list, max_length=8)
     required_context: list[str] = Field(default_factory=list, max_length=8)
     proposed_tool_calls: list[PlannedTool] = Field(default_factory=list, max_length=4)
-    proposed_check: CheckRequest | None = Field(
+    proposed_check: CheckProposal | None = Field(
         default=None, json_schema_extra={"x-explicit-output": True}
     )
     proposed_reveal_entity_ids: list[str] = Field(default_factory=list, max_length=4)
@@ -80,6 +81,7 @@ class KeeperPlan(DomainModel):
     source_evidence_ids: list[str] = Field(default_factory=list, max_length=8)
     source_entity_ids: list[str] = Field(default_factory=list, max_length=8)
     expected_navigation_revision: int = Field(default=0, ge=0)
+    rule_concepts: list[str] = Field(default_factory=list, max_length=6)
 
 
 class ActionRejection(DomainModel):
@@ -111,6 +113,7 @@ class ValidatedActionPlan(DomainModel):
     required_interrupt: Literal["human_roll", "host_review"] | None = None
     expected_navigation_revision: int = 0
     clarification_question: str | None = None
+    check_decisions: list[CheckPolicyDecision] = Field(default_factory=list)
 
 
 class NPCSpeech(DomainModel):
@@ -127,6 +130,7 @@ class KeeperNarration(DomainModel):
     check_result_reference: str | None = None
     transition_result_reference: str | None = None
     needs_host_ruling: bool = False
+    current_scene_reference: str | None = None
 
 
 class ContextGap(DomainModel):
@@ -248,6 +252,7 @@ class AdjudicationRecord(DomainModel):
     revision_recovery_attempted: bool = False
     arguments_repair_attempted: bool = False
     narration: KeeperNarration | None = None
+    narration_validation: dict = Field(default_factory=dict)
 
 
 class ArgumentRepair(DomainModel):

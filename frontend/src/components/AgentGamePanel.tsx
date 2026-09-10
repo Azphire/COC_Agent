@@ -106,8 +106,8 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
         <button disabled={busy || active || room.status !== 'running' || !game.enabled || !action.trim() || (room.is_host && !actor)}>提交行动</button>
       </form>}
       <div className="check-list">{game.checks.map(check => <article key={check.id} className="check-card" data-check-id={check.id}>
-        <h3>{check.kind === 'skill' ? '技能' : '属性'}检定 · {check.name}</h3>
-        <p>{room.members.find(m => m.id === check.target_member_id)?.display_name} · 数值 {check.value} · {difficultyLabels[check.difficulty]} · 奖励骰 {check.bonus_dice} / 惩罚骰 {check.penalty_dice}</p><p>{check.reason}</p>
+        <h3>{check.display_name || check.name}检定</h3>
+        <p>{check.display_text}</p><p>{room.members.find(m => m.id === check.target_member_id)?.display_name} · 数值 {check.value} · {difficultyLabels[check.difficulty]} · 奖励骰 {check.bonus_dice} / 惩罚骰 {check.penalty_dice}</p><p>{check.reason}</p>
         {check.status === 'pending' ? <button disabled={busy || room.status !== 'running' || (!room.is_host && room.self_member_id !== check.target_member_id)} onClick={() => void command(`/checks/${check.id}/roll`, {})}>掷骰完成检定</button> : check.status === 'cancelled' ? <p>检定已取消</p> : <>
           <p>个位 {check.dice?.units} · 十位 [{check.dice?.tens.join(', ')}] · 候选 [{check.dice?.candidates.join(', ')}]</p>
           <p><strong>{check.result?.total} · {resultLabels[check.result?.level || '']}</strong> · 本次目标 {check.result?.threshold} · {check.result?.passed ? '通过' : '未通过'}</p>
@@ -122,9 +122,9 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
           setMemory(await api<unknown[]>(prefix + '/memories', token))
         } catch (e) { setError(e instanceof Error ? e.message : '加载失败') }
       }}>刷新运行与记忆</button>
-      <pre>{JSON.stringify(cycle, null, 2)}</pre>
-      <details open><summary>行动意图、计划、验证与恢复</summary><pre>{JSON.stringify(adjudication, null, 2)}</pre></details>
-      <details><summary>队友行为与冷却</summary>{behaviors.map(item => <div key={String(item.member_id)}><pre>{JSON.stringify(item, null, 2)}</pre><button disabled={busy || active} onClick={() => void command(`/teammate-behavior/${item.member_id}/reset`)}>重置队友状态</button></div>)}</details>
+      <p>本 cycle 模型调用：{String(cycle?.state?.call_count ?? 0)} 次 · 模型总耗时：{String(cycle?.state?.model_latency_ms ?? 0)} ms</p><pre>{JSON.stringify(cycle, null, 2)}</pre>
+      <details open><summary>检定提案、必要性、叙事验证与回退</summary><pre>{JSON.stringify(adjudication, null, 2)}</pre></details>
+      <details><summary>队友调用、确定性跳过与冷却</summary>{behaviors.map(item => <div key={String(item.member_id)}><pre>{JSON.stringify(item, null, 2)}</pre><button disabled={busy || active} onClick={() => void command(`/teammate-behavior/${item.member_id}/reset`)}>重置队友状态</button></div>)}</details>
       <details><summary>摘要恢复状态</summary><pre>{JSON.stringify(summaries, null, 2)}</pre><button disabled={busy || active} onClick={async () => { setBusy(true); try { setSummaries(await api<Record<string, unknown>[]>(prefix + '/summary-rebuild', token, 'POST')) } catch (e) { setError(e instanceof Error ? e.message : '重建失败') } finally { setBusy(false) } }}>手动重建摘要</button></details>
       {runs.map(run => <details key={String(run.id)}><summary>{String(run.graph_node)} · {String(run.status)} · {String(run.model)} · {String(run.latency_ms)} ms</summary><pre>{JSON.stringify({ run_id: run.id, cycle_id: run.cycle_id, output: run.structured_output, tools: run.tool_results, error: run.safe_error }, null, 2)}</pre><details><summary>检索证据与实际注入</summary><pre>{JSON.stringify(retrievals[String(run.id)] || [], null, 2)}</pre></details></details>)}
       <details><summary>当前记忆</summary><pre>{JSON.stringify(memory, null, 2)}</pre></details>

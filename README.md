@@ -292,6 +292,25 @@ backend/.venv/Scripts/python.exe backend/scripts/check_action_adjudication.py --
 
 脚本使用隔离数据库和三个 Chrome profile，真实模式只调用现有本地 `qwen3:8b`。一次摘要超时为隔离验收注入，单独计入审计；Fake 模式另注入局部工具错误。原始模组、`.env` 和用户库不修改。真实 PUBLIC/HOST_DEBUG 记录位于 `.cache/batch-7/常暗之厢-session.md`。
 
+## 检定与公开叙事（第八批）
+
+明显环境、已公开信息、普通 NPC 交谈和已批准无障碍移动默认无需检定，直接给出公开结果。检定必须有不确定因素、不同的成败结果、真实角色技能、当前可见目标，以及实体批准条件或玩家明确风险和已实现规则依据。相同状态下已完成的同目标同技能检定不能重复；状态变化后仍需重新通过其余验证。
+
+准备工作台可选择 `automatic`、`requires_check`、`requires_condition` 或 `host_review`，沿用实体条件 JSON，无需改旧表列。自动成功仅表示完成普通行动或获取批准的公开信息，不自动公开隐藏线索。公共检定卡、时间线和叙事使用“侦查／敏捷”等规则集显示名，骰点、难度、目标、等级和奖惩骰由服务端格式化。
+
+已实现的技能／属性、难度、大成功／大失败、奖惩骰优先使用绑定精确规则版本的 RuleTopicRegistry；解释性及未结构化问题继续走 RAG，按概念分别检索，再过滤和合并。普通回合继续使用场景结构，不检索模组全库。
+
+公开叙事逐项验证当前场景、公开实体和真实执行结果，最多修复一次；仍无效时使用按本轮行动、真实检定和公开状态生成的简短中文文本，不再调用模型或重复工具。队友只在新线索、转场、直接交谈或自身目标触发时获得调用机会。摘要达到事件数量或上下文预算阈值才生成。
+
+主机调试面板可查看检定提案与拒绝原因、规则来源、叙事验证与回退、队友跳过原因、每回合调用数和模型耗时。`MODEL_THINK=false` 沿用现有非思考行为并变为可配置项；`SUMMARY_EVENT_THRESHOLD=20` 与 `SUMMARY_CONTEXT_THRESHOLD=12000` 控制摘要阈值。详见[检定与叙事政策](docs/check-and-narration-policy.md)和[第八批报告](docs/batch-8-report.md)。真实公开／主机记录在 `.cache/batch-8/常暗之厢-session.md`。
+
+```powershell
+backend/.venv/Scripts/python.exe backend/scripts/check_check_policy.py
+backend/.venv/Scripts/python.exe backend/scripts/check_check_policy.py --real --config .cache/batch-6/real-config.json
+```
+
+脚本使用隔离数据库、三个 Chrome profile 和本地现有 `qwen3:8b`，执行七轮必要性验收及存档、重启、读档后的第八轮；不修改原模组、用户库或 `.env`。
+
 ## 验证
 
 ```powershell

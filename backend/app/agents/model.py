@@ -35,6 +35,8 @@ class AgentModelClient:
         on_call=None,
         on_result=None,
         output_limit=None,
+        validate_output=None,
+        max_attempts=2,
     ):
         started = time.monotonic()
         if self.adapter is None:
@@ -44,7 +46,7 @@ class AgentModelClient:
                 else create_model(self.settings)
             )
         prompt = list(messages)
-        for attempt in range(2):
+        for attempt in range(max_attempts):
             async with model_semaphore():
                 if on_call:
                     await on_call()
@@ -81,9 +83,11 @@ class AgentModelClient:
                         for tag in ("<think", "</think", '"reasoning"', '"chain_of_thought"')
                     ):
                         raise ModelFormatError("模型输出包含不支持的字段")
+                    if validate_output:
+                        await validate_output(result.structured)
                     return result, int((time.monotonic() - started) * 1000)
                 except (ValidationError, ValueError, ModelFormatError) as error:
-                    if attempt:
+                    if attempt + 1 >= max_attempts:
                         raise ModelFormatError("模型结构化输出在一次修复后仍无效") from None
                     prompt = list(messages) + [
                         {

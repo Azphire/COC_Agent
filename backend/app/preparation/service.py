@@ -207,6 +207,18 @@ class PreparationService:
             prep.status = "review_ready"
 
     async def validation_errors(self, session, prep, entity):
+        pre = entity.document.get("reveal_conditions", {})
+        access = pre.get("access_policy")
+        if access == "automatic" and (
+            pre.get("successful_check") or pre.get("required_entity_ids")
+        ):
+            return ["直接访问策略不能同时配置检定或前置实体"]
+        if access == "requires_check" and not pre.get("successful_check"):
+            return ["需要检定策略必须配置具体检定"]
+        if access == "requires_condition" and not (
+            pre.get("required_entity_ids") or pre.get("scene_id")
+        ):
+            return ["条件访问策略必须配置可验证的前置实体或场景"]
         if entity.document["generated_by"] == "host":
             return []
         run = await session.get(GenerationRun, entity.generation_run_id)

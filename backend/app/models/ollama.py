@@ -103,7 +103,7 @@ class OllamaAgentAdapter:
             "model": self.settings.model_name,
             "messages": list(messages),
             "stream": False,
-            "think": False,
+            "think": self.settings.model_think,
             "keep_alive": self.settings.model_keep_alive,
             "options": {
                 "temperature": temperature,

@@ -65,6 +65,16 @@ class AgentRuntime(ActionRuntimeMixin):
         async def record(document):
             async def operation(session, room):
                 session.add(AgentModelCall(id=str(uuid4()), run_id=run_id, document=document))
+                run = await session.get(AgentRun, run_id)
+                cycle = await session.get(AgentCycle, run.cycle_id)
+                stages = dict(cycle.state.get("model_call_stages", {}))
+                stages[run.graph_node] = stages.get(run.graph_node, 0) + 1
+                cycle.state = {
+                    **cycle.state,
+                    "model_call_stages": stages,
+                    "model_latency_ms": cycle.state.get("model_latency_ms", 0)
+                    + document["latency_ms"],
+                }
 
             await self.service.mutate(room_id, operation)
 

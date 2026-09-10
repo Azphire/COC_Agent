@@ -298,6 +298,19 @@ async def build_context(
             budget=max(700, budget - base_size - 1300),
             cycle=cycle if keeper else None,
         )
+        if keeper:
+            # Navigation audit and public IDs vary after transitions/restores.
+            # Budget the complete envelope, leaving room for rule-routing keys.
+            remaining = budget - 300 - len(json.dumps({**context, **resolved}, ensure_ascii=False))
+            if remaining < 0:
+                resolved = await service.module_context.resolve(
+                    session,
+                    room,
+                    "keeper",
+                    recent_action=(trigger or {}).get("payload", {}).get("text", ""),
+                    budget=max(700, resolved["module_context_audit"]["budget"] + remaining),
+                    cycle=cycle,
+                )
         context.update(resolved)
         if keeper:
             service.rooms.append(
@@ -328,6 +341,14 @@ async def build_context(
             }
             for entity in context["public_entities"]
         ]
+    if run_id:
+        from app.persistence.adjudication_models import ActionPlanRecord
+
+        plan_record = await session.get(ActionPlanRecord, cycle.id)
+        context["rule_concepts"] = (
+            plan_record.document.get("plan", {}).get("rule_concepts", []) if plan_record else []
+        )
+        context["current_check"] = bool(cycle.state.get("pending_check_id"))
     if run_id:
         configured = await service.knowledge.binding(session, room.id)
         if configured and configured["enabled"]:

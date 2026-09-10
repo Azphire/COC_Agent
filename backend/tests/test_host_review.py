@@ -117,7 +117,7 @@ def test_review_interrupt_resume_permissions_idempotency_and_public_context(
 ):
     game = prepared_game
     prefix = game["prefix"]
-    submit(client, game, "查看时刻表并检定")
+    submit(client, game, "查看时刻表并检定；我冒着失去平衡的风险尝试。")
     cycle = wait(client, prefix)
     assert cycle["status"] == "waiting_for_review", cycle
     assert cycle["wait_reason"] == "host_review"

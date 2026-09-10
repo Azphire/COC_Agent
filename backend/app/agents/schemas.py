@@ -81,6 +81,10 @@ class CheckRequest(DomainModel):
 
 
 class PendingCheck(CheckRequest):
+    display_name: str = ""
+    ruleset_id: str = "coc7-character-creation"
+    policy_fingerprint: str = ""
+    policy_target_id: str | None = None
     id: UUID = Field(default_factory=uuid4)
     room_id: UUID
     slot_id: UUID

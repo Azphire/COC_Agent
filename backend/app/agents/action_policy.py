@@ -12,10 +12,10 @@ from app.agents.adjudication_schemas import (
     ValidatedAction,
     ValidatedActionPlan,
 )
+from app.agents.check_policy import CheckPolicyEvaluator, CheckProposal
 from app.agents.schemas import PlannedTool
 from app.module_ir.schemas import TransitionRequest
 from app.rooms.service import RoomError
-from app.rules.checks import check_value
 
 READ_TOOLS = frozenset(
     {
@@ -87,6 +87,9 @@ class ActionFacts:
     reveal_check_errors: dict = field(default_factory=dict)
     trusted_target_id: str | None = None
     host_review_approved: bool = False
+    revealed_entity_ids: set = field(default_factory=set)
+    completed_checks: list = field(default_factory=list)
+    check_state: dict = field(default_factory=dict)
 
 
 class ActionPolicyValidator:
@@ -331,20 +334,33 @@ class ActionPolicyValidator:
                             else:
                                 code, reason = "precondition_failed", facts.reveal_errors[target]
                     elif tool.name == "request_skill_check":
-                        card = facts.characters.get(data["target_member_id"])
-                        try:
-                            if not card:
-                                raise ValueError("unknown_character")
-                            check_value(card, data["kind"], data["name"])
-                        except ValueError:
-                            code, reason = "invalid_arguments", "检定必须引用本房间真实属性或技能"
-                        if data.get("clue_id") and data["clue_id"] not in facts.local_entity_ids:
-                            code, reason = "precondition_failed", "检定关联对象不属于当前场景"
-                        elif data.get("clue_id") and facts.reveal_check_errors.get(data["clue_id"]):
-                            code, reason = (
-                                "precondition_failed",
-                                facts.reveal_check_errors[data["clue_id"]],
-                            )
+                        proposal = plan.proposed_check or CheckProposal(**data)
+                        decision = CheckPolicyEvaluator().evaluate(proposal, intent, facts)
+                        result.check_decisions.append(decision)
+                        if not decision.allowed:
+                            code, reason = "precondition_failed", decision.reason
+                            if decision.requires_host_review:
+                                entity = facts.approved_entities[decision.target_entity_id]
+                                result.approved_actions.append(
+                                    ValidatedAction(
+                                        index=i,
+                                        phase="proposal",
+                                        tool=PlannedTool(
+                                            name="request_host_review",
+                                            arguments={
+                                                "request_type": "reveal_entity",
+                                                "entity_type": entity["type"],
+                                                "entity_id": decision.target_entity_id,
+                                                "proposed_title": entity["title"],
+                                                "proposed_public_summary": entity.get(
+                                                    "public_summary", ""
+                                                ),
+                                                "keeper_reason": decision.reason,
+                                            },
+                                        ),
+                                    )
+                                )
+                                result.required_interrupt = "host_review"
                     elif (
                         tool.name == "inspect_character"
                         and data["member_id"] not in facts.characters
