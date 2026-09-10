@@ -111,8 +111,10 @@ uv run --directory backend python -m app.main
 ```
 
 ```powershell
-npm --prefix frontend run dev
+npm.cmd --prefix frontend run dev
 ```
+
+Windows PowerShell 使用 `npm.cmd` 启动前端，避免本机 `npm.ps1` 丢失转发给 Vite 的参数。本机地址和端口已在前端配置中固定，不必再传 `--host`。
 
 运行以下命令在本机查看主机管理密钥，并在页面“主机解锁”中输入（不要向远程玩家分享）：
 
@@ -193,7 +195,7 @@ uv run --directory backend uvicorn app.main:app --host 127.0.0.1 --port 8000 --w
 ```
 
 ```powershell
-npm --prefix frontend run dev -- --host 0.0.0.0
+npm.cmd --prefix frontend run dev -- --host 0.0.0.0
 ```
 
 只有这个显式的前端启动命令监听 `0.0.0.0`；后端继续在回环地址，由 Vite 统一转发玩家请求。无需对局域网直接开放 8000，也无需逐个添加玩家 CORS 地址。后端自定义端口时同步修改 Vite 代理目标。
@@ -251,7 +253,7 @@ data/
 
 SQLite 默认为 `data/game.db`，启动时用 `metadata.create_all` 增量创建原有角色／房间八张表及第三批 Agent 九张表，保留已有数据；没有修改旧表列。房间修改在 SQLite `BEGIN IMMEDIATE` 事务中完成，数据库约束保障序号与幂等，提交后按权限广播。`CHECKPOINT_DB_PATH` 指定 LangGraph SQLite 文件；未配置时使用游戏数据库同目录的 `<数据库名>.checkpoints.db`。本地数据和数据库不提交，各数据目录用 `.gitkeep` 保留。
 
-已接入 SAN 自动遭遇、疯狂状态，以及普通检定的可选幸运消耗和孤注审批／结算，见 [规则与接口](docs/check-settlement-and-encounters.md)。尚未实现：完整 CoC 规则、全模组准备、对抗／组合检定、战斗／追逐／成长、远程角色上传、公网部署和多 worker 广播。当前支持本地文本 RAG、一个原创练习模组和已核对的最小属性／技能检定，不使用向量数据库或 embedding。
+已接入 SAN 自动遭遇、疯狂状态，以及普通检定的可选幸运消耗和孤注审批／结算，见 [规则与接口](docs/check-settlement-and-encounters.md)。亲自操作可按 [第十一批本机手测指南](docs/batch-11-manual-test.md) 建立隔离副本，验证幸运、自动 SAN、孤注与存档续算。尚未实现：完整 CoC 规则、全模组准备、对抗／组合检定、战斗／追逐／成长、远程角色上传、公网部署和多 worker 广播。当前支持本地文本 RAG、一个原创练习模组和已核对的最小属性／技能检定，不使用向量数据库或 embedding。
 
 ## 模组准备、主机审阅与调查板（第五批）
 
