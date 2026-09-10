@@ -7,6 +7,7 @@ from fastapi.responses import Response
 
 from app.auth import bearer, require_host
 from app.rooms import schemas as s
+from app.rooms.sanity_schemas import ResourceCorrection, SanityManagement, SanityRequest, SanityRoll
 from app.rooms.service import RoomService
 
 router = APIRouter(prefix="/api/rooms", tags=["rooms"])
@@ -19,6 +20,26 @@ def service(request: Request) -> RoomService:
 
 Service = Annotated[RoomService, Depends(service)]
 Token = Annotated[str, Depends(bearer)]
+
+
+@router.post("/{room_id}/sanity/encounters")
+async def sanity_request(room_id: UUID, body: SanityRequest, svc: Service, token: Token):
+    return await svc.command(room_id, token, "agent.sanity.request", body)
+
+
+@router.post("/{room_id}/sanity/checks/{check_id}/roll")
+async def sanity_roll(room_id: UUID, check_id: UUID, body: SanityRoll, svc: Service, token: Token):
+    return await svc.command(room_id, token, "agent.sanity.roll", body, check_id)
+
+
+@router.post("/{room_id}/sanity/manage")
+async def sanity_manage(room_id: UUID, body: SanityManagement, svc: Service, token: Token):
+    return await svc.command(room_id, token, "agent.sanity.manage", body)
+
+
+@router.post("/{room_id}/resources/correct")
+async def resource_correct(room_id: UUID, body: ResourceCorrection, svc: Service, token: Token):
+    return await svc.command(room_id, token, "agent.resource.correct", body)
 
 
 @router.post("", dependencies=[Depends(require_host)], status_code=201)

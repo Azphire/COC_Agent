@@ -36,7 +36,9 @@ READ_TOOLS = frozenset(
         "get_evidence_excerpt",
     }
 )
-PROPOSAL_TOOLS = frozenset({"request_skill_check", "propose_module_fact", "request_host_review"})
+PROPOSAL_TOOLS = frozenset(
+    {"request_skill_check", "request_sanity_check", "propose_module_fact", "request_host_review"}
+)
 STATE_TOOLS = frozenset({"reveal_entity", "reveal_clue", "transition_scene", "update_scene"})
 
 
@@ -343,6 +345,16 @@ class ActionPolicyValidator:
                                 pass
                             else:
                                 code, reason = "precondition_failed", facts.reveal_errors[target]
+                    elif tool.name == "request_sanity_check":
+                        entity = facts.approved_entities.get(data["entity_id"], {})
+                        if intent.type in {"recall", "out_of_character", "unknown"}:
+                            code, reason = "precondition_failed", "回顾或场外问题不是新的 SAN 遭遇"
+                        elif data["entity_id"] not in facts.local_entity_ids:
+                            code, reason = "permission_denied", "SAN 实体不属于当前场景"
+                        elif not any(
+                            e["id"] == data["effect_id"] for e in entity.get("sanity_effects", [])
+                        ):
+                            code, reason = "precondition_failed", "缺少批准 SAN 配置，请主机裁定"
                     elif tool.name == "request_skill_check":
                         proposal = plan.proposed_check or CheckProposal(**data)
                         decision = CheckPolicyEvaluator().evaluate(proposal, intent, facts)

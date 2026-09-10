@@ -222,7 +222,11 @@ def test_publish_only_finalized_and_immutable(client, character_settings):
     room = ok(client.post(prefix + "/character-slots", json={"character_id": sheet["id"]}))["room"]
     slot = room["character_slots"][0]
     assert slot["character_snapshot"] == sheet
-    assert room["session_state"]["characters"][slot["id"]] == {
+    assert {
+        k: v
+        for k, v in room["session_state"]["characters"][slot["id"]].items()
+        if k not in {"san_max", "sanity"}
+    } == {
         "hp": 12,
         "mp": 10,
         "san": 50,
@@ -440,6 +444,18 @@ def test_snapshot_restore_append_only_credentials_and_restart(client, lobby, cha
     assert client.post(p + f"/snapshots/{save['id']}/load").status_code == 409
     ok(client.post(p + "/pause"))
     room = ok(client.get(p))
+    room = ok(
+        client.post(
+            p + "/resources/correct",
+            json={
+                "expected_revision": room["revision"],
+                "slot_id": lobby["slots"][0],
+                "resource": "hp",
+                "value": 1,
+                "reason": "存档测试中的主机资源更正",
+            },
+        )
+    )["room"]
     changed = json.loads(json.dumps(original_state))
     changed["scene_title"] = "未来的场景"
     changed["characters"][lobby["slots"][0]]["hp"] = 1

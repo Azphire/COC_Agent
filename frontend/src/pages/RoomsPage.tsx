@@ -1,3 +1,4 @@
+import { SanityPanel } from '../components/SanityPanel'
 import { useEffect, useRef, useState } from 'react'
 import RoomTimelineEvent from '../components/RoomTimelineEvent'
 import { api, ApiError, authHeaders, hostToken, requestId, socketUrl } from '../api/session'
@@ -231,19 +232,18 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
         </article>)}
       </section>
       <AgentGamePanel room={room} token={token} acceptRoom={acceptRoom} />
+      <SanityPanel room={room} busy={busy} command={command} />
       <section><h2>当前场景</h2><h3 data-testid="scene-title">{room.session_state.scene_title || '尚未设置场景'}</h3><p className="preserve-lines">{room.session_state.scene_summary}</p>
         <p>回合：{room.session_state.round_number ?? '—'} · 当前行动：{room.character_slots.find(s => s.id === room.session_state.active_slot_id)?.public_summary.name || '—'}</p>
         {Object.entries(room.session_state.characters).map(([id, runtime]) => <p key={id} data-runtime-id={id}>{room.character_slots.find(s => s.id === id)?.public_summary.name} · HP {runtime.hp ?? '—'} / MP {runtime.mp ?? '—'} / SAN {runtime.san ?? '—'} / Luck {runtime.luck ?? '—'} · {runtime.conditions.join('、')}</p>)}
-        {isHost && ['running', 'paused'].includes(room.status) && <button disabled={busy} onClick={() => setEditing({ state: structuredClone(room.session_state), revision: room.revision })}>编辑场景与资源</button>}
+        {isHost && ['running', 'paused'].includes(room.status) && <button disabled={busy} onClick={() => setEditing({ state: structuredClone(room.session_state), revision: room.revision })}>编辑场景</button>}
         {editing && writable && <form onSubmit={async event => { event.preventDefault(); if (await command('/session-state', { expected_revision: editing.revision, state: editing.state }, 'PATCH')) setEditing(null) }}>
           <label>场景标题<input id="scene-title" maxLength={200} value={editing.state.scene_title} onChange={e => setEditing({ ...editing, state: { ...editing.state, scene_title: e.target.value } })} /></label>
           <label>场景摘要<textarea id="scene-summary" maxLength={2000} value={editing.state.scene_summary} onChange={e => setEditing({ ...editing, state: { ...editing.state, scene_summary: e.target.value } })} /></label>
           <div className="field-grid"><label>回合编号<input id="round-number" type="number" min={0} max={1000000} value={editing.state.round_number ?? ''} onChange={e => setEditing({ ...editing, state: { ...editing.state, round_number: e.target.value === '' ? null : Number(e.target.value) } })} /></label>
           <label>当前行动<select value={editing.state.active_slot_id || ''} onChange={e => setEditing({ ...editing, state: { ...editing.state, active_slot_id: e.target.value || null } })}><option value="">无</option>{room.character_slots.map(s => <option key={s.id} value={s.id}>{s.public_summary.name}</option>)}</select></label></div>
-          {Object.entries(editing.state.characters).map(([id, runtime]) => <fieldset key={id}><legend>{room.character_slots.find(s => s.id === id)?.public_summary.name}</legend><div className="field-grid">
-            {(['hp', 'mp', 'san', 'luck'] as const).map(key => <label key={key}>{key.toUpperCase()}<input aria-label={`${id}-${key}`} type="number" min={0} max={100000} value={runtime[key] ?? ''} onChange={e => setEditing({ ...editing, state: { ...editing.state, characters: { ...editing.state.characters, [id]: { ...runtime, [key]: e.target.value === '' ? null : Number(e.target.value) } } } })} /></label>)}
-            <label>状态（逗号分隔）<input value={runtime.conditions.join(',')} onChange={e => setEditing({ ...editing, state: { ...editing.state, characters: { ...editing.state.characters, [id]: { ...runtime, conditions: e.target.value ? e.target.value.split(',') : [] } } } })} /></label>
-          </div></fieldset>)}<div className="action-row"><button disabled={busy}>保存场景与资源</button><button type="button" onClick={() => setEditing(null)}>取消编辑</button></div>
+          {Object.entries(editing.state.characters).map(([id, runtime]) => <label key={id}>{room.character_slots.find(s => s.id === id)?.public_summary.name} · 状态（逗号分隔）<input value={runtime.conditions.join(',')} onChange={e => setEditing({ ...editing, state: { ...editing.state, characters: { ...editing.state.characters, [id]: { ...runtime, conditions: e.target.value ? e.target.value.split(',') : [] } } } })} /></label>)}
+          <div className="action-row"><button disabled={busy}>保存场景</button><button type="button" onClick={() => setEditing(null)}>取消编辑</button></div>
         </form>}
       </section>
       {isHost && <section><h2>存档</h2>{['running', 'paused'].includes(room.status) && <form onSubmit={event => { event.preventDefault(); void command('/snapshots', { name: saveName }) }}><label>存档名称<input id="save-name" maxLength={120} value={saveName} onChange={e => setSaveName(e.target.value)} required /></label><button disabled={busy}>创建存档</button></form>}

@@ -1,8 +1,9 @@
 import type { Character } from './characters'
 import type { GameState } from './agents'
 
-export type Runtime = { hp: number | null; mp: number | null; san: number | null; luck: number | null; conditions: string[] }
-export type SessionState = { version: 1; scene_title: string; scene_summary: string; round_number: number | null; active_slot_id: string | null; characters: Record<string, Runtime> }
+export type SanityState = { kind: string; phase: string; symptom: string; day_start_san: number | null; day_loss: number; ends_minute: number | null; bout_end_minute: number | null; bout_end_round: number | null; history: Record<string, unknown>[] }
+export type Runtime = { hp: number | null; mp: number | null; san: number | null; san_max: number | null; sanity: SanityState; luck: number | null; conditions: string[] }
+export type SessionState = { version: 1; game_minute: number; game_round: number; sanity_day: number; scene_title: string; scene_summary: string; round_number: number | null; active_slot_id: string | null; characters: Record<string, Runtime> }
 export type Member = { id: string; display_name: string; role: 'host' | 'player'; controller_type: 'human' | 'agent'; access_type: 'host_managed' | 'remote'; ready: boolean; active: boolean; slot_id: string | null; last_seen_at: string | null }
 export type Slot = { id: string; member_id: string | null; public_summary: { name: string; age: number | null; occupation: string | null; ruleset_id: string }; character_snapshot?: Character }
 export type Room = { id: string; name: string; status: 'lobby' | 'running' | 'paused' | 'ended'; host_member_id: string; revision: number; latest_seq: number; state_version: number; self_member_id: string; is_host: boolean; session_state: SessionState; members: Member[]; character_slots: Slot[]; game?: GameState }

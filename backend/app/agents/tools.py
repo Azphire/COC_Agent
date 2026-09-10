@@ -27,6 +27,7 @@ from app.persistence.agent_models import (
     ToolReceipt,
 )
 from app.preparation.schemas import EntityArgs, ProposalArgs
+from app.rooms.sanity_schemas import SanityRequest
 from app.rooms.service import RoomError, require
 
 
@@ -43,6 +44,11 @@ KEEPER, INVESTIGATOR, BOTH = (
     frozenset({"keeper", "investigator"}),
 )
 TOOLS = {
+    "request_sanity_check": ToolDefinition(
+        SanityRequest,
+        KEEPER,
+        "请求批准实体的 SAN 效果；复制 effect_id 和具体遭遇事件 seq，不接受损失点数",
+    ),
     "get_current_scene": ToolDefinition(s.Empty, KEEPER, "按权威导航读取当前场景"),
     "list_scene_contents": ToolDefinition(s.Empty, KEEPER, "当前场景内的节点与区块索引"),
     "open_module_node": ToolDefinition(NodeArgs, KEEPER, "读取当前、祖先或显式关联节点的受限内容"),
@@ -389,7 +395,13 @@ class AgentTools:
                 None,
             )
             require(slot is not None, "角色不在本房间", 404)
-            return slot.character_snapshot
+            return {
+                **slot.character_snapshot,
+                "runtime": room.session_state.get("characters", {}).get(slot.id, {}),
+            }
+        if name == "request_sanity_check":
+            record = await service.sanity.request(session, room, args, run)
+            return {"check_id": record.id, "status": record.status}
         if name == "request_skill_check":
             if args.visibility != "host_only":
                 ensure_public_text(module, args.reason)

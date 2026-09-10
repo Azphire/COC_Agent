@@ -82,6 +82,8 @@ class CheckRequest(DomainModel):
 
 
 class PendingCheck(CheckRequest):
+    sanity_rewound: bool = False
+    sanity: dict | None = None
     display_name: str = ""
     ruleset_id: str = "coc7-character-creation"
     policy_fingerprint: str = ""
@@ -161,6 +163,7 @@ class CycleStage(DomainModel):
 
 
 class AgentCycleState(TypedDict):
+    sanity_restore: bool
     request_category: str
     schema_version: int
     requires_clarification: bool

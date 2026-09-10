@@ -39,6 +39,7 @@ PLAN_INSTRUCTION = (
     "需要公开实体填写proposed_reveal_entity_ids；需要实际移动才从approved_exits复制"
     "proposed_transition_id与目标。只读或主机审阅需求填proposed_tool_calls；"
     "不要重复高层字段对应的工具。没有引用的source字段留空，entity_id和evidence_id不能混用。"
+    "若sanity_effects存在本次遭遇，使用request_sanity_check，参数只复制target_member_id、entity_id、effect_id、source_event_seq；SAN不填proposed_check，不指定扣点。缺少配置则请求主机裁定。"
     "检定提案复制目标到target_entity_id和basis_entity_id（实体检定也填clue_id），necessity为required，填写uncertainty、success_effect、failure_consequence；风险行动还填写原文risk_quote和rule_topic_id=coc7.skill_check。没有必要则proposed_check=null。规则问题分别填rule_concepts。最多四个动作。"
 )
 NARRATION_INSTRUCTION = (
@@ -86,6 +87,24 @@ class ActionRuntimeMixin:
                 continue
             async with self.rooms.database.sessions() as session:
                 binding = await session.get(RoomAgentBinding, binding_id)
+                room = await self.rooms.room(session, state["room_id"])
+                slot = next(
+                    (
+                        s
+                        for s in await self.rooms.slots(session, room)
+                        if s.member_id == binding.member_id
+                    ),
+                    None,
+                )
+                if slot:
+                    sanity = (
+                        room.session_state.get("characters", {}).get(slot.id, {}).get("sanity", {})
+                    )
+                    if sanity.get("kind") == "permanent" or sanity.get("phase") in {
+                        "bout",
+                        "awaiting_symptom",
+                    }:
+                        continue
                 behavior_row = await session.get(
                     AgentBehaviorRecord, (state["room_id"], binding.member_id)
                 )
@@ -395,6 +414,22 @@ class ActionRuntimeMixin:
                     and (facts.trusted_target_id == eid or e["title"] in facts.raw_text)
                 ]
                 from app.agents.action_policy import explicit_movement
+
+                sanity_effects = [
+                    {
+                        "entity_id": eid,
+                        "effect_id": effect["id"],
+                        "encounter": effect["encounter"],
+                        "source_event_seq": cycle.state["triggering_event_seq"],
+                        "target_member_id": facts.actor_member_id,
+                    }
+                    for eid, entity in facts.approved_entities.items()
+                    if eid in facts.local_entity_ids and eid == facts.trusted_target_id
+                    for effect in entity.get("sanity_effects", [])
+                    if effect["trigger"] == "action_target"
+                ]
+                if sanity_effects:
+                    context["sanity_effects"] = sanity_effects
 
                 context["approved_exits"] = [
                     {
@@ -946,7 +981,7 @@ class ActionRuntimeMixin:
 
     async def create_checks(self, state):
         state = await self.node(state, "create_checks")
-        return await self._execute_phase(state, {"request_skill_check"})
+        return await self._execute_phase(state, {"request_skill_check", "request_sanity_check"})
 
     async def execute_state_tools(self, state):
         state = await self.node(state, "execute_state_tools")

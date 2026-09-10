@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import Field, SecretStr, StrictBool, StrictInt, StringConstraints
 
 from app.domain.character import DomainModel
+from app.rooms.sanity_schemas import SanityState
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
 ShortText = Annotated[str, StringConstraints(max_length=2000)]
@@ -17,12 +18,17 @@ class CharacterRuntimeV1(DomainModel):
     mp: Resource = None
     san: Resource = None
     luck: Resource = None
+    san_max: Resource = None
+    sanity: SanityState = Field(default_factory=SanityState)
     conditions: list[Annotated[str, StringConstraints(min_length=1, max_length=120)]] = Field(
         default_factory=list, max_length=30
     )
 
 
 class SessionStateV1(DomainModel):
+    game_minute: Annotated[StrictInt, Field(ge=0, le=1_000_000)] = 0
+    game_round: Annotated[StrictInt, Field(ge=0, le=1_000_000)] = 0
+    sanity_day: Annotated[StrictInt, Field(ge=0, le=1_000_000)] = 0
     version: Annotated[StrictInt, Field(ge=1, le=1)] = 1
     scene_title: str = Field(default="", max_length=200)
     scene_summary: ShortText = ""

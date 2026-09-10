@@ -174,6 +174,31 @@ class AgentRuntime(ActionRuntimeMixin):
                 await answer_rule_question(self, state)
                 return
             config = {"configurable": {"thread_id": cycle_id}, "recursion_limit": 30}
+            if state.get("request_category") == "san_encounter":
+                if pending and pending.status == "pending":
+                    async with self.rooms.database.sessions() as session:
+                        member = await session.get(RoomMember, pending.target_member_id)
+                    if member.controller_type == "agent":
+                        await self.resolve_sanity_automatic(room_id, pending.id)
+                return
+            if state.get("sanity_restore"):
+                if pending and pending.status == "pending":
+                    async with self.rooms.database.sessions() as session:
+                        member = await session.get(RoomMember, pending.target_member_id)
+                    if member.controller_type == "agent":
+                        await self.resolve_sanity_automatic(room_id, pending.id)
+                        async with self.rooms.database.sessions() as session:
+                            pending = await session.get(CheckRecord, pending.id)
+                if not pending or pending.status != "resolved":
+                    return
+                state = {**state, "sanity_restore": False, "status": "running"}
+
+                async def restore_progress(session, room):
+                    cycle = await session.get(AgentCycle, cycle_id)
+                    cycle.status, cycle.state = "running", state
+
+                await self.service.mutate(room_id, restore_progress)
+                await self.graph.aupdate_state(config, state, as_node="wait_for_human_roll")
             saved = await self.graph.aget_state(config)
             if saved.interrupts:
                 if state.get("wait_reason") == "host_review":
@@ -882,6 +907,24 @@ class AgentRuntime(ActionRuntimeMixin):
             member = await session.get(RoomMember, check.target_member_id)
             automatic = member.controller_type == "agent"
         if automatic:
+            async with self.rooms.database.sessions() as session:
+                record = await session.get(CheckRecord, check_id)
+                sanity = bool(record.document.get("sanity"))
+            if sanity:
+                await self.resolve_sanity_automatic(state["room_id"], check_id)
+                async with self.rooms.database.sessions() as session:
+                    record = await session.get(CheckRecord, check_id)
+                    if record.status != "resolved":
+                        interrupt({"wait_reason": "sanity_symptom", "check_id": check_id})
+
+                async def sanity_resumed(session, room):
+                    cycle = await session.get(AgentCycle, state["cycle_id"])
+                    cycle.status = "running"
+                    cycle.state = {**cycle.state, "status": "running", "wait_reason": None}
+                    self.service.cycle_event(session, room, cycle)
+
+                await self.service.mutate(state["room_id"], sanity_resumed)
+                return await self.current(state)
 
             async def operation(session, room):
                 check = await session.get(CheckRecord, check_id)
@@ -919,6 +962,33 @@ class AgentRuntime(ActionRuntimeMixin):
 
             await self.service.mutate(state["room_id"], resumed)
         return await self.current(state)
+
+    async def resolve_sanity_automatic(self, room_id, check_id):
+        for _ in range(5):
+
+            async def operation(session, room):
+                record = await session.get(CheckRecord, check_id)
+                if record.status != "pending":
+                    return False
+                if record.document["sanity"]["stage"] == "symptom":
+                    cycle = await session.get(AgentCycle, record.cycle_id)
+                    if (
+                        cycle.status != "waiting_for_roll"
+                        or cycle.state.get("wait_reason") != "sanity_symptom"
+                    ):
+                        cycle.status = "waiting_for_roll"
+                        cycle.state = {
+                            **cycle.state,
+                            "status": "waiting_for_roll",
+                            "wait_reason": "sanity_symptom",
+                        }
+                        self.service.cycle_event(session, room, cycle)
+                    return False
+                await self.service.resolve_check(session, room, record, automatic=True)
+                return record.status == "pending"
+
+            if not await self.service.mutate(room_id, operation):
+                break
 
     async def resolve_keeper_response(self, state):
         state = await self.node(state, "resolve_keeper_response")

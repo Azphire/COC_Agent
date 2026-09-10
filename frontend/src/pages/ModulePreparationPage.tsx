@@ -100,25 +100,26 @@ function EntityEditor({ entity, token, busy, command, initial, onInitial, requir
   const [keeper, setKeeper] = useState(entity.keeper_summary)
   const [summary, setSummary] = useState(entity.public_summary)
   const [visibility, setVisibility] = useState(entity.initial_visibility)
+  const [sanity, setSanity] = useState(JSON.stringify(entity.sanity_effects || [], null, 2))
   const [checks, setChecks] = useState(JSON.stringify(entity.suggested_checks, null, 2))
   const [accessPolicy, setAccessPolicy] = useState(entity.reveal_conditions.access_policy || (entity.reveal_conditions.successful_check ? 'requires_check' : entity.reveal_conditions.required_entity_ids.length ? 'requires_condition' : 'automatic'))
   const [conditions, setConditions] = useState(JSON.stringify(entity.reveal_conditions, null, 2))
   const [evidence, setEvidence] = useState<{ evidence_id: string; excerpt: string; source_title: string; physical_page: number | null }[]>([])
   const [error, setError] = useState('')
   const editable = entity.status === 'draft'
-  const dirty = accessPolicy !== (entity.reveal_conditions.access_policy || (entity.reveal_conditions.successful_check ? 'requires_check' : entity.reveal_conditions.required_entity_ids.length ? 'requires_condition' : 'automatic')) || title !== entity.title || type !== entity.type || keeper !== entity.keeper_summary || summary !== entity.public_summary || visibility !== entity.initial_visibility || checks !== JSON.stringify(entity.suggested_checks, null, 2) || conditions !== JSON.stringify(entity.reveal_conditions, null, 2)
+  const dirty = sanity !== JSON.stringify(entity.sanity_effects || [], null, 2) || accessPolicy !== (entity.reveal_conditions.access_policy || (entity.reveal_conditions.successful_check ? 'requires_check' : entity.reveal_conditions.required_entity_ids.length ? 'requires_condition' : 'automatic')) || title !== entity.title || type !== entity.type || keeper !== entity.keeper_summary || summary !== entity.public_summary || visibility !== entity.initial_visibility || checks !== JSON.stringify(entity.suggested_checks, null, 2) || conditions !== JSON.stringify(entity.reveal_conditions, null, 2)
   return <article className="entity-card" data-entity-id={entity.id}>
     <h4>{entityLabels[entity.type]} · {entity.title} {initial && '· 初始场景'}</h4><p>{entity.status} · v{entity.version} · {entity.generated_by === 'model' ? '模型草稿' : '主机创建'} {entity.host_edited && '· 主机已编辑'} · 置信度 {entity.confidence ?? '未提供'}</p>
     <form onSubmit={e => {
       e.preventDefault(); setError('')
-      try { void command(`/module-entities/${entity.id}`, { title, type, keeper_summary: keeper, public_summary: summary, initial_visibility: visibility, suggested_checks: JSON.parse(checks), reveal_conditions: { ...JSON.parse(conditions), access_policy: accessPolicy } }, 'PATCH') }
+      try { void command(`/module-entities/${entity.id}`, { title, type, keeper_summary: keeper, public_summary: summary, initial_visibility: visibility, sanity_effects: JSON.parse(sanity), suggested_checks: JSON.parse(checks), reveal_conditions: { ...JSON.parse(conditions), access_policy: accessPolicy } }, 'PATCH') }
       catch { setError('检定和公开条件必须填写有效 JSON；字段规则由服务器校验。') }
     }}>
       <label>类型<select value={type} disabled={!editable} onChange={e => setType(e.target.value as EntityType)}>{Object.entries(entityLabels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label><label>标题<input value={title} maxLength={120} disabled={!editable} onChange={e => setTitle(e.target.value)} /></label>
       <label>主机摘要<textarea value={keeper} maxLength={1600} disabled={!editable} onChange={e => setKeeper(e.target.value)} /></label><label>公开摘要<textarea aria-label={`公开摘要 ${entity.title}`} value={summary} maxLength={1000} disabled={!editable} onChange={e => setSummary(e.target.value)} /></label>
       <label>访问策略<select value={accessPolicy} disabled={!editable} onChange={e => setAccessPolicy(e.target.value as typeof accessPolicy)}><option value="automatic">直接获取，无需检定</option><option value="requires_check">需要已配置的检定</option><option value="requires_condition">需要满足公开条件</option><option value="host_review">需要主机审阅</option></select></label>
       <label>初始可见性<select value={visibility} disabled={!editable} onChange={e => setVisibility(e.target.value)}><option value="hidden">隐藏，等待游戏中揭示</option><option value="revealed">绑定时公开</option></select></label>
-      <details><summary>编辑检定与公开条件</summary><p>实体引用填写本任务的实体 ID；留空表示没有额外限制。检定名称使用角色卡技能键。</p><label>建议检定（JSON）<textarea value={checks} disabled={!editable} onChange={e => setChecks(e.target.value)} /></label><label>公开条件（JSON）<textarea value={conditions} disabled={!editable} onChange={e => setConditions(e.target.value)} /></label></details>
+      <details><summary>编辑检定与公开条件</summary><p>实体引用填写本任务的实体 ID；留空表示没有额外限制。检定名称使用角色卡技能键。</p><label>SAN 效果（JSON，保存后重新批准）<textarea value={sanity} disabled={!editable} onChange={e => setSanity(e.target.value)} /></label><p>每项填写 id、encounter、trigger（action_target / entity_revealed）、success_loss、failure_loss、source、page、basis、visibility。常数与骰式只接受非负结果；请按来源明确配置。</p><label>建议检定（JSON）<textarea value={checks} disabled={!editable} onChange={e => setChecks(e.target.value)} /></label><label>公开条件（JSON）<textarea value={conditions} disabled={!editable} onChange={e => setConditions(e.target.value)} /></label></details>
       <button disabled={busy || !editable}>保存编辑</button>{dirty && <p>有未保存的修改，请保存后再批准。</p>}
     </form>
     <p>建议检定：{entity.suggested_checks.map(c => `${c.name} (${c.difficulty})`).join('、') || '无'}</p><details><summary>公开条件</summary><pre>{JSON.stringify(entity.reveal_conditions, null, 2)}</pre></details>

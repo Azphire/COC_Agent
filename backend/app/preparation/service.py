@@ -207,6 +207,16 @@ class PreparationService:
             prep.status = "review_ready"
 
     async def validation_errors(self, session, prep, entity):
+        from app.rules.sanity import RULE_SOURCE
+
+        for effect in entity.document.get("sanity_effects", []):
+            if effect["source"] == RULE_SOURCE:
+                if effect["page"] not in {77, *range(130, 145)}:
+                    return ["SAN 规则来源不在本批已核对页码中"]
+            elif effect["source"] != "module:" + prep.source_hash:
+                return ["SAN 来源须为已核对规则版本或本准备模组的 source hash"]
+            elif effect["page"] not in entity.document.get("source_pages", []):
+                return ["SAN 模组页码须属于实体来源页"]
         pre = entity.document.get("reveal_conditions", {})
         access = pre.get("access_policy")
         if access == "automatic" and (
@@ -276,7 +286,11 @@ class PreparationService:
             if action == "edit":
                 require(entity.status == "draft", "请先返回 draft 再编辑")
                 updates = self.safe(body.model_dump(exclude_unset=True, exclude_none=True))
-                fields = {k: entity.document[k] for k in s.EntityFields.model_fields}
+                fields = {
+                    k: entity.document[k]
+                    for k in s.EntityFields.model_fields
+                    if k in entity.document
+                }
                 fields = s.EntityFields.model_validate({**fields, **updates}).model_dump()
                 entity.type = fields["type"]
                 entity.document = {**entity.document, **fields, "host_edited": True}

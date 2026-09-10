@@ -112,10 +112,10 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
       </form>}
       <div className="check-list">{game.checks.map(check => <article key={check.id} className="check-card" data-check-id={check.id}>
         <h3>{check.display_name || check.name}检定</h3>
-        <p>{check.display_text}</p><p>{room.members.find(m => m.id === check.target_member_id)?.display_name} · 数值 {check.value} · {difficultyLabels[check.difficulty]} · 奖励骰 {check.bonus_dice} / 惩罚骰 {check.penalty_dice}</p><p>{check.reason}</p>
-        {check.status === 'pending' ? <button disabled={busy || room.status !== 'running' || (!room.is_host && room.self_member_id !== check.target_member_id)} onClick={() => void command(`/checks/${check.id}/roll`, {})}>掷骰完成检定</button> : check.status === 'cancelled' ? <p>检定已取消</p> : <>
-          <p>个位 {check.dice?.units} · 十位 [{check.dice?.tens.join(', ')}] · 候选 [{check.dice?.candidates.join(', ')}]</p>
-          <p><strong>{check.result?.total} · {resultLabels[check.result?.level || '']}</strong> · 本次目标 {check.result?.threshold} · {check.result?.passed ? '通过' : '未通过'}</p>
+        <p>{check.display_text}</p><p>{room.members.find(m => m.id === check.target_member_id)?.display_name} · 数值 {check.value}{check.sanity ? ' · SAN 二元判定' : ` · ${difficultyLabels[check.difficulty]} · 奖励骰 ${check.bonus_dice} / 惩罚骰 ${check.penalty_dice}`}</p><p>{check.reason}</p>
+        {check.status === 'pending' && check.sanity?.stage === 'symptom' ? <p>请主机在理智面板确认症状。</p> : check.status === 'pending' ? <button disabled={busy || room.status !== 'running' || (!room.is_host && room.self_member_id !== check.target_member_id)} onClick={() => void command(check.sanity ? `/sanity/checks/${check.id}/roll` : `/checks/${check.id}/roll`, check.sanity ? { expected_stage: check.sanity.stage } : {})}>{check.sanity ? `确认当前阶段：${check.sanity.stage}` : '掷骰完成检定'}</button> : check.status === 'cancelled' ? <p>检定已取消</p> : <>
+          {!check.sanity && <p>个位 {check.dice?.units} · 十位 [{check.dice?.tens?.join(', ')}] · 候选 [{check.dice?.candidates?.join(', ')}]</p>}
+          {!check.sanity && <p><strong>{check.result?.total} · {resultLabels[check.result?.level || '']}</strong> · 本次目标 {check.result?.threshold} · {check.result?.passed ? '通过' : '未通过'}</p>}
         </>}
       </article>)}</div>
       <h3>已公开线索</h3>{game.module.clues.length === 0 ? <p>尚未发现线索。</p> : game.module.clues.map(clue => <article key={clue.id}><h4>{clue.title}</h4><p>{clue.content}</p></article>)}

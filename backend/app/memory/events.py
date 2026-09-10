@@ -3,6 +3,9 @@
 from collections import Counter
 
 STORY_TYPES = {
+    "sanity.progressed",
+    "sanity.involuntary",
+    "sanity.state_changed",
     "action.submitted",
     "action.clarification_requested",
     "keeper.narration",

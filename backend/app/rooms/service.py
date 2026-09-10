@@ -383,7 +383,15 @@ class RoomService:
             await self.broadcast(room_id, events)
             if self.agent_service:
                 runtime = self.agent_service.runtime
-                if action in {"agent.action", "agent.check.roll", "agent.retry", "resume"}:
+                if action in {
+                    "agent.action",
+                    "agent.check.roll",
+                    "agent.retry",
+                    "resume",
+                    "agent.sanity.request",
+                    "agent.sanity.roll",
+                    "agent.sanity.manage",
+                }:
                     runtime.schedule(room_id)
                 elif action in {"agent.cancel", "agent.check.cancel"}:
                     runtime.cancel_task(room_id)
@@ -544,7 +552,10 @@ class RoomService:
             session.add(slot)
             state = SessionStateV1.model_validate(room.session_state)
             state.characters[UUID(slot.id)] = CharacterRuntimeV1(
-                **{key: character.derived_values.get(key) for key in ("hp", "mp", "san", "luck")}
+                san_max=max(0, 99 - character.skill_values.get("cthulhu_mythos", 0))
+                if character.ruleset_id == "coc7-character-creation"
+                else None,
+                **{key: character.derived_values.get(key) for key in ("hp", "mp", "san", "luck")},
             )
             room.session_state = state.model_dump(mode="json")
             self.append(
@@ -617,6 +628,26 @@ class RoomService:
         elif action == "state.patch":
             require(room.status in ("running", "paused"), "游戏开始后才能修改会话状态")
             require(body.expected_revision == room.revision, "房间已更新，请重新加载状态后编辑")
+            previous_state = SessionStateV1.model_validate(room.session_state)
+            require(
+                {k: c.model_dump(exclude={"conditions"}) for k, c in body.state.characters.items()}
+                == {
+                    k: c.model_dump(exclude={"conditions"})
+                    for k, c in previous_state.characters.items()
+                },
+                "资源更正请使用专用资源事务；疯狂状态请使用 SAN 管理接口",
+                422,
+            )
+            require(
+                (body.state.game_minute, body.state.game_round, body.state.sanity_day)
+                == (
+                    previous_state.game_minute,
+                    previous_state.game_round,
+                    previous_state.sanity_day,
+                ),
+                "游戏时间请使用 SAN 管理接口",
+                422,
+            )
             require(
                 set(map(str, body.state.characters)) == set(slot_by_id),
                 "运行时角色必须与已发布席位一致",

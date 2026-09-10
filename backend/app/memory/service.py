@@ -116,6 +116,8 @@ async def write_memory(session, rooms, room, binding, profile, args):
 async def build_context(
     service, session, room, binding, profile, cycle, phase=None, additions=None, run_id=None
 ):
+    from app.rooms.sanity_service import runtime_context
+
     phase = phase or cycle.state["current_node"]
     narrator = phase in {"narrate_publicly", "generate_keeper_narration"}
     keeper = profile.role == "keeper" and not narrator
@@ -139,6 +141,7 @@ async def build_context(
                 {
                     "member_id": slot.member_id,
                     "slot_id": slot.id,
+                    "runtime": runtime_context(room, slot.id),
                     **{
                         k: card[k]
                         for k in ("name", "occupation", "effective_attributes", "skill_values")
@@ -152,7 +155,9 @@ async def build_context(
             card
             if card["member_id"] == actor_id
             else {
-                k: v for k, v in card.items() if k not in {"effective_attributes", "skill_values"}
+                k: v
+                for k, v in card.items()
+                if k not in {"effective_attributes", "skill_values", "runtime"}
             }
             for card in cards
         ]
@@ -206,7 +211,7 @@ async def build_context(
                 else {
                     k: v
                     for k, v in card.items()
-                    if k not in {"effective_attributes", "skill_values"}
+                    if k not in {"effective_attributes", "skill_values", "runtime"}
                 }
                 for card in cards
             ]
@@ -252,6 +257,25 @@ async def build_context(
                     item["reveal_conditions"] = conditions
                 if entity["suggested_checks"]:
                     item["suggested_checks"] = entity["suggested_checks"]
+            # Reserve approved encounter identifiers before selecting scene evidence.
+            # Action validation subsequently narrows these to the current scene.
+            if phase == "plan_keeper_action":
+                target = (trigger or {}).get("payload", {}).get("target_entity_id")
+                effects = [
+                    {
+                        "entity_id": entity["id"],
+                        "effect_id": effect["id"],
+                        "encounter": effect["encounter"],
+                        "source_event_seq": cycle.state["triggering_event_seq"],
+                        "target_member_id": actor_id,
+                    }
+                    for entity in entities
+                    if entity["id"] == target
+                    for effect in entity.get("sanity_effects", [])
+                    if effect["trigger"] == "action_target"
+                ]
+                if effects:
+                    context["sanity_effects"] = effects
             context["review_result"] = cycle.state.get("review_result")
         else:
             visible = public_module(module)

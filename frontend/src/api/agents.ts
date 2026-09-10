@@ -7,6 +7,7 @@ export type AgentProfileInput = {
 }
 export type AgentProfile = AgentProfileInput & { id: string; created_at: string; updated_at: string }
 export type Check = {
+  sanity?: { stage: string; before: number; after: number | null; loss: number | null; immune: boolean } | null;
   id: string; target_member_id: string; name: string; display_name?: string; display_text?: string; kind: string; value: number;
   difficulty: 'regular' | 'hard' | 'extreme'; bonus_dice: number; penalty_dice: number;
   reason: string; visibility: string; status: 'pending' | 'resolved' | 'cancelled';
@@ -14,6 +15,7 @@ export type Check = {
   result: { total: number; threshold: number; level: string; passed: boolean; outcome: string } | null;
 }
 export type GameState = {
+  host_entities?: { id: string; title: string; sanity_effects?: { id: string; encounter: string; success_loss: string; failure_loss: string; source: string; page: number }[] }[];
   conversation_targets?: PublicEntity[];
   public_entities?: PublicEntity[];
   preparation?: { id: string; version: number; source_hash: string };
