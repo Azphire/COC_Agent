@@ -54,6 +54,7 @@ class ModuleInput(DomainModel):
 
 class ActionInput(DomainModel):
     text: Text
+    category: Literal["investigation", "rule_question"] = "investigation"
     client_request_id: UUID
     actor_member_id: UUID | None = None
     target_entity_id: str | None = Field(default=None, max_length=100)
@@ -160,6 +161,7 @@ class CycleStage(DomainModel):
 
 
 class AgentCycleState(TypedDict):
+    request_category: str
     schema_version: int
     requires_clarification: bool
     clarification_question: str | None

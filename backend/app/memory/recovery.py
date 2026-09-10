@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from app.agents.adjudication_schemas import SummaryRecoveryState
 from app.agents.schemas import SummaryOutput
 from app.domain.character import utc_now
+from app.memory.events import current_participants, story_events
 from app.persistence.adjudication_models import SummaryRecoveryRecord
 from app.persistence.agent_models import AgentCycle, AgentMemory, AgentRun, ProfileRecord
 from app.rooms.service import Identity, require
@@ -17,7 +18,8 @@ from app.rooms.service import Identity, require
 SUMMARY_INSTRUCTION = (
     "只依据这批列出的可见事件和旧摘要更新简短摘要，区分事实与推测；"
     "不得添加新的实体、证据或事件 ID，不推断事件列表之后的安排。"
-    "角色发布和角色分配是不同事件；只有明确的分配事件才能说已分配。"
+    "只总结剧情；不要保留旧摘要中的初始化、房间管理和角色发布或分配安排。"
+    "current_participants是当前权威状态，旧摘要不能覆盖它，不把发布角色推断为已分配。"
     "不确定的安排直接省略。返回 content，不输出推理。"
 )
 
@@ -81,14 +83,7 @@ class SummaryRecoveryService:
                 events = await self.agents.rooms.events(
                     session, room, Identity(binding.member_id, profile.role == "keeper")
                 )
-                events = [
-                    e
-                    for e in events
-                    if not e["type"].startswith(
-                        ("agent.", "snapshot.", "invite.", "module.context")
-                    )
-                    or e["type"] in {"agent.spoke", "agent.action_proposed"}
-                ]
+                events, selection = story_events(events)
                 old = await session.scalar(
                     select(AgentMemory)
                     .where(
@@ -102,6 +97,16 @@ class SummaryRecoveryService:
                 )
                 cutoff = old.coverage_end if old else 0
                 unsummarized = [e for e in events if e["seq"] > cutoff]
+                cycle.state = {
+                    **cycle.state,
+                    "summary_selection": {
+                        **selection,
+                        "unsummarized_count": len(unsummarized),
+                        "eligible_count": 0,
+                        "selected_count": 0,
+                        "selected_seqs": [],
+                    },
+                }
                 if (
                     not manual
                     and not recovery.stale
@@ -128,6 +133,7 @@ class SummaryRecoveryService:
                 context = {
                     "phase": "summary",
                     "previous_summary": old.content if old else None,
+                    "current_participants": await current_participants(self.agents, session, room),
                     "events": [],
                 }
                 budget = min(
@@ -144,11 +150,21 @@ class SummaryRecoveryService:
                     if len(json.dumps(proposed, ensure_ascii=False)) > budget:
                         break
                     context = proposed
-                require(context["events"], "摘要事件超过预算")
+                covered = context["events"] or eligible[:1]
                 recovery.pending_start_seq, recovery.pending_end_seq = (
-                    context["events"][0]["seq"],
-                    context["events"][-1]["seq"],
+                    covered[0]["seq"],
+                    covered[-1]["seq"],
                 )
+                cycle.state = {
+                    **cycle.state,
+                    "summary_selection": {
+                        **selection,
+                        "unsummarized_count": len(unsummarized),
+                        "eligible_count": len(eligible),
+                        "selected_count": len(context["events"]),
+                        "selected_seqs": [e["seq"] for e in context["events"]],
+                    },
+                }
                 recovery.last_attempted_cycle, recovery.last_attempted_time = cycle.id, utc_now()
                 recovery.next_retry_cycle = ordinal + 1
                 recovery.last_successful_summary_seq = cutoff
@@ -190,6 +206,7 @@ class SummaryRecoveryService:
                 if not prepared:
                     continue
                 context, old_id, role = prepared
+                require(context["events"], "摘要首个未处理剧情事件超过预算")
                 calls = 0
 
                 async def once():

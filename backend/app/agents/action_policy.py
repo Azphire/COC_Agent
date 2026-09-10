@@ -107,6 +107,16 @@ class ActionPolicyValidator:
             return "clarification_required", "行动意图不明确"
         if intent.type == "out_of_character":
             return None
+        if intent.type == "recall":
+            from app.module_ir.facts import recalling
+
+            if not recalling(facts.raw_text) or (
+                intent.target_id and intent.target_id not in facts.revealed_entity_ids
+            ):
+                return "clarification_required", "只能回顾实际公开过的信息"
+            if facts.trusted_target_id and intent.target_id != facts.trusted_target_id:
+                return "clarification_required", "回顾目标与玩家所选目标不一致"
+            return None
         if facts.trusted_target_id and intent.target_id != facts.trusted_target_id:
             return "clarification_required", "计划目标与玩家所选目标不一致"
         candidates = [
@@ -184,8 +194,8 @@ class ActionPolicyValidator:
                 for i, t in enumerate(actions)
             ]
             return result
-        if intent.type == "out_of_character":
-            result.validation_reasons.append("场外讨论不执行角色行动或检定")
+        if intent.type in {"out_of_character", "recall"}:
+            result.validation_reasons.append("场外讨论或回顾不执行角色行动或检定")
             return result
         if plan.current_scene_id != facts.scene_id:
             result.status = "rejected"

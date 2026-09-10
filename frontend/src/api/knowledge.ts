@@ -1,4 +1,4 @@
 export type SourceRef = { source_id: string; source_hash: string }
 export type KnowledgeSource = SourceRef & { title: string; kind: string; edition: string; extraction_status: string; page_count: number; extracted_pages: number; chunk_count: number; indexed_at: string; error_summary: string | null; files: { name: string; type: string; status: string; page_count?: number; extracted_pages?: number }[] }
 export type KnowledgeBinding = { enabled: boolean; rules: SourceRef[]; module: SourceRef | null; knowledge_missing?: boolean }
-export type Citation = { evidence_id: string; source_title: string; source_hash: string; physical_page: number | null; page_label?: string | null; page_kind: string; section?: string | null; excerpt: string; score?: number; rank?: number }
+export type Citation = { edition?: string; source_version?: string; evidence_id: string; source_title: string; source_hash: string; physical_page: number | null; page_label?: string | null; page_kind: string; section?: string | null; excerpt: string; score?: number; rank?: number }

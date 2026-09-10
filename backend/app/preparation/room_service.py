@@ -55,11 +55,14 @@ class RoomEntityService:
         }
 
     async def public(self, session, room_id):
-        return [
+        from app.module_ir.facts import public_fact_scopes
+
+        entities = [
             self.public_view(e)
             for e in await self.rows(session, room_id)
             if e.state in {"revealed", "corrected"}
         ]
+        return await public_fact_scopes(self.agents, session, room_id, entities)
 
     async def host(self, session, room_id):
         return [{**e.snapshot, **self.public_view(e)} for e in await self.rows(session, room_id)]

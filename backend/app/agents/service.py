@@ -188,6 +188,7 @@ class AgentService:
             e
             for e in result["public_entities"]
             if e["type"] == "npc"
+            and e.get("fact_scope") == "current_scene"
             and (not navigation or e["id"] in navigation.active_npc_entity_ids)
         ]
         return result
@@ -351,6 +352,7 @@ class AgentService:
                     "scene_id": scene.id,
                     "scene_title": scene.title,
                     "scene_summary": scene.public_description,
+                    "initialization": True,
                 },
             )
         elif action == "config":
@@ -451,6 +453,12 @@ class AgentService:
             if previous:
                 require(previous.request_hash == fingerprint, "请求 ID 已用于不同内容")
                 return {"event": event_view(previous)}
+            rule_question = body.category == "rule_question"
+            require(
+                not rule_question or not (body.target_entity_id or body.clarification_event_seq),
+                "规则提问不指定人物或行动澄清目标",
+                422,
+            )
             if body.clarification_event_seq:
                 clarification = await session.get(
                     RoomEvent, (room.id, body.clarification_event_seq)
@@ -469,18 +477,20 @@ class AgentService:
                 )
             require(cycle is None, "此房间已有活动回合，请等待、重试或取消")
             bindings = await self.ensure_config(session, room)
-            require(
-                any(slot.member_id == actor for slot in await self.rooms.slots(session, room)),
-                "请先绑定角色",
-            )
+            if not rule_question:
+                require(
+                    any(slot.member_id == actor for slot in await self.rooms.slots(session, room)),
+                    "请先绑定角色",
+                )
             cycle_id = str(uuid4())
             event = self.rooms.append(
                 session,
                 room,
-                "action.submitted",
+                "rules.question" if rule_question else "action.submitted",
                 actor,
                 {
                     "text": safe_body["text"],
+                    "category": body.category,
                     "cycle_id": cycle_id,
                     "target_entity_id": body.target_entity_id,
                     "clarification_event_seq": body.clarification_event_seq,
@@ -489,6 +499,7 @@ class AgentService:
                 request_hash=fingerprint,
             )
             state = s.AgentCycleState(
+                request_category=body.category,
                 cycle_id=cycle_id,
                 room_id=room.id,
                 triggering_member_id=actor,

@@ -64,6 +64,7 @@ class TeammateBehaviorPolicy:
         public_ids,
         action_seq,
         fingerprint,
+        fact_scopes=None,
     ):
         if decision.mode == "pass":
             return BehaviorRejection(accepted=True)
@@ -74,6 +75,12 @@ class TeammateBehaviorPolicy:
             refs.add(decision.target_id)
         if not refs <= public_ids:
             return BehaviorRejection(accepted=False, reason="target_not_public")
+        historical = {e for e in refs if (fact_scopes or {}).get(e) in {"historical", "unknown"}}
+        if historical:
+            from app.module_ir.facts import recalling
+
+            if decision.mode != "speak" or not recalling(output_text(decision)):
+                return BehaviorRejection(accepted=False, reason="target_not_current")
         if decision.action_type == "move" and decision.mode in {"act", "assist"}:
             return BehaviorRejection(accepted=False, reason="teammate_cannot_move_scene")
         text = output_text(decision)

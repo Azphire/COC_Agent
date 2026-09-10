@@ -21,6 +21,7 @@ IntentType = Literal[
     "use_item",
     "assist",
     "wait",
+    "recall",
     "out_of_character",
     "unknown",
 ]

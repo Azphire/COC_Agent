@@ -42,6 +42,9 @@ class ModuleContextResolver:
             return None
         public = await nav.public_scene(session, room)
         public_entities = await self.agents.entities.public(session, room.id)
+        from app.module_ir.facts import relevant_public_facts
+
+        public_entities = relevant_public_facts(public_entities, recent_action)
         shell = await self.agents.module(session, room.id)
         if role != "keeper":
             return {
@@ -62,7 +65,8 @@ class ModuleContextResolver:
         candidate_blocks = [b for b in ir.blocks if b.node_id in selected_nodes]
         entity_ids = {b.entity_id for b in snapshot.entity_bindings if b.node_id in selected_nodes}
         entities = await self.agents.entities.host(session, room.id)
-        entities = [e for e in entities if e["id"] in entity_ids or e["state"] != "hidden"]
+        relevant_ids = {e["id"] for e in public_entities}
+        entities = [e for e in entities if e["id"] in entity_ids or e["id"] in relevant_ids]
         entity_types = {"scene": 0, "npc": 1, "location": 2, "clue": 3, "item": 4}
         entities.sort(key=lambda e: (entity_types[e["type"]], e["id"]))
         outgoing = [
@@ -243,7 +247,9 @@ class ModuleContextResolver:
             cycle.state = {**cycle.state, **audit, "module_fallback_mode": audit["context_mode"]}
         return {
             "module": module,
-            "public_entities": [{"id": e["id"], "state": e["state"]} for e in public_entities],
+            "public_entities": [
+                {k: e[k] for k in ("id", "state", "fact_scope")} for e in public_entities
+            ],
             "public_state": {"scene_id": shell.state["scene_id"]},
             "structure_navigation": True,
             "structure_incomplete": snapshot.incomplete,

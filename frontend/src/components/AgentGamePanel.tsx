@@ -24,10 +24,11 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
   const [retrievals, setRetrievals] = useState<Record<string, unknown[]>>({})
   const [debugOpen, setDebugOpen] = useState(false)
   const [target, setTarget] = useState('')
+  const [category, setCategory] = useState<'investigation' | 'rule_question'>('investigation')
   const [adjudication, setAdjudication] = useState<unknown>(null)
   const [behaviors, setBehaviors] = useState<Record<string, unknown>[]>([])
   const [summaries, setSummaries] = useState<Record<string, unknown>[]>([])
-  const pending = useRef<{ text: string; actor: string; id: string } | null>(null)
+  const pending = useRef<{ content: string; id: string } | null>(null)
   const prefix = `/rooms/${room.id}`
   const game = room.game
   const cycle = game?.cycle
@@ -87,7 +88,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
     </section>}
     {error && <p role="alert">{error}</p>}
     {game?.preparation && <InvestigationBoard entities={game.public_entities || []} />}
-    {game?.module && <section className="agent-game"><h2>{game.module.title}</h2><p>{game.module.public_introduction}</p>
+    {game?.module && <section className="agent-game"><h2>{game.module.title}</h2><p>开场介绍：{game.module.public_introduction}</p>
       <p role="status" data-testid="agent-cycle-status">{game.module.completed ? '调查已结束' : !cycle || cycle.status === 'completed' ? '等待真人行动' : cycle.status === 'cancelled' ? '回合已取消，可提交新行动' : cycle.status === 'failed' ? 'Agent 回合失败' : nodeLabels[cycle.current_node] || cycle.status}</p>
       {cycle?.safe_error && <p role="alert">{cycle.safe_error}</p>}
       {cycle?.requires_clarification && <p role="status" data-testid="action-clarification">需要澄清：{cycle.clarification_question}</p>}
@@ -97,13 +98,17 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
       </div>}
       {room.status !== 'ended' && !game.module.completed && <form onSubmit={async e => {
         e.preventDefault()
-        if (!pending.current || pending.current.text !== action || pending.current.actor !== actor) pending.current = { text: action, actor, id: requestId() }
-        if (await command(cycle?.requires_clarification ? '/clarifications' : '/actions', { text: action, client_request_id: pending.current.id, ...(target ? { target_entity_id: target } : {}), ...(cycle?.requires_clarification ? { clarification_event_seq: cycle.clarification_event_seq } : {}), ...(room.is_host ? { actor_member_id: actor } : {}) })) { setAction(''); setTarget(''); pending.current = null }
+        const clarify = category === 'investigation' && cycle?.requires_clarification
+        const body = { text: action, category, ...(category === 'investigation' && target ? { target_entity_id: target } : {}), ...(clarify ? { clarification_event_seq: cycle.clarification_event_seq } : {}), ...(room.is_host ? { actor_member_id: actor } : {}) }
+        const content = JSON.stringify(body)
+        if (!pending.current || pending.current.content !== content) pending.current = { content, id: requestId() }
+        if (await command(clarify ? '/clarifications' : '/actions', { ...body, client_request_id: pending.current.id })) { setAction(''); setTarget(''); pending.current = null }
       }}>
         {room.is_host && <label>真人行动席位<select id="agent-action-actor" value={actor} onChange={e => setActor(e.target.value)}><option value="">选择本地真人调查员</option>{room.members.filter(m => m.active && m.role === 'player' && m.controller_type === 'human' && m.access_type === 'host_managed').map(m => <option key={m.id} value={m.id}>{m.display_name}</option>)}</select></label>}
-        <label>调查行动<textarea id="agent-action" value={action} maxLength={2000} onChange={e => setAction(e.target.value)} placeholder="描述调查员想做什么，例如走进维修间检查工作台。" required /></label>
-        {!!game.conversation_targets?.length && <label>交谈目标<select id="agent-conversation-target" value={target} onChange={e => { setTarget(e.target.value); pending.current = null }}><option value="">不指定人物</option>{game.conversation_targets.map(npc => <option key={npc.id} value={npc.id}>{npc.title}</option>)}</select></label>}
-        <button disabled={busy || active || room.status !== 'running' || !game.enabled || !action.trim() || (room.is_host && !actor)}>提交行动</button>
+        <label>输入类别<select id="agent-request-category" value={category} onChange={e => { setCategory(e.target.value as typeof category); setTarget(''); pending.current = null }}><option value="investigation">调查行动</option><option value="rule_question">规则提问</option></select></label>
+        <label>{category === 'rule_question' ? '规则问题' : '调查行动'}<textarea id="agent-action" value={action} maxLength={2000} onChange={e => setAction(e.target.value)} placeholder={category === 'rule_question' ? '例如：奖励骰和惩罚骰怎么使用？' : '描述调查员想做什么，例如走进维修间检查工作台。'} required /></label>
+        {category === 'investigation' && !!game.conversation_targets?.length && <label>交谈目标<select id="agent-conversation-target" value={target} onChange={e => { setTarget(e.target.value); pending.current = null }}><option value="">不指定人物</option>{game.conversation_targets.map(npc => <option key={npc.id} value={npc.id}>{npc.title}</option>)}</select></label>}
+        <button disabled={busy || active || room.status !== 'running' || !game.enabled || !action.trim() || (room.is_host && !actor)}>{category === 'rule_question' ? '提交规则问题' : '提交行动'}</button>
       </form>}
       <div className="check-list">{game.checks.map(check => <article key={check.id} className="check-card" data-check-id={check.id}>
         <h3>{check.display_name || check.name}检定</h3>

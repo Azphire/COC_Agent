@@ -168,6 +168,11 @@ class AgentRuntime(ActionRuntimeMixin):
                     if state.get("pending_review_id")
                     else None
                 )
+            if state.get("request_category") == "rule_question":
+                from app.agents.rule_questions import answer_rule_question
+
+                await answer_rule_question(self, state)
+                return
             config = {"configurable": {"thread_id": cycle_id}, "recursion_limit": 30}
             saved = await self.graph.aget_state(config)
             if saved.interrupts:

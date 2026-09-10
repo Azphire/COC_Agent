@@ -276,7 +276,9 @@ def test_summary_and_memory_survive_event_window(client, game):  # noqa: F811
 
 
 def test_summary_failure_does_not_fail_cycle(client, game):  # noqa: F811
-    for i in range(30):
+    # Enough real story events, independently of initialization/management records.
+    settings = client.app.state.settings
+    for i in range(settings.agent_event_window + settings.summary_event_threshold):
         ok(
             client.post(
                 game["prefix"] + "/messages",

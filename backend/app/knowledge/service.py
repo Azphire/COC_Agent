@@ -174,6 +174,7 @@ class KnowledgeService:
         scene_id=None,
         entity_id=None,
         public_only=False,
+        allow_structured=True,
     ):
         binding = await self.binding(session, room.id)
         require(binding and binding["enabled"], "房间未启用知识来源", 422)
@@ -194,7 +195,9 @@ class KnowledgeService:
             if kind == "rules"
             else []
         )
-        structured = bool(evidence) and not RuleTopicRegistry.unstructured(concepts)
+        structured = (
+            allow_structured and bool(evidence) and not RuleTopicRegistry.unstructured(concepts)
+        )
         evidence = (
             evidence
             if structured
@@ -472,8 +475,14 @@ class KnowledgeService:
                 ]
                 if claim.visibility == "keeper_only":
                     supporting.append(str(entity.get("keeper_summary", "")))
+            from app.module_ir.facts import SCOPE_PREFIXES
+
+            statement = claim.statement
+            for prefix in SCOPE_PREFIXES.values():
+                statement = statement.removeprefix(prefix)
             require(
-                any(normalize(claim.statement) in normalize(text) for text in supporting),
+                bool(statement.strip())
+                and any(normalize(statement) in normalize(text) for text in supporting),
                 "needs_host_ruling：事实陈述超出来源",
                 422,
             )
@@ -603,29 +612,79 @@ class KnowledgeContextBuilder:
                     visibility="public",
                 )
             )
+        from app.module_ir.facts import recalling, relevant_public_facts, scoped_statement
+
         scene = context["module"]["scene"]
-        for entity in context.get("public_entities", []):
-            if entity["type"] != "scene":
+        target = context.get("fact_target") or (context.get("triggering_action") or {}).get(
+            "payload", {}
+        ).get("target_entity_id")
+        result_ids = {
+            e["payload"].get("entity_id", e["payload"].get("id"))
+            for e in context.get("public_tool_results", {}).get("events", [])
+            if e["type"] in {"entity.revealed", "clue.revealed"}
+        }
+        entities = relevant_public_facts(context.get("public_entities", []), action, target)
+        is_recall = context.get("intent_type") == "recall"
+        if is_recall:
+            entities = [
+                e
+                for e in entities
+                if (
+                    e["id"] == target
+                    if target
+                    else (
+                        e.get("fact_scope", "current_scene") != "current_scene"
+                        or e["title"] in action
+                    )
+                )
+            ]
+        current_titles = {e["title"] for e in entities if e.get("fact_scope") == "current_scene"}
+        ranked = sorted(
+            entities,
+            key=lambda e: (
+                e["id"] != target,
+                e["id"] not in result_ids,
+                e.get("fact_scope", "current_scene") != "current_scene",
+                e["title"] not in action,
+                -(e.get("revealed_event_seq") or 0),
+                e["id"],
+            ),
+        )
+        for entity in ranked:
+            scope = entity.get("fact_scope", "current_scene")
+            related = entity["id"] == target or (
+                entity["title"] in action
+                and (entity["title"] not in current_titles or recalling(action))
+            )
+            if scope != "current_scene" and not (related or recalling(action)):
+                continue
+            if (entity["type"] != "scene" or scope != "current_scene") and (
+                entity["type"] != "npc"
+                or entity["id"] == context.get("conversation_target")
+                or scope != "current_scene"
+                and (related or recalling(action))
+            ):
                 options.append(
                     dict(
                         claim_id="entity_" + entity["id"],
                         category="module_fact",
-                        statement=entity["public_summary"][:200],
+                        statement=scoped_statement(entity, entity["public_summary"][:200]),
                         evidence_ids=[],
                         entity_ids=[entity["id"]],
                         visibility="public",
                     )
                 )
-        options.append(
-            dict(
-                claim_id="scene",
-                category="module_fact",
-                statement=scene["public_description"][:200],
-                evidence_ids=[],
-                entity_ids=[scene["id"]],
-                visibility="public",
+        if not is_recall or target == scene["id"]:
+            options.append(
+                dict(
+                    claim_id="scene",
+                    category="module_fact",
+                    statement=scene["public_description"][:200],
+                    evidence_ids=[],
+                    entity_ids=[scene["id"]],
+                    visibility="public",
+                )
             )
-        )
         return options
 
     @staticmethod

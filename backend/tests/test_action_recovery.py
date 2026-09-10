@@ -179,7 +179,7 @@ def test_scene_bound_test_npc_converse_and_private_summary_never_public(client, 
     view = ok(client.get(d["room_prefix"]))["game"]
     target = next(t for t in view["conversation_targets"] if t["id"] == npc_id)
     assert target["origin"] == "host_authored_test"
-    assert act(client, d, "我与测试乘客交谈")["status"] == "completed"
+    assert act(client, d, "我询问测试乘客这里的规则")["status"] == "completed"
     leak = True
     assert act(client, d, "我询问测试乘客其他情况")["status"] == "completed"
     events = ok(

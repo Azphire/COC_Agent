@@ -6,6 +6,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from app.agents.modules import public_module
+from app.memory.events import current_participants, story_events
 from app.persistence.agent_models import AgentMemory
 from app.rooms.service import Identity, require
 
@@ -122,16 +123,7 @@ async def build_context(
     all_events = await service.rooms.events(session, room, identity)
     if narrator:
         all_events = [e for e in all_events if e["visibility"] == "public"]
-    # Credential/administrative events have no gameplay value. Filtering precedes truncation.
-    all_events = [
-        e
-        for e in all_events
-        if not e["type"].startswith(("snapshot.", "invite."))
-        and (
-            not e["type"].startswith("agent.")
-            or e["type"] in {"agent.spoke", "agent.action_proposed"}
-        )
-    ]
+    all_events, event_selection = story_events(all_events)
     visible_memories = await memories(session, room.id, binding.profile_id, keeper)
     if narrator:
         visible_memories = [m for m in visible_memories if m.scope == "public"]
@@ -154,6 +146,16 @@ async def build_context(
                 }
             )
     trigger = next((e for e in all_events if e["seq"] == cycle.state["triggering_event_seq"]), None)
+    if keeper:
+        actor_id = (trigger or {}).get("actor_member_id")
+        cards = [
+            card
+            if card["member_id"] == actor_id
+            else {
+                k: v for k, v in card.items() if k not in {"effective_attributes", "skill_values"}
+            }
+            for card in cards
+        ]
     text = str(trigger["payload"] if trigger else "")
     ranked = sorted(
         visible_memories,
@@ -173,6 +175,7 @@ async def build_context(
         "module": module.document if keeper else public_module(module),
         "public_state": module.state if keeper else public_module(module),
         "characters": cards,
+        "current_participants": await current_participants(service, session, room),
         "triggering_action": trigger,
         "memories": [],
         "events": [],
@@ -183,6 +186,13 @@ async def build_context(
     prepared = await service.entities.binding(session, room.id)
     if prepared:
         public_entities = await service.entities.public(session, room.id)
+        from app.module_ir.facts import relevant_public_facts
+
+        public_entities = relevant_public_facts(
+            public_entities,
+            (trigger or {}).get("payload", {}).get("text", ""),
+            (trigger or {}).get("payload", {}).get("target_entity_id"),
+        )
         context["public_entities"] = public_entities
         context["prepared_module"] = True
         context["public_state"] = {"scene_id": prepared.current_scene}
@@ -204,7 +214,7 @@ async def build_context(
             # The same frozen summaries are already in approved_entities. Avoid
             # repeating their source metadata in the keeper's bounded context.
             context["public_entities"] = [
-                {"id": e["id"], "state": e["state"]} for e in public_entities
+                {k: e[k] for k in ("id", "state", "fact_scope")} for e in public_entities
             ]
             context["module"] = {
                 "id": module.document["id"],
@@ -337,6 +347,8 @@ async def build_context(
                     "state",
                     "origin",
                     "revealed_event_seq",
+                    "fact_scope",
+                    "scope_label",
                 }
             }
             for entity in context["public_entities"]
@@ -421,7 +433,15 @@ async def build_context(
         for e in reversed(window)
         if e["type"] in {"clue.revealed", "entity.revealed", "check.resolved", "scene.updated"}
     ]
-    for event in [*pending_window, *state_events, *reversed(window)]:
+    pending_blocked = False
+    for event in pending_window:
+        proposed = {**context, "events": [*context["events"], event]}
+        if len(json.dumps(proposed, ensure_ascii=False)) > budget:
+            pending_blocked = True
+            break
+        context = proposed
+        chosen_seqs.add(event["seq"])
+    for event in [] if pending_blocked else [*state_events, *reversed(window)]:
         if event["seq"] in chosen_seqs:
             continue
         proposed = {**context, "events": [event, *context["events"]]}

@@ -70,6 +70,45 @@ class RuleTopicRegistry:
     )
 
     @classmethod
+    def covers_question(cls, question):
+        """Only simple questions wholly expressed by the verified topics skip RAG."""
+        import re
+
+        if not cls.select([question]):
+            return False
+        residual = question
+        terms = sorted({c for t in cls.topics for c in t.concepts}, key=len, reverse=True)
+        for term in terms:
+            residual = residual.replace(term, "")
+        for phrase in (
+            "请问",
+            "请解释",
+            "解释一下",
+            "说明一下",
+            "如何",
+            "怎么",
+            "怎样",
+            "有什么区别",
+            "有什么不同",
+            "分别",
+            "使用",
+            "计算",
+            "判定",
+            "规则",
+            "是什么意思",
+            "含义",
+            "的",
+            "和",
+            "与",
+            "是",
+            "什么",
+            "呢",
+            "吗",
+        ):
+            residual = residual.replace(phrase, "")
+        return not re.sub(r"[\s，,？?。！!：:]", "", residual)
+
+    @classmethod
     def select(cls, concepts, has_check=False):
         text = " ".join(concepts)
         return [
@@ -146,3 +185,10 @@ def relevant_evidence(concept, excerpt):
         return True
     wanted = set(tokens(query))
     return bool(wanted) and len(wanted & set(tokens(text))) / len(wanted) >= 0.6
+
+
+def rule_question_text(text):
+    """Conservative compatibility detection; explicit request category is authoritative."""
+    import re
+
+    return "规则" in text and not re.search(r"我(?:向|问|询问)|交谈|NPC|npc|回顾|回想", text)

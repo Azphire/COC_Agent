@@ -7,6 +7,8 @@ from app.rules.display import check_display
 
 
 def action_lead(intent, results):
+    if intent == "recall":
+        return "你回顾了先前获知的信息。"
     if intent == "converse":
         return "你向对方询问了情况。"
     if intent == "move":

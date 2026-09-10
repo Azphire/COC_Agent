@@ -10,9 +10,9 @@ export default function RoomTimelineEvent({ event, room }: { event: RoomEvent; r
   const teammate = ['agent.spoke', 'agent.action_proposed'].includes(event.type)
   const system = event.type.startsWith('check.') || event.type === 'agent.cycle_changed' || event.type === 'clue.revealed'
   const actor = String(p.actor_name || (isKP || teammate ? binding?.name : member?.display_name) || '系统')
-  const role = event.type === 'npc.spoke' ? 'NPC' : event.type.startsWith('review.') ? '主机审阅' : event.type.startsWith('entity.') ? '线索' : event.type === 'scene.updated' ? '场景' : event.type.startsWith('check.') ? '检定' : event.type === 'agent.cycle_changed' ? 'Agent' : isKP ? 'KP' : teammate ? 'AI队友' : system ? '系统' : member?.controller_type === 'agent' ? 'AI队友' : member ? '真人' : '系统'
+  const role = event.type.startsWith('rules.') ? '规则问答' : event.type === 'npc.spoke' ? 'NPC' : event.type.startsWith('review.') ? '主机审阅' : event.type.startsWith('entity.') ? '线索' : event.type === 'scene.updated' ? '场景' : event.type.startsWith('check.') ? '检定' : event.type === 'agent.cycle_changed' ? 'Agent' : isKP ? 'KP' : teammate ? 'AI队友' : system ? '系统' : member?.controller_type === 'agent' ? 'AI队友' : member ? '真人' : '系统'
   const cycle = String(p.cycle_id || '').slice(0, 8)
-  const textTypes = ['chat.message', 'action.submitted', 'keeper.narration', 'npc.spoke', 'agent.spoke', 'agent.action_proposed', 'module.completed', 'agent.needs_host_ruling']
+  const textTypes = ['rules.question', 'rules.answered', 'chat.message', 'action.submitted', 'keeper.narration', 'npc.spoke', 'agent.spoke', 'agent.action_proposed', 'module.completed', 'agent.needs_host_ruling']
   const result = p.result as { total: number; level: string; passed: boolean } | undefined
   const labels: Record<string, string> = { running: '进行中', waiting_for_roll: '等待检定', completed: '完成', failed: '失败', cancelled: '已取消' }
   return <li data-event-seq={event.seq} data-actor-type={role} data-controller={isKP || teammate ? 'agent' : system ? 'system' : member?.controller_type || 'system'}>
@@ -29,6 +29,6 @@ export default function RoomTimelineEvent({ event, room }: { event: RoomEvent; r
       : event.type === 'dice.rolled' ? <p>{String(p.reason)} · {String(p.expression)} → [{(p.dice as number[]).join(', ')}] {Number(p.modifier) >= 0 ? '+' : ''}{String(p.modifier)} = <strong>{String(p.total)}</strong></p>
       : <details><summary>{event.type}</summary><pre>{JSON.stringify(p, null, 2)}</pre></details>}
     {p.check_notice ? <p>{String(p.check_notice)}</p> : null}
-    {(p.citations as Citation[] | undefined)?.map(c => <details className="rule-citation" key={c.evidence_id}><summary>《{c.source_title}》{c.page_kind === 'pdf' ? 'PDF' : c.page_kind === 'word' ? 'Word' : '文本'} {c.physical_page ? `p.${c.physical_page}` : ''}</summary><p>{c.section} {c.page_label && `· 页标签 ${c.page_label}`}</p><p className="preserve-lines">{c.excerpt}</p></details>)}
+    {(p.citations as Citation[] | undefined)?.map(c => <details className="rule-citation" key={c.evidence_id}><summary>《{c.source_title}》{c.page_kind === 'pdf' ? 'PDF' : c.page_kind === 'word' ? 'Word' : '文本'} {c.physical_page ? `p.${c.physical_page}` : ''}</summary><p>{c.edition} {c.source_version} {c.section} {c.page_label && `· 页标签 ${c.page_label}`}</p><p className="preserve-lines">{c.excerpt}</p></details>)}
   </li>
 }

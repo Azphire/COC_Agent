@@ -342,3 +342,9 @@ uv run python scripts/check_multiplayer.py
 ```
 
 原 `/ws` 连接需先发送 `{"type":"auth","credential_type":"host","token":"<主机密钥>"}`，认证成功后返回 `{"type":"connected","data":{"message":"WebSocket connected"}}`，随后普通 JSON 仍返回 `{"type":"echo","data":原始JSON}`。密钥不放 URL，不重发认证帧。房间 WebSocket 协议见 [多人协议](docs/multiplayer-protocol.md)。健康检查中的模型供应商只代表配置，不表示模型可用。
+
+## 第九批：规则提问与剧情上下文
+
+游戏输入区现在支持“调查行动／规则提问”。规则提问直接返回绑定公开规则的主题说明或检索原文，不启动行动裁决、检定、转场、队友或摘要。调查板显示当前场景、先前获知和位置未确认；回顾旧线索带明确历史限定。游戏摘要只选择剧情事件，角色分配以服务端当前状态为准。
+
+接口、范围与恢复口径见 [规则提问与剧情上下文](docs/rule-questions-and-story-context.md)，本批实际验证见 [第九批报告](docs/batch-9-report.md)。
