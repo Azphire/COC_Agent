@@ -112,6 +112,15 @@ class CheckPolicyEvaluator:
         for old in facts.completed_checks:
             if (
                 old.get("target_member_id") == str(p.target_member_id)
+                and old.get("policy_target_id", old.get("clue_id")) == target
+                and (old.get("settlement") or {}).get("push_requested")
+                and old.get("cycle_id") != facts.cycle_id
+            ):
+                return decision(
+                    False, "push_exhausted", "该目标已申请过孤注；不能重新提交普通检定绕过"
+                )
+            if (
+                old.get("target_member_id") == str(p.target_member_id)
                 and old.get("kind") == p.kind
                 and old.get("name") == p.name
                 and old.get("policy_target_id", old.get("clue_id")) == target

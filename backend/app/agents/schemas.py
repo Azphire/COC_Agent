@@ -82,6 +82,8 @@ class CheckRequest(DomainModel):
 
 
 class PendingCheck(CheckRequest):
+    settlement: dict | None = None
+    settlement_rewound: bool = False
     sanity_rewound: bool = False
     sanity: dict | None = None
     display_name: str = ""
@@ -163,6 +165,10 @@ class CycleStage(DomainModel):
 
 
 class AgentCycleState(TypedDict):
+    settlement_phase: str
+    encounter_queue: list[dict]
+    encounters_scanned: bool
+    ordinary_check_id: str | None
     sanity_restore: bool
     request_category: str
     schema_version: int

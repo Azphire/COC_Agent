@@ -7,7 +7,13 @@ from fastapi.responses import Response
 
 from app.auth import bearer, require_host
 from app.rooms import schemas as s
-from app.rooms.sanity_schemas import ResourceCorrection, SanityManagement, SanityRequest, SanityRoll
+from app.rooms.sanity_schemas import (
+    EncounterReview,
+    HostSanityRequest,
+    ResourceCorrection,
+    SanityManagement,
+    SanityRoll,
+)
 from app.rooms.service import RoomService
 
 router = APIRouter(prefix="/api/rooms", tags=["rooms"])
@@ -23,8 +29,13 @@ Token = Annotated[str, Depends(bearer)]
 
 
 @router.post("/{room_id}/sanity/encounters")
-async def sanity_request(room_id: UUID, body: SanityRequest, svc: Service, token: Token):
+async def sanity_request(room_id: UUID, body: HostSanityRequest, svc: Service, token: Token):
     return await svc.command(room_id, token, "agent.sanity.request", body)
+
+
+@router.post("/{room_id}/sanity/encounter-review")
+async def encounter_review(room_id: UUID, body: EncounterReview, svc: Service, token: Token):
+    return await svc.command(room_id, token, "agent.sanity.review", body)
 
 
 @router.post("/{room_id}/sanity/checks/{check_id}/roll")

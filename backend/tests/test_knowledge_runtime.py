@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
-from test_agent_runtime import game, scenario, submit, wait_cycle  # noqa: F401
+from test_agent_runtime import accept_original, game, scenario, submit, wait_cycle  # noqa: F401
 from test_rooms import headers, lobby, ok  # noqa: F401
 
 from app.knowledge.schemas import GroundedClaim
@@ -149,6 +149,7 @@ def test_rag_fake_cycle_interrupt_tools_claims_visibility_and_exports(client, ra
             headers=headers(game["remote"]["member_token"]),
         )
     )
+    accept_original(client, game, check["id"])
     completed = wait_cycle(client, game, ("completed", "failed"))
     assert completed["id"] == cycle["id"] and completed["status"] == "completed", completed
     runs = ok(client.get(game["prefix"] + "/agent-runs"))

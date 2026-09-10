@@ -283,7 +283,11 @@ async def build_context(
             context["public_state"] = {"scene_id": prepared.current_scene}
     if narrator:
         context["profile"] = {"role": "public_narrator"}
-        context["checks"] = [c for c in context["checks"] if c["visibility"] == "public"]
+        context["checks"] = [
+            {k: v for k, v in c.items() if k not in {"dice", "settlement", "options"}}
+            for c in context["checks"]
+            if c["visibility"] == "public" and c["status"] == "resolved"
+        ]
     for check in context["checks"]:
         if check.get("dice"):
             check["dice"] = {k: v for k, v in check["dice"].items() if k != "roll_record"}
@@ -384,7 +388,9 @@ async def build_context(
         context["rule_concepts"] = (
             plan_record.document.get("plan", {}).get("rule_concepts", []) if plan_record else []
         )
-        context["current_check"] = bool(cycle.state.get("pending_check_id"))
+        context["current_check"] = bool(
+            cycle.state.get("pending_check_id") or cycle.state.get("ordinary_check_id")
+        )
     if run_id:
         configured = await service.knowledge.binding(session, room.id)
         if configured and configured["enabled"]:
@@ -428,6 +434,21 @@ async def build_context(
         context["memories"].append(candidate)
         selected.append(memory.id)
     window = all_events[-service.settings.agent_event_window :]
+    if narrator:
+        window = [
+            {
+                **e,
+                "payload": {
+                    k: v
+                    for k, v in e["payload"].items()
+                    if k not in {"dice", "settlement", "options"}
+                },
+            }
+            if e["type"] == "check.resolved"
+            else e
+            for e in window
+            if not e["type"].startswith("check.") or e["type"] == "check.resolved"
+        ]
     pending_window = []
     if not narrator:
         from app.agents.adjudication_schemas import SummaryRecoveryState

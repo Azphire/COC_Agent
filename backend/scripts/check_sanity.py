@@ -59,9 +59,9 @@ class SanityCheck(MultiplayerCheck):
         print(f"STARTED={name}:{process.pid}", flush=True)
         return process
 
-    def __init__(self, original=False):
+    def __init__(self, original=False, batch=10):
         self.original = original
-        SmokeCheck.__init__(self, artifact_prefix="batch-10/real")
+        SmokeCheck.__init__(self, artifact_prefix=f"batch-{batch}/real")
         self.pages = []
         self.http.timeout = 180
         self.report = {
@@ -121,6 +121,15 @@ class SanityCheck(MultiplayerCheck):
                 return cycle
             time.sleep(0.2)
         raise AssertionError("Local encounter exceeded 360 seconds")
+
+    def wait_completed(self):
+        deadline = time.monotonic() + 150
+        while time.monotonic() < deadline:
+            cycle = self.request("GET", self.prefix + "/agent-cycle")
+            if cycle and cycle["status"] in {"completed", "failed"}:
+                return cycle
+            time.sleep(0.2)
+        raise AssertionError("Local settlement narration exceeded 150 seconds")
 
     def turn(self, text, target=None):
         start = time.monotonic()
@@ -435,7 +444,7 @@ class SanityCheck(MultiplayerCheck):
                     json={"expected_stage": stage},
                 )
                 assert response.is_success, response.text
-        cycle = self.wait_cycle()
+        cycle = self.wait_completed()
         assert cycle["status"] == "completed", cycle
         current = self.request("GET", self.prefix)
         own = self.player_http.get("http://127.0.0.1:8000/api" + self.prefix).json()

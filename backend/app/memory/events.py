@@ -3,6 +3,12 @@
 from collections import Counter
 
 STORY_TYPES = {
+    "check.rolled",
+    "check.luck_spent",
+    "check.push_requested",
+    "check.push_reviewed",
+    "check.consequence_pending",
+    "check.consequence_applied",
     "sanity.progressed",
     "sanity.involuntary",
     "sanity.state_changed",

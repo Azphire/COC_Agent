@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from adjudication_helpers import ScenarioAdapter as FakeModelAdapter
 from fastapi.testclient import TestClient
+from test_agent_runtime import accept_original
 from test_module_preparation import approve_opening, preparation  # noqa: F401
 from test_rooms import headers, lobby, ok, prepare  # noqa: F401
 
@@ -145,6 +146,7 @@ def test_review_interrupt_resume_permissions_idempotency_and_public_context(
         assert next_cycle["wait_reason"] == "human_roll"
         check = ok(client.get(prefix + "/checks"))[-1]
         ok(client.post(prefix + f"/checks/{check['id']}/roll", json={}, headers=player_headers))
+        accept_original(client, game, check["id"])
         next_cycle = wait(client, prefix, ("completed", "failed"))
     assert next_cycle["status"] == "completed" and next_cycle["id"] == cycle["id"], next_cycle
     public = ok(client.get(prefix + "/public-entities", headers=player_headers))

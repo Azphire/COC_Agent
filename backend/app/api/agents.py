@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.agents import schemas as s
 from app.agents.security import scrub
+from app.agents.settlement_schemas import CheckChoice, CheckRules, ConsequenceHandled, PushReview
 from app.auth import require_host
 from app.domain.character import utc_now
 from app.models.base import ModelError
@@ -266,6 +267,35 @@ async def roll(room_id: UUID, check_id: UUID, body: s.Empty, svc: Service, token
 @router.post("/rooms/{room_id}/checks/{check_id}/cancel")
 async def cancel_check(room_id: UUID, check_id: UUID, svc: Service, token: Token):
     return await svc.rooms.command(room_id, token, "agent.check.cancel", target=check_id)
+
+
+@router.patch("/rooms/{room_id}/check-rules")
+async def check_rules(room_id: UUID, body: CheckRules, svc: Service, token: Token):
+    return await svc.rooms.command(room_id, token, "agent.check.rules", body)
+
+
+@router.post("/rooms/{room_id}/checks/{check_id}/choice")
+async def check_choice(
+    room_id: UUID, check_id: UUID, body: CheckChoice, svc: Service, token: Token
+):
+    return await svc.rooms.command(room_id, token, "agent.check.choice", body, check_id)
+
+
+@router.post("/rooms/{room_id}/checks/{check_id}/push-review")
+async def push_review(room_id: UUID, check_id: UUID, body: PushReview, svc: Service, token: Token):
+    return await svc.rooms.command(room_id, token, "agent.check.push_review", body, check_id)
+
+
+@router.post("/rooms/{room_id}/checks/{check_id}/push-roll")
+async def push_roll(room_id: UUID, check_id: UUID, body: s.Empty, svc: Service, token: Token):
+    return await svc.rooms.command(room_id, token, "agent.check.push_roll", body, check_id)
+
+
+@router.post("/rooms/{room_id}/checks/{check_id}/consequence")
+async def consequence(
+    room_id: UUID, check_id: UUID, body: ConsequenceHandled, svc: Service, token: Token
+):
+    return await svc.rooms.command(room_id, token, "agent.check.handled", body, check_id)
 
 
 @router.get("/rooms/{room_id}/agent-runs")

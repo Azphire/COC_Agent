@@ -26,6 +26,7 @@ class CharacterRuntimeV1(DomainModel):
 
 
 class SessionStateV1(DomainModel):
+    luck_spending: StrictBool = False
     game_minute: Annotated[StrictInt, Field(ge=0, le=1_000_000)] = 0
     game_round: Annotated[StrictInt, Field(ge=0, le=1_000_000)] = 0
     sanity_day: Annotated[StrictInt, Field(ge=0, le=1_000_000)] = 0

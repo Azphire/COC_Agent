@@ -89,6 +89,7 @@ def effect(name, success, failure):
         page=131,
         basis="规则损失格式与单次创伤测试；非原模组剧情",
         visibility="actor_and_host",
+        repeat="host_confirmed",
     )
 
 
@@ -106,6 +107,8 @@ def san_game(client, lobby, preparation, request):  # noqa: F811
     ]
     if "pipeline" in request.node.name:
         effects = effects[:2]
+        effects[0].automation = "automatic"
+        effects[1].action_types = []
     if "mythos" in request.node.name:
         effects[2].mythos = True
     if "permissions" in request.node.name:
@@ -188,6 +191,9 @@ def request(client, game, name, seq=None, actor=None):
             "entity_id": game["entity"],
             "effect_id": name,
             "source_event_seq": seq,
+            "encounter_confirmed": True,
+            "repeat_confirmed": True,
+            "reason": "主机确认独立的隔离测试遭遇",
         },
     )
     return ok(response)["check"]
@@ -250,6 +256,9 @@ def test_sanity_loss_permissions_idempotency_and_three_rewinds(client, san_game)
                 "entity_id": g["entity"],
                 "effect_id": "fatal",
                 "source_event_seq": seq,
+                "encounter_confirmed": True,
+                "repeat_confirmed": True,
+                "reason": "主机确认测试遭遇",
             },
         ).status_code
         == 409
@@ -262,6 +271,9 @@ def test_sanity_loss_permissions_idempotency_and_three_rewinds(client, san_game)
                 "entity_id": g["entity"],
                 "effect_id": "small",
                 "source_event_seq": seq,
+                "encounter_confirmed": True,
+                "repeat_confirmed": True,
+                "reason": "主机确认测试遭遇",
                 "loss": 99,
             },
         ).status_code
@@ -287,6 +299,9 @@ def test_sanity_loss_permissions_idempotency_and_three_rewinds(client, san_game)
                 "entity_id": g["entity"],
                 "effect_id": "small",
                 "source_event_seq": seq,
+                "encounter_confirmed": True,
+                "repeat_confirmed": True,
+                "reason": "主机确认测试遭遇",
             },
         ).status_code
         == 403

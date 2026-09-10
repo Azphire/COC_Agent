@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from adjudication_helpers import ScenarioAdapter as FakeModelAdapter
 from fastapi.testclient import TestClient
-from test_agent_runtime import game, scenario, submit, wait_cycle  # noqa: F401
+from test_agent_runtime import accept_original, game, scenario, submit, wait_cycle  # noqa: F401
 from test_rooms import headers, join, lobby, ok  # noqa: F401
 
 from app.agents.model import AgentModelClient
@@ -90,6 +90,7 @@ def test_checkpoint_restart_pending_save_load(client, game, character_settings):
         ok(second.post(game["prefix"] + f"/snapshots/{save['id']}/load"))
         ok(second.post(game["prefix"] + "/resume"))
         ok(second.post(game["prefix"] + f"/checks/{check['id']}/roll", json={}))
+        accept_original(second, game, check["id"])
         assert wait_cycle(second, game)["status"] == "completed"
         assert len(adapter.prompts) == 1
         result = ok(second.get(game["prefix"] + "/checks"))[0]
@@ -102,6 +103,8 @@ def test_checkpoint_restart_pending_save_load(client, game, character_settings):
             ]
             == result["dice"]
         )
+        accept_original(second, game, check["id"])
+        assert wait_cycle(second, game)["status"] == "completed"
         ok(submit(second, game, "再次查看现场"))
         assert wait_cycle(second, game)["status"] == "completed"
 

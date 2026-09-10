@@ -113,8 +113,22 @@ def submit(client, game, text="检查公告", request_id=None):
     )
 
 
-def wait_cycle(client, game, expected=("completed", "failed", "waiting_for_roll")):
-    deadline = time.monotonic() + 15
+def accept_original(client, game, check_id):
+    """Existing scenarios explicitly accept the new optional post-roll choice."""
+    check = next(c for c in ok(client.get(game["prefix"] + "/checks")) if c["id"] == check_id)
+    if check["status"] == "pending" and (check.get("settlement") or {}).get("stage") == "choice":
+        check = ok(
+            client.post(
+                game["prefix"] + f"/checks/{check_id}/choice",
+                json={"operation": "accept"},
+                headers=headers(game["remote"]["member_token"]),
+            )
+        )["check"]
+    return check
+
+
+def wait_cycle(client, game, expected=("completed", "failed", "waiting_for_roll"), *, timeout=15):
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         cycle = ok(client.get(game["prefix"] + "/agent-cycle"))
         if cycle and cycle["status"] in expected:
@@ -237,6 +251,7 @@ def test_interrupt_roll_resume_and_duplicate(client, game):
     path = game["prefix"] + f"/checks/{check['id']}/roll"
     assert client.post(path, json={"total": 1}).status_code == 422
     ok(client.post(path, json={}, headers=headers(game["remote"]["member_token"])))
+    accept_original(client, game, check["id"])
     final = wait_cycle(client, game)
     assert final["status"] == "completed", final
     assert final["id"] == cycle["id"] and final["state"]["call_count"] == 2
@@ -271,6 +286,7 @@ def test_argument_repair_is_bounded_and_precedes_tools(client, game, repair_succ
     if repair_succeeds:
         assert len(checks) == 1
         ok(client.post(game["prefix"] + f"/checks/{checks[0]['id']}/roll", json={}))
+        accept_original(client, game, checks[0]["id"])
         final = wait_cycle(client, game)
         assert final["status"] == "completed", final
         assert final["state"]["call_count"] == 3

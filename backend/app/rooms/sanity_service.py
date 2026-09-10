@@ -89,6 +89,7 @@ def sanity_public(document):
         display_text=message,
         difficulty_display="SAN 二元判定",
         sanity={
+            "origin": progress.origin,
             "stage": progress.stage,
             "before": progress.before,
             "after": progress.after,
@@ -108,6 +109,9 @@ def sanity_public(document):
 class SanityService:
     def __init__(self, agents):
         self.agents, self.rooms = agents, agents.rooms
+        from app.rooms.encounters import EncounterService
+
+        self.encounters = EncounterService(self)
 
     async def slot(self, session, room, member_id=None, slot_id=None):
         slots = await self.rooms.slots(session, room)
@@ -124,7 +128,7 @@ class SanityService:
         )
         return slot
 
-    async def request(self, session, room, args, run=None):
+    async def request(self, session, room, args, run=None, encounter=None):
         require(room.status == "running", "请先恢复游戏")
         member = await session.get(RoomMember, str(args.target_member_id))
         require(
@@ -146,18 +150,35 @@ class SanityService:
         require(effect, "缺少批准的 SAN 效果，请主机在准备工作台裁定", 422)
         source = await session.get(RoomEvent, (room.id, args.source_event_seq))
         require(source is not None, "遭遇事件不存在", 404)
+        if encounter:
+            participants = encounter["target_member_ids"]
+            require(
+                encounter["status"] == "approved"
+                and member.id in participants
+                and slot.id == encounter["slot_ids"][participants.index(member.id)],
+                "遭遇者或角色席位已变化",
+                403,
+            )
+        elif not run:
+            require(
+                getattr(args, "encounter_confirmed", False) and args.reason.strip(),
+                "主机须确认实际遭遇与受影响角色；选中实体不等于目睹恐怖",
+                422,
+            )
+        else:
+            require(False, "模型只能提出 SAN 提案，须等待行动后遭遇验证", 403)
         if effect.trigger == "action_target":
             require(
                 source.type == "action.submitted"
-                and source.actor_member_id == member.id
-                and source.payload.get("target_entity_id") == args.entity_id,
+                and (encounter or source.actor_member_id == member.id)
+                and (encounter or source.payload.get("target_entity_id") == args.entity_id),
                 "SAN 效果不匹配具体调查遭遇",
                 403,
             )
         else:
             require(
                 source.type == "entity.revealed"
-                and source.payload.get("entity_id") == args.entity_id,
+                and source.payload.get("entity_id", source.payload.get("id")) == args.entity_id,
                 "SAN 效果不匹配具体实体揭示事件",
                 403,
             )
@@ -180,6 +201,17 @@ class SanityService:
                 )
         if old and not old.document.get("sanity_rewound"):
             return old
+        prior = await self.encounters.previous(session, room, args.entity_id, effect.id, member.id)
+        if prior:
+            require(
+                effect.repeat == "host_confirmed"
+                and (
+                    encounter.get("repeat_confirmed")
+                    if encounter
+                    else getattr(args, "repeat_confirmed", False)
+                ),
+                "此恐怖已经遭遇；重复遭遇须有配置及主机明确确认",
+            )
         cycle = await self.agents.cycle(session, room.id, active=True)
         if run:
             require(
@@ -195,7 +227,7 @@ class SanityService:
                 "SAN 遭遇不属于本回合",
                 403,
             )
-            require(not cycle.state.get("pending_check_id"), "本轮已经请求检定")
+            require(not cycle.state.get("pending_check_id"), "本轮已有等待项")
         else:
             require(cycle is None, "请等待当前回合结束，再由主机发起遭遇")
             cycle_id = str(uuid4())
@@ -229,6 +261,7 @@ class SanityService:
         if character.sanity.day_start_san is None:
             character.sanity.day_start_san = character.san
         progress = SanityProgress(
+            origin=encounter["origin"] if encounter else "host",
             effect=effect,
             source_event_seq=source.seq,
             entity_id=args.entity_id,

@@ -1,5 +1,7 @@
 # 第九批报告：规则问答、公开事实范围与剧情摘要
 
+> 后续状态：第十／十一批已实现 SAN、疯狂状态、批准遭遇自动触发及普通检定幸运／孤注后处理。本文验证数字与范围为当批历史记录；当前接口见 [第十一批说明](check-settlement-and-encounters.md)。
+
 执行日期：2026-09-10。基线及交付 HEAD：`653f27a7f8936b76d05b3d3a0c4bfd3a13680777`（`kp quality`）。开始时工作树干净，继续原分支、原工作目录，单执行者；没有创建分支／worktree、commit 或 push。执行记录均在 [.cache/batch-9](../.cache/batch-9/)；第八批的 525 passed、1 skipped 没有计入本批验证。
 
 ## 实现

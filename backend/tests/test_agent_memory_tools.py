@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
-from test_agent_runtime import game, submit, wait_cycle  # noqa: F401
+from test_agent_runtime import accept_original, game, submit, wait_cycle  # noqa: F401
 from test_rooms import lobby, ok  # noqa: F401
 
 from app.agents.schemas import MemoryArgs
@@ -224,6 +224,7 @@ def test_concurrent_human_actions_one_cycle(client, game):  # noqa: F811
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: ok(client.post(path, json={})), range(2)))
     assert results[0]["check"]["dice"] == results[1]["check"]["dice"]
+    accept_original(client, game, check["id"])
     assert wait_cycle(client, game)["status"] == "completed"
     assert len(game["adapter"].prompts) == 2
 

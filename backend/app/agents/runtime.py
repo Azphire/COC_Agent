@@ -44,6 +44,10 @@ NODES = [
     "create_checks",
     "wait_for_human_roll",
     "execute_state_tools",
+    "discover_encounters",
+    "prepare_encounter",
+    "wait_for_encounter_review",
+    "wait_for_sanity",
     "generate_keeper_narration",
     "decide_teammates",
     "update_summary",
@@ -89,7 +93,20 @@ class AgentRuntime(ActionRuntimeMixin):
         for name in NODES:
             builder.add_node(name, getattr(self, name))
         for left, right in zip([START, *NODES], [*NODES, END]):
-            builder.add_edge(left, right)
+            if left not in {"prepare_encounter", "wait_for_encounter_review", "wait_for_sanity"}:
+                builder.add_edge(left, right)
+        builder.add_conditional_edges(
+            "prepare_encounter",
+            lambda state: (
+                "wait_for_encounter_review"
+                if state.get("wait_reason") == "sanity_encounter_review"
+                else "wait_for_sanity"
+                if state.get("pending_check_id")
+                else "generate_keeper_narration"
+            ),
+        )
+        builder.add_edge("wait_for_encounter_review", "prepare_encounter")
+        builder.add_edge("wait_for_sanity", "prepare_encounter")
         self.graph = builder.compile(checkpointer=saver)
         # No HTTP request or in-flight model call survives a process restart.
         async with self.rooms.transaction() as session:
@@ -173,7 +190,9 @@ class AgentRuntime(ActionRuntimeMixin):
 
                 await answer_rule_question(self, state)
                 return
-            config = {"configurable": {"thread_id": cycle_id}, "recursion_limit": 30}
+            # Sequential approved encounters can include several AI seats, which
+            # settle without a human interrupt. This does not change tool limits.
+            config = {"configurable": {"thread_id": cycle_id}, "recursion_limit": 512}
             if state.get("request_category") == "san_encounter":
                 if pending and pending.status == "pending":
                     async with self.rooms.database.sessions() as session:
@@ -185,11 +204,11 @@ class AgentRuntime(ActionRuntimeMixin):
                 if pending and pending.status == "pending":
                     async with self.rooms.database.sessions() as session:
                         member = await session.get(RoomMember, pending.target_member_id)
-                    if member.controller_type == "agent":
+                    if member.controller_type == "agent" and pending.document.get("sanity"):
                         await self.resolve_sanity_automatic(room_id, pending.id)
                         async with self.rooms.database.sessions() as session:
                             pending = await session.get(CheckRecord, pending.id)
-                if not pending or pending.status != "resolved":
+                if pending and pending.status != "resolved":
                     return
                 state = {**state, "sanity_restore": False, "status": "running"}
 
@@ -198,10 +217,32 @@ class AgentRuntime(ActionRuntimeMixin):
                     cycle.status, cycle.state = "running", state
 
                 await self.service.mutate(room_id, restore_progress)
-                await self.graph.aupdate_state(config, state, as_node="wait_for_human_roll")
+                await self.graph.aupdate_state(
+                    config,
+                    state,
+                    as_node=(
+                        "discover_encounters"
+                        if state.get("settlement_phase") == "sanity"
+                        else "wait_for_human_roll"
+                    ),
+                )
             saved = await self.graph.aget_state(config)
             if saved.interrupts:
-                if state.get("wait_reason") == "host_review":
+                if state.get("wait_reason") == "sanity_encounter_review":
+                    if (
+                        next(
+                            (
+                                e
+                                for e in state.get("encounter_queue", [])
+                                if e["status"] not in {"done", "rejected"}
+                            ),
+                            {},
+                        ).get("status")
+                        == "review"
+                    ):
+                        return
+                    value = Command(resume={"encounters_reviewed": True})
+                elif state.get("wait_reason") == "host_review":
                     if not review or review.status not in {"approved", "edited", "rejected"}:
                         return
                     value = Command(resume={"review_id": review.id})
@@ -897,13 +938,97 @@ class AgentRuntime(ActionRuntimeMixin):
                 )
         return await self.current(state)
 
-    async def wait_for_human_roll(self, state):
-        state = await self.node(state, "wait_for_human_roll")
+    async def discover_encounters(self, state):
+        state = await self.node(state, "discover_encounters")
+
+        async def operation(session, room):
+            cycle = await session.get(AgentCycle, state["cycle_id"])
+            await self.service.sanity.encounters.discover(session, room, cycle)
+            return cycle.state
+
+        return await self.service.mutate(state["room_id"], operation)
+
+    async def prepare_encounter(self, state):
+        from app.rooms.sanity_schemas import SanityRequest
+
+        state = await self.node(state, "prepare_encounter")
+
+        async def operation(session, room):
+            cycle = await session.get(AgentCycle, state["cycle_id"])
+            queue = [dict(e) for e in cycle.state.get("encounter_queue", [])]
+            pending = cycle.state.get("pending_check_id")
+            if pending:
+                check = await session.get(CheckRecord, pending)
+                require(check.status == "resolved", "前一等待项尚未结算")
+                current = next(e for e in queue if e.get("check_id") == pending)
+                index = current.get("participant_index", 0) + 1
+                current.update(participant_index=index, check_id=None)
+                if index >= len(current["target_member_ids"]):
+                    current["status"] = "done"
+            cycle.state = {
+                **cycle.state,
+                "encounter_queue": queue,
+                "pending_check_id": None,
+                "wait_reason": None,
+                "status": "running",
+            }
+            cycle.status = "running"
+            item = next((e for e in queue if e["status"] not in {"done", "rejected"}), None)
+            if not item:
+                cycle.state = {**cycle.state, "settlement_phase": "narration"}
+            elif item["status"] == "review":
+                cycle.status = "waiting_for_roll"
+                cycle.state = {
+                    **cycle.state,
+                    "status": "waiting_for_roll",
+                    "wait_reason": "sanity_encounter_review",
+                }
+                self.service.cycle_event(session, room, cycle)
+            else:
+                run = await session.get(AgentRun, cycle.state["keeper_run_id"])
+                check = await self.service.sanity.request(
+                    session,
+                    room,
+                    SanityRequest(
+                        target_member_id=item["target_member_ids"][
+                            item.get("participant_index", 0)
+                        ],
+                        entity_id=item["entity_id"],
+                        effect_id=item["effect_id"],
+                        source_event_seq=item["source_event_seq"],
+                    ),
+                    run=run,
+                    encounter=item,
+                )
+                item["check_id"] = check.id
+                cycle.state = {**cycle.state, "encounter_queue": queue}
+            return cycle.state
+
+        return await self.service.mutate(state["room_id"], operation)
+
+    async def wait_for_encounter_review(self, state):
+        interrupt({"wait_reason": "sanity_encounter_review"})
+        return await self.current(state)
+
+    async def wait_for_sanity(self, state):
+        return await self.wait_for_human_roll(state, node_name="wait_for_sanity")
+
+    async def wait_for_human_roll(self, state, node_name="wait_for_human_roll"):
+        state = await self.node(state, node_name)
         check_id = state.get("pending_check_id")
         if not check_id:
             return state
         async with self.rooms.database.sessions() as session:
             check = await session.get(CheckRecord, check_id)
+            if check.status == "resolved":
+
+                async def already_resolved(session, room):
+                    cycle = await session.get(AgentCycle, state["cycle_id"])
+                    cycle.status = "running"
+                    cycle.state = {**cycle.state, "status": "running", "wait_reason": None}
+                    return cycle.state
+
+                return await self.service.mutate(state["room_id"], already_resolved)
             member = await session.get(RoomMember, check.target_member_id)
             automatic = member.controller_type == "agent"
         if automatic:

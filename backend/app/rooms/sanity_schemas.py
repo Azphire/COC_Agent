@@ -13,6 +13,12 @@ class SanityEffect(DomainModel):
     id: str = Field(min_length=1, max_length=80)
     encounter: str = Field(min_length=1, max_length=200)
     trigger: Literal["action_target", "entity_revealed"] = "action_target"
+    automation: Literal["automatic", "host_review"] = "host_review"
+    repeat: Literal["first_only", "host_confirmed"] = "first_only"
+    action_types: list[Literal["observe", "investigate", "interact", "use_item"]] = Field(
+        default_factory=lambda: ["observe", "investigate", "interact"], max_length=4
+    )
+    condition: str = Field(default="", max_length=300)
     success_loss: str = Field(default="0", max_length=32)
     failure_loss: str = Field(max_length=32)
     source: str = Field(min_length=1, max_length=200)
@@ -52,6 +58,22 @@ class SanityRequest(DomainModel):
     source_event_seq: Annotated[StrictInt, Field(ge=1)]
 
 
+class HostSanityRequest(SanityRequest):
+    encounter_confirmed: bool = False
+    repeat_confirmed: bool = False
+    reason: str = Field(default="", max_length=500)
+
+
+class EncounterReview(DomainModel):
+    source_event_seq: Annotated[StrictInt, Field(ge=1)]
+    entity_id: str
+    effect_id: str
+    approve: bool
+    target_member_ids: list[UUID] = Field(default_factory=list, max_length=30)
+    repeat_confirmed: bool = False
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class SanityRoll(DomainModel):
     # A stale click for SAN cannot accidentally roll the following loss/INT stage.
     expected_stage: Literal["san", "loss", "int", "duration"]
@@ -78,6 +100,7 @@ class ResourceCorrection(DomainModel):
 
 
 class SanityProgress(DomainModel):
+    origin: Literal["automatic", "host_review", "host"] = "host"
     insanity_kind: str = "none"
     phase: str = "none"
     symptom: str = ""

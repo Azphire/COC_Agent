@@ -251,7 +251,7 @@ data/
 
 SQLite 默认为 `data/game.db`，启动时用 `metadata.create_all` 增量创建原有角色／房间八张表及第三批 Agent 九张表，保留已有数据；没有修改旧表列。房间修改在 SQLite `BEGIN IMMEDIATE` 事务中完成，数据库约束保障序号与幂等，提交后按权限广播。`CHECKPOINT_DB_PATH` 指定 LangGraph SQLite 文件；未配置时使用游戏数据库同目录的 `<数据库名>.checkpoints.db`。本地数据和数据库不提交，各数据目录用 `.gitkeep` 保留。
 
-尚未实现：完整 CoC 规则、完整模组自动结构化、战斗／追逐／疯狂／成长、远程角色上传、公网部署和多 worker 广播。当前支持本地文本 RAG、一个原创练习模组和已核对的最小属性／技能检定，不使用向量数据库或 embedding。
+已接入 SAN 自动遭遇、疯狂状态，以及普通检定的可选幸运消耗和孤注审批／结算，见 [规则与接口](docs/check-settlement-and-encounters.md)。尚未实现：完整 CoC 规则、全模组准备、对抗／组合检定、战斗／追逐／成长、远程角色上传、公网部署和多 worker 广播。当前支持本地文本 RAG、一个原创练习模组和已核对的最小属性／技能检定，不使用向量数据库或 embedding。
 
 ## 模组准备、主机审阅与调查板（第五批）
 

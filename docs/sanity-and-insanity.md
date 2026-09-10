@@ -27,6 +27,10 @@
   "id": "corpse-san",
   "encounter": "目睹血肉模糊的恐怖尸体",
   "trigger": "action_target",
+  "automation": "automatic",
+  "repeat": "first_only",
+  "action_types": ["observe", "investigate", "interact"],
+  "condition": "",
   "success_loss": "1",
   "failure_loss": "1d4+1",
   "source": "coc7-1907:bc8455d443ec4c64ae86ec2d6e6637889eff2cd59a4cc4686076e95b130d08dc",
@@ -38,7 +42,7 @@
 }
 ```
 
-`trigger=action_target` 要求实际 `action.submitted` 的行动者和 `target_entity_id` 匹配；`entity_revealed` 要求真实 `entity.revealed` 的实体匹配。KP 还须使用本轮事件、当前场景实体；回顾和规则问题不构成新的 SAN 遭遇。未批准配置不得请求扣点。同一角色、同一实体遭遇事件只能选择一个效果，不能换效果重复扣减。不同的实际遭遇是否应再检定，由主机／批准配置决定。
+第十一批已接入行动生效／实体揭示后的确定性自动发现。显式目标须先通过行动裁决；自然语言只取当前可见范围唯一匹配。冻结实际遭遇者，不因实体公开便令全员掷骰；重复行动、回顾和规则提问不构成新遭遇。旧配置、文字条件和效果歧义交主机确认；模型请求仅记录提案。详见 [普通检定后处理与自动遭遇](check-settlement-and-encounters.md)。
 
 模组依据使用 `source="module:<该准备的 source_hash>"`，`page` 必须在实体 `source_pages` 中。规则依据仅接受上述精确版本和本批核对页。来源与公式的校验不代替主机对文字内容的审阅。允许 `0`–`100` 常数或小写 `NdM±K`，至多 10 颗、每颗 2–100 面，公式所有可能结果必须落在 0–100；禁止任意代码、负结果和无限骰式。
 

@@ -22,7 +22,6 @@ from app.persistence.agent_models import (
 from app.persistence.knowledge_models import AgentModelCall
 from app.persistence.room_models import RoomEvent, RoomMember
 from app.rooms.service import event_view, iso_utc, require
-from app.rules.checks import roll_check
 
 ACTIVE = ("running", "waiting_for_roll", "waiting_for_review", "failed")
 
@@ -56,6 +55,9 @@ class AgentService:
         from app.rooms.sanity_service import SanityService
 
         self.sanity = SanityService(self)
+        from app.agents.settlement import CheckSettlementService
+
+        self.settlement = CheckSettlementService(self)
 
     async def sanitize(self, session, room, value):
         members = await self.rooms.members(session, room)
@@ -107,11 +109,11 @@ class AgentService:
         if cycle_id:
             query = query.where(CheckRecord.cycle_id == cycle_id)
         records = await session.scalars(query)
-        return [
+        views = [
             (
                 {**r.document, **self.check_public(r.document), "sanity": r.document["sanity"]}
                 if r.document.get("sanity")
-                else r.document
+                else {**r.document, **self.check_public(r.document)}
             )
             if identity.is_host
             else self.check_public(r.document)
@@ -123,6 +125,16 @@ class AgentService:
                 and r.target_member_id == identity.member_id
             )
         ]
+
+        for view in views:
+            if view.get("settlement") and (
+                identity.is_host or view["target_member_id"] == identity.member_id
+            ):
+                record = await session.get(CheckRecord, view["id"])
+                view["options"] = await self.settlement.options(session, room, record.document)
+                if view["status"] != "pending" or view["settlement"]["stage"] != "choice":
+                    view["options"] = {"luck": [], "push": False}
+        return views
 
     @staticmethod
     def check_public(document):
@@ -308,11 +320,41 @@ class AgentService:
 
     async def apply(self, session, room, identity, action, body, target):
         action = action.removeprefix("agent.")
-        if action not in {"action", "check.roll", "sanity.roll"}:
+        if action not in {"action", "check.roll", "sanity.roll", "check.choice", "check.push_roll"}:
             require(identity.is_host, "仅主机可以执行此操作", 403)
+        if action == "check.rules":
+            require(body.expected_revision == room.revision, "房间版本已变化")
+            require(not await self.cycle(session, room.id, active=True), "请在无活动回合时配置")
+            room.session_state = {**room.session_state, "luck_spending": body.luck_spending}
+            self.rooms.append(
+                session,
+                room,
+                "check.rules_changed",
+                identity.member_id,
+                {"luck_spending": body.luck_spending},
+            )
+            return {}
+        if action in {"check.choice", "check.push_review", "check.push_roll", "check.handled"}:
+            record = await session.get(CheckRecord, target)
+            await self.settlement.authorize(
+                session, room, identity, record, action in {"check.push_review", "check.handled"}
+            )
+            if action == "check.choice":
+                await self.settlement.choice(session, room, record, body)
+            elif action == "check.push_review":
+                await self.settlement.review(session, room, record, body)
+            elif action == "check.push_roll":
+                await self.settlement.push_roll(session, room, record)
+            else:
+                await self.settlement.handled(session, room, record, body)
+            return {"check": self.check_public(record.document)}
         if action == "sanity.request":
             record = await self.sanity.request(session, room, body)
             return {"check": record.document}
+        if action == "sanity.review":
+            cycle = await self.cycle(session, room.id, active=True)
+            await self.sanity.encounters.review(session, room, cycle, body)
+            return {}
         if action == "sanity.manage":
             await self.sanity.manage(session, room, body)
             return {}
@@ -629,6 +671,11 @@ class AgentService:
                 )
             ):
                 progress = pending.document.get("sanity")
+                settlement = pending.document.get("settlement") or {}
+                require(
+                    not settlement,
+                    "已掷出的普通检定须选择接受或完成结算；回退请读档",
+                )
                 require(
                     not progress or progress.get("after") is None,
                     "已扣减的 SAN 遭遇须完成 INT／症状阶段；需要回退请读档",
@@ -862,6 +909,8 @@ class AgentService:
             )
             return
         require(record.status == "pending", "此检定已解决或取消")
+        if record.document.get("settlement"):
+            return  # repeated original-roll click never rolls a push or accepts a choice
         member = await session.get(RoomMember, record.target_member_id)
         require(
             member and member.active and (member.controller_type == "agent") == automatic,
@@ -883,19 +932,7 @@ class AgentService:
 
         value = current_check_value(room, slot, check.kind, check.name)
         check.value = value
-        check.dice, check.result = roll_check(
-            self.rooms.dice, value, check.difficulty, check.bonus_dice, check.penalty_dice
-        )
-        check.status, check.resolved_at = "resolved", utc_now()
-        record.status, record.document = check.status, check.model_dump(mode="json")
-        self.rooms.append(
-            session,
-            room,
-            "check.resolved",
-            member.id,
-            {**self.check_public(record.document), "cycle_id": record.cycle_id},
-            check.visibility,
-        )
+        await self.settlement.rolled(session, room, record, check, automatic)
 
     async def save(self, session, room, snapshot):
         await self.navigation.save(session, room, snapshot)
@@ -975,13 +1012,12 @@ class AgentService:
             require(module is None, "该旧存档没有模组状态，请使用绑定模组之后的存档")
             return
         data = saved.document
-        # Rewind SAN processing with resources; fixed dice remain in append-only events.
-        saved_checks = {c["id"]: c for c in data["checks"] if c["document"].get("sanity")}
+        # Old ordinary saves have no settlement key. They still restore their
+        # pending stage; fixed dice remain available from append-only events.
+        saved_checks = {c["id"]: c for c in data["checks"]}
         for check in await session.scalars(
             select(CheckRecord).where(CheckRecord.room_id == room.id)
         ):
-            if not check.document.get("sanity"):
-                continue
             if check.id in saved_checks:
                 row = saved_checks[check.id]
                 check.status, check.document, check.cycle_id = (
@@ -991,7 +1027,12 @@ class AgentService:
                 )
             else:
                 check.status = "cancelled"
-                check.document = {**check.document, "status": "cancelled", "sanity_rewound": True}
+                check.document = {
+                    **check.document,
+                    "status": "cancelled",
+                    "sanity_rewound": True,
+                    "settlement_rewound": True,
+                }
         await session.flush()
         from app.agents.adjudication_schemas import AdjudicationSaveState
         from app.persistence.adjudication_models import AgentBehaviorRecord, SummaryRecoveryRecord
@@ -1047,15 +1088,39 @@ class AgentService:
         if data["cycle"]:
             restored = await session.get(AgentCycle, data["cycle"]["id"])
             saved_pending = saved_checks.get(data["cycle"]["state"].get("pending_check_id"))
-            if saved_pending and saved_pending["status"] == "pending":
+            if saved_pending and (
+                saved_pending["status"] == "pending"
+                or data["cycle"]["status"] == "waiting_for_roll"
+                and saved_pending["status"] == "resolved"
+            ):
+                # A decision can commit just before the graph is scheduled.
+                # Saving that paid/result-final window must still resume the
+                # remaining reveal/SAN/narration stages after a later load.
                 restored.status = "waiting_for_roll"
                 restored.state = {
                     **data["cycle"]["state"],
                     "status": "waiting_for_roll",
                     "sanity_restore": True,
                     "wait_reason": "sanity_symptom"
-                    if saved_pending["document"]["sanity"]["stage"] == "symptom"
-                    else "human_roll",
+                    if (saved_pending["document"].get("sanity") or {}).get("stage") == "symptom"
+                    else {
+                        "choice": "check_choice",
+                        "push_review": "push_review",
+                        "push_roll": "push_roll",
+                        "consequence": "push_consequence",
+                    }.get(
+                        (saved_pending["document"].get("settlement") or {}).get("stage"),
+                        "human_roll",
+                    ),
+                    "safe_error": None,
+                }
+                self.cycle_event(session, room, restored)
+            elif data["cycle"]["state"].get("wait_reason") == "sanity_encounter_review":
+                restored.status = "waiting_for_roll"
+                restored.state = {
+                    **data["cycle"]["state"],
+                    "sanity_restore": True,
+                    "status": "waiting_for_roll",
                     "safe_error": None,
                 }
                 self.cycle_event(session, room, restored)

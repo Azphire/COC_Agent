@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 from adjudication_helpers import proposal_for
-from test_agent_runtime import game, submit, wait_cycle  # noqa: F401
+from test_agent_runtime import accept_original, game, submit, wait_cycle  # noqa: F401
 from test_module_navigation import navigation_game, structure_data  # noqa: F401
 from test_module_navigation_runtime import act, running_navigation  # noqa: F401
 from test_rooms import headers, lobby, ok  # noqa: F401
@@ -307,9 +307,14 @@ def test_check_wait_precedes_narration_and_duplicate_roll(client, game):  # noqa
     check = ok(client.get(game["prefix"] + "/checks"))[0]
     path = game["prefix"] + f"/checks/{check['id']}/roll"
     first = ok(client.post(path, json={}))
+    first["check"] = accept_original(client, game, check["id"])
     assert wait_cycle(client, game)["status"] == "completed"
     second = ok(client.post(path, json={}))
-    assert first["check"]["result"] == second["check"]["result"]
+    assert all(
+        first["check"]["result"][key] == second["check"]["result"][key]
+        for key in ("total", "threshold", "level", "passed", "outcome")
+    )
+    assert first["check"]["dice"] == second["check"]["dice"]
     events = ok(client.get(game["prefix"] + "/events"))["events"]
     narration = next(e["payload"]["text"] for e in events if e["type"] == "keeper.narration")
     assert f"骰点 {first['check']['result']['total']}" in narration

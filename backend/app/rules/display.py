@@ -61,6 +61,17 @@ def check_display(document):
             f"：骰点 {result['total']}，目标 {result['threshold']}，"
             f"{LEVELS[result['level']]}，{'通过' if result['passed'] else '未通过'}。"
         )
+    elif document.get("settlement"):
+        progress = document["settlement"]
+        raw = progress["original_result"]
+        stage = {
+            "choice": "等待玩家选择",
+            "push_review": "等待主机核准孤注",
+            "push_roll": "等待确认孤注掷骰",
+            "consequence": "等待主机处理后果",
+        }
+        text += f"：原骰点 {raw['total']}，{LEVELS[raw['level']]}；"
+        text += stage.get(progress["stage"], "待结算") + "。"
     else:
         text += f"，技能值 {document['value']}，等待掷骰。"
     return {

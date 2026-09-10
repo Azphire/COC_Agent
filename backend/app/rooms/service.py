@@ -386,6 +386,11 @@ class RoomService:
                 if action in {
                     "agent.action",
                     "agent.check.roll",
+                    "agent.check.choice",
+                    "agent.check.push_review",
+                    "agent.check.push_roll",
+                    "agent.check.handled",
+                    "agent.sanity.review",
                     "agent.retry",
                     "resume",
                     "agent.sanity.request",
@@ -629,6 +634,11 @@ class RoomService:
             require(room.status in ("running", "paused"), "游戏开始后才能修改会话状态")
             require(body.expected_revision == room.revision, "房间已更新，请重新加载状态后编辑")
             previous_state = SessionStateV1.model_validate(room.session_state)
+            require(
+                body.state.luck_spending == previous_state.luck_spending,
+                "幸运可选规则请使用检定规则配置接口",
+                422,
+            )
             require(
                 {k: c.model_dump(exclude={"conditions"}) for k, c in body.state.characters.items()}
                 == {

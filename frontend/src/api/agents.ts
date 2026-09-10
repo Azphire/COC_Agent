@@ -7,6 +7,8 @@ export type AgentProfileInput = {
 }
 export type AgentProfile = AgentProfileInput & { id: string; created_at: string; updated_at: string }
 export type Check = {
+  options?: { luck: { spend: number; result: NonNullable<Check['result']> }[]; push: boolean };
+  settlement?: { stage: string; original_result: NonNullable<Check['result']>; luck_spent: number; luck_before?: number; luck_after?: number; effort?: string; push_result?: NonNullable<Check['result']>; consequence_status?: string; handled_reason?: string; review?: { approve: boolean; reason: string; consequence?: { description: string; kind: string } } } | null;
   sanity?: { stage: string; before: number; after: number | null; loss: number | null; immune: boolean } | null;
   id: string; target_member_id: string; name: string; display_name?: string; display_text?: string; kind: string; value: number;
   difficulty: 'regular' | 'hard' | 'extreme'; bonus_dice: number; penalty_dice: number;
@@ -30,3 +32,5 @@ export const difficultyLabels = { regular: '普通', hard: '困难', extreme: '�
 export const resultLabels: Record<string, string> = { critical: '大成功', extreme: '极难成功', hard: '困难成功', regular: '普通成功', failure: '失败', fumble: '大失败' }
 export const nodeLabels: Record<string, string> = { wait_for_host_review: '等待主机审阅', execute_deferred_tools: '执行已批准行动', wait_for_late_host_review: '核对审阅结果', collect_context: '整理现场', keeper_decide: 'KP 思考中', validate_keeper_actions: 'KP 思考中', execute_keeper_tools: 'KP 推进调查', wait_for_human_roll: '等待检定', resolve_keeper_response: 'KP 叙事中', narrate_publicly: 'KP 叙事中', run_teammates: '队友行动中', update_memories: '整理记忆', finish_cycle: '回合结束' }
 Object.assign(nodeLabels, { answer_rule_question: '规则问答', plan_keeper_action: 'KP 正在规划', validate_player_intent: '核对行动意图', validate_keeper_plan: '核对行动条件', supplement_context: '核对当前现场', execute_read_tools: 'KP 正在调查', create_checks: '准备检定', execute_state_tools: '执行已批准行动', generate_keeper_narration: 'KP 正在生成结果', decide_teammates: '队友行动中', update_summary: '整理记忆' })
+
+Object.assign(nodeLabels, { discover_encounters: '核对实际遭遇', prepare_encounter: '准备 SAN', wait_for_sanity: '等待 SAN 结算', wait_for_encounter_review: '等待主机确认遭遇' })

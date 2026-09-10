@@ -994,6 +994,9 @@ class ActionRuntimeMixin:
         from app.rooms.service import Identity
 
         events = await self.rooms.events(session, room, Identity(room.host_member_id, True))
+        from app.memory.events import story_events
+
+        events, _ = story_events(events)
         selected = [
             e
             for e in events

@@ -400,8 +400,7 @@ class AgentTools:
                 "runtime": room.session_state.get("characters", {}).get(slot.id, {}),
             }
         if name == "request_sanity_check":
-            record = await service.sanity.request(session, room, args, run)
-            return {"check_id": record.id, "status": record.status}
+            return await service.sanity.encounters.propose(session, room, args, run)
         if name == "request_skill_check":
             if args.visibility != "host_only":
                 ensure_public_text(module, args.reason)
