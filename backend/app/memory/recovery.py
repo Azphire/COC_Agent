@@ -10,7 +10,12 @@ from sqlalchemy import func, select
 from app.agents.adjudication_schemas import SummaryRecoveryState
 from app.agents.schemas import SummaryOutput
 from app.domain.character import utc_now
-from app.memory.events import current_participants, epistemic_event, story_events
+from app.memory.events import (
+    current_participants,
+    epistemic_event,
+    incidental_records,
+    story_events,
+)
 from app.persistence.adjudication_models import SummaryRecoveryRecord
 from app.persistence.agent_models import AgentCycle, AgentMemory, AgentRun, ProfileRecord
 from app.rooms.service import Identity, require
@@ -23,6 +28,7 @@ SUMMARY_INSTRUCTION = (
     "不确定的安排直接省略。返回 content，不输出推理。"
     "NPC、队友台词必须保留说话人与‘说/声称/猜测’属性，不能写成已证实事实。"
     "keeper.narration只是模型叙述；关键发现与成功仅以entity.revealed、clue.revealed、check.resolved、scene.updated确认。"
+    "incidental_sources是已经公开说出的KP即兴补充，摘要提及时保留其即兴来源、说话人和场景，不能升级为关键发现。"
     "action.submitted和agent.action_proposed是意图；提问、建议、条件假设不是已执行动作。"
 )
 
@@ -265,6 +271,25 @@ class SummaryRecoveryService:
                         require(identifier in source, "摘要引用了未提供的标识", 422)
                     old = await session.get(AgentMemory, old_id) if old_id else None
                     require(not old or old.active, "摘要已被其他请求更新")
+                    source_events, _ = story_events(
+                        await self.agents.rooms.events(
+                            session, room, Identity(binding.member_id, role == "keeper")
+                        )
+                    )
+                    incidental = [
+                        record
+                        for event in source_events
+                        if event["seq"] in known_seqs
+                        for record in incidental_records(event)
+                    ][-6:]
+                    if incidental:
+                        # Keep bounded attribution even if the summary model
+                        # omits it. Older quotes remain retrievable from events.
+                        content += "\nKP即兴补充出处（非关键发现，不证明当前在场）：\n" + "\n".join(
+                            f"事件#{r['source_event_seq']}，{r['speaker']}，"
+                            f"场景 {r['scene_id']}：{r['text']}"
+                            for r in incidental
+                        )
                     if old:
                         old.active = False
                     seqs = [e["seq"] for e in context["events"]]

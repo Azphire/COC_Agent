@@ -139,7 +139,7 @@ def test_brief_keeps_profile_separate_from_testimony_and_current_receipt():
     brief, _ = response_brief(plan, context, {"events": [], "failed_tools": []})
     assert brief["trigger_seq"] == 91
     assert brief["allowed_facts"] == []
-    assert brief["responder"]["unrecorded_testimony"] == "unknown"
+    assert brief["responder"]["portrayal"] == "愿意出借雨伞。"
     assert brief["withdrawal"] is None
     plan.focus.question = "为什么有私有的紫月暗号？"
     plan.focus.purpose = "寻找私有的紫月暗号"

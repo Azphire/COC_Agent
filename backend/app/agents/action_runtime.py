@@ -34,8 +34,9 @@ PLAN_INSTRUCTION = (
     "问过去听见什么不是玩家现在聆听。公开部分与未发现的隐藏部分分开；check_requirements只适用其注明任务。"
     "说服不肯合作的人、危险移动可以主动叫骰，也可考虑玩家建议技能；不能为凑成败字段发明障碍。"
     "有检定则name用真实技能key，写实际success_effect和failure_consequence；同任务引用previous_attempts，不重复掷骰。"
-    "answer_basis选facts相关公开事实、unrecorded未记载见闻、social当下意愿、teammate队友回答或rules规则。"
-    "人物介绍不是见闻；没记载所问经历就选unrecorded。public_fact_ids仅选相关候选ID，私有知识仍受公开条件限制。"
+    "answer_basis选facts相关公开事实、improvise普通留白、social当下意愿、teammate队友回答或rules规则。"
+    "普通未记载见闻可以适度即兴，不需主机审阅；人物介绍供表达性格，public_fact_ids仅选相关候选ID。"
+    "incidental_memories是先前公开的KP即兴，保留说话人和地点以便续聊，不能当作关键发现；私有知识仍受公开条件限制。"
     "conversation_parent是等待事项：放弃未掷尝试填pending_action=withdraw，改方法replace，独立交流independent，依赖原结果defer；同句问题仍保留。"
     "发现和转场必须对应当前动作与批准条件；proposed_transition_id从approved_exits选，旧模组用已有移动工具。"
     "只回顾用recall，规则用out_of_character。不能替其他人行动或凭空创造关键事实、成功、出口、资源。"
@@ -45,10 +46,13 @@ NARRATION_INSTRUCTION = (
     "你是中文跑团的公开叙述者，输出KeeperNarration。只回应response_brief指定的本轮任务。"
     "question是当前问题，attempt是玩家正在尝试的动作，completed_results是服务端实际结果。"
     "responder为npc才输出npc_speech.text，写第一人称台词；public_narration只写简短动作或环境，可空，不能重复台词。"
-    "responder.portrayal是人物介绍，不是亲历见闻。allowed_facts列出的事实才可作为答案，claim_ids只选对应ID。"
-    "没有资料支持的过去见闻，答不知道或记不准即可，不能编造解释、当时在干什么、听到什么、原因或来源。"
-    "answer_basis=unrecorded时只表达无法确认这件事，哪怕人物职业似乎适合知道，也不能补写。"
-    "普通意愿和礼貌可以即兴；关键发现、物品交接、玩家决定、行动成功只能来自completed_results。"
+    "先有内容地回答玩家当前问题，再适度给出可以继续尝试的方向，让玩家选择做法。"
+    "responder.portrayal供人物表达；allowed_facts是公开依据，claim_ids只选对应ID，已知可读文字应准确回答。"
+    "answer_basis=improvise或旧unrecorded时，自然补全普通见闻、环境、可读文字或临时互动对象，不需主机审阅。"
+    "以当前场景和已公开线索引导即兴，不强迫调查路线，不覆盖已有内容，不补写核心真相、隐藏答案或关键发现。"
+    "incidental_memories保留了先前即兴的说话人和地点；追问时保持一致，历史地点不代表当前在场。"
+    "每轮最多两处简短即兴细节，先写入public_narration或npc_speech，再把原样短句列入incidental_details。"
+    "临时对象仅作叙述互动，不创建可结算实体、出口或资源；检定结果、物品交接和行动成功以completed_results为准。"
     "询问是否还物品仍待玩家递出，提出建议仍待玩家决定，不能描述这些已经发生。"
     "withdrawal只表示本轮服务端处理的撤回；为空就不能谈撤回。"
     "responder为teammate时留给队友回答，不冒充队友。"
@@ -59,6 +63,7 @@ NARRATION_INSTRUCTION = (
 TEAMMATE_INSTRUCTION = (
     "你是调查员队友。只返回 TeammateDecision；只使用当前公开信息、自身角色和自身记忆。"
     "fact_scope=current_scene才能视为在场；其余只可明确回顾，不能推断携带或转移。"
+    "incidental_memories是KP已公开的普通补充，按说话人与地点续聊，不能当作关键发现或检定结果。"
     "结合性格、近期对话和已知信息决定接话、讨论、协助、尝试或pass。被直接询问时回应问题；协助可以与玩家同目标，但要说明自己的具体贡献，避免无意义复读。"
     "不得揭示隐藏实体或触发转场。移动建议只能 speak。目标只能复制公开实体 ID。"
     "related_player_action_seq 复制 triggering_action.seq。行动类型使用真实语义；"
@@ -766,11 +771,6 @@ class ActionRuntimeMixin:
                 )
                 if k in context
             }
-            if context["response_brief"]["answer_basis"] == "unrecorded":
-                instruction += (
-                    "本轮资料没有记载所问见闻。仅用一句自然台词承认无法确认，public_narration留空。"
-                    "不解释为什么不知道，不补写当时的活动；‘没听到’是见闻断言，不能替代‘记不清’。"
-                )
         result, latency = await self.service.model.generate(
             [
                 {
@@ -828,7 +828,7 @@ class ActionRuntimeMixin:
             PLAN_INSTRUCTION
             + "可用proposed_tool_calls：get_current_scene({})、open_module_node({node_id})、"
             "inspect_approved_entities({})、inspect_character({member_id})、search_rules({query})。"
-            "缺少模组依据可request_host_review；无需重复输出检定、揭示和转场工具。",
+            "普通资料留白交给公开回应适度即兴；核心事实变更仍按原审阅机制。无需重复输出检定、揭示和转场工具。",
         )
 
         async def persist(session, room):
@@ -1377,16 +1377,6 @@ class ActionRuntimeMixin:
         )
         public_material = "\n".join(e["public_summary"] for e in public.values())
         brief = run.context.get("response_brief", {})
-        if brief.get("answer_basis") == "unrecorded" and output.npc_speech:
-            require(
-                not re.search(
-                    r"(?:那晚|昨晚|当时|那时|之前).{0,14}(?:在|去了|听见|听到|看见|看到)"
-                    r"|(?:没|没有)(?:听到|看见|看到|听见)|(?:我|他|她)(?:一直|正在)|只记得",
-                    output.npc_speech.text,
-                ),
-                "资料未记载该见闻，只能说记不清或无法确认；删除当时活动和没听见等见闻断言",
-                422,
-            )
         if brief and not brief.get("attempt"):
             require(
                 not re.search(
@@ -1479,7 +1469,7 @@ class ActionRuntimeMixin:
             scene_id=scene["id"],
             results=await self.public_results(session, room, cycle),
         )
-        ensure_public_text(await self.service.module(session, room.id), output.public_narration)
+        ensure_public_text(await self.service.module(session, room.id), text)
         if output.npc_speech:
             npc = next(
                 (
@@ -1565,6 +1555,8 @@ class ActionRuntimeMixin:
             rule_question = rule_question_text(
                 run.context.get("triggering_action", {}).get("payload", {}).get("text", "")
             ) and doc.plan.parsed_intent.type not in {"converse", "recall"}
+            if not rule_question:
+                output.needs_host_ruling = doc.validation.status == "host_review_required"
             if (
                 rule_question
                 and run.context.get("knowledge_enabled")
@@ -1604,6 +1596,7 @@ class ActionRuntimeMixin:
                     rejected=bool(
                         doc.validation.rejected_actions and not doc.validation.approved_actions
                     ),
+                    brief=run.context.get("response_brief"),
                 )
 
             try:
@@ -1675,6 +1668,19 @@ class ActionRuntimeMixin:
                 documents, citations = [], []
             if fallback_reason and rule_question and not run.context.get("RULE_EVIDENCE"):
                 content = "需要主持人裁定：目前没有找到可以支持这项规则解释的依据。"
+            from app.memory.events import published_incidental_details
+
+            if fallback_reason:
+                output.incidental_details = []
+            # Record only the exact text that will be published, attributed to
+            # its actual speaker. The same short quote is stored at most once.
+            speech_details = published_incidental_details(
+                output.incidental_details, output.npc_speech.text if output.npc_speech else ""
+            )
+            narration_details = published_incidental_details(
+                [d for d in output.incidental_details if d not in speech_details], content
+            )
+            output.incidental_details = narration_details + speech_details
             doc.narration_validation = {
                 **doc.narration_validation,
                 "valid": fallback_reason is None,
@@ -1716,7 +1722,9 @@ class ActionRuntimeMixin:
                         "needs_host_ruling": output.needs_host_ruling,
                         "safe_fallback": fallback_reason is not None,
                         "check_notice": None,
-                        "incidental_details": output.incidental_details,
+                        "incidental_details": narration_details,
+                        "incidental_source": "kp_improvisation",
+                        "scene_id": run.context["current_scene_reference"],
                     },
                     request_id=run.id,
                 )
@@ -1734,6 +1742,9 @@ class ActionRuntimeMixin:
                         "entity_id": output.npc_speech.entity_id,
                         "actor_name": public[output.npc_speech.entity_id]["title"],
                         "text": output.npc_speech.text,
+                        "incidental_details": speech_details,
+                        "incidental_source": "kp_improvisation",
+                        "scene_id": run.context["current_scene_reference"],
                     },
                     request_id=run.id + ":npc",
                 )

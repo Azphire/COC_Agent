@@ -191,7 +191,6 @@ def generation_contract(schema, context):
                 "check_result_reference": None,
                 "transition_result_reference": None,
                 "public_entity_references": [],
-                "incidental_details": [],
                 **({"npc_speech": None} if responder.get("kind") != "npc" else {}),
             },
             **fields,
@@ -211,6 +210,16 @@ def restore_output(output, schema, context):
     value = output.model_dump(mode="json")
     if schema is KeeperPlan and value.get("focus"):
         focus = value["focus"]
+        if focus.get("answer_basis") in {"improvise", "unrecorded"}:
+            from app.agents.action_policy import READ_TOOLS
+
+            if (
+                not value.get("proposed_check")
+                and not value.get("proposed_reveal_entity_ids")
+                and not value.get("proposed_transition_id")
+                and all(t["name"] in READ_TOOLS for t in value["proposed_tool_calls"])
+            ):
+                value["needs_host_review"] = False
         clauses = utterance_clauses(context["triggering_action"]["payload"]["text"])
         for name in ("action", "question", "suggestion", "hypothesis"):
             key = name + "_clause_ids"

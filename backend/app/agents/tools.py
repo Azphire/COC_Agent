@@ -36,6 +36,7 @@ class ToolDefinition:
     arguments: type
     roles: frozenset[str]
     description: str
+    read_only: bool = False
 
 
 KEEPER, INVESTIGATOR, BOTH = (
@@ -49,18 +50,26 @@ TOOLS = {
         KEEPER,
         "请求批准实体的 SAN 效果；复制 effect_id 和具体遭遇事件 seq，不接受损失点数",
     ),
-    "get_current_scene": ToolDefinition(s.Empty, KEEPER, "按权威导航读取当前场景"),
-    "list_scene_contents": ToolDefinition(s.Empty, KEEPER, "当前场景内的节点与区块索引"),
+    "get_current_scene": ToolDefinition(s.Empty, KEEPER, "按权威导航读取当前场景", read_only=True),
+    "list_scene_contents": ToolDefinition(
+        s.Empty, KEEPER, "当前场景内的节点与区块索引", read_only=True
+    ),
     "open_module_node": ToolDefinition(NodeArgs, KEEPER, "读取当前、祖先或显式关联节点的受限内容"),
     "lookup_module_entity": ToolDefinition(
         LookupArgs, KEEPER, "按实体 ID 或准确标题查找，返回同名候选"
     ),
-    "list_scene_transitions": ToolDefinition(s.Empty, KEEPER, "列出当前场景的批准转换及条件"),
-    "get_public_scene": ToolDefinition(s.Empty, BOTH, "读取当前公开场景"),
-    "list_public_entities": ToolDefinition(s.Empty, BOTH, "读取公开调查板"),
+    "list_scene_transitions": ToolDefinition(
+        s.Empty, KEEPER, "列出当前场景的批准转换及条件", read_only=True
+    ),
+    "get_public_scene": ToolDefinition(s.Empty, BOTH, "读取当前公开场景", read_only=True),
+    "list_public_entities": ToolDefinition(s.Empty, BOTH, "读取公开调查板", read_only=True),
     "lookup_public_entity": ToolDefinition(LookupArgs, BOTH, "仅查询已公开实体"),
-    "inspect_approved_entities": ToolDefinition(s.Empty, KEEPER, "查看当前房间批准实体与公开条件"),
-    "inspect_public_entities": ToolDefinition(s.Empty, BOTH, "读取与真人调查板相同的公开实体"),
+    "inspect_approved_entities": ToolDefinition(
+        s.Empty, KEEPER, "查看当前房间批准实体与公开条件", read_only=True
+    ),
+    "inspect_public_entities": ToolDefinition(
+        s.Empty, BOTH, "读取与真人调查板相同的公开实体", read_only=True
+    ),
     "reveal_entity": ToolDefinition(
         EntityArgs, KEEPER, "按批准条件揭示当前房间实体，不接受自行编写的文本"
     ),
@@ -80,7 +89,9 @@ TOOLS = {
     "get_evidence_excerpt": ToolDefinition(
         ExcerptArgs, BOTH, "读取当前 run 已授权获得的证据短摘录"
     ),
-    "inspect_public_state": ToolDefinition(s.Empty, BOTH, "读取当前公开场景、NPC 和已公开线索"),
+    "inspect_public_state": ToolDefinition(
+        s.Empty, BOTH, "读取当前公开场景、NPC 和已公开线索", read_only=True
+    ),
     "inspect_character": ToolDefinition(s.CharacterArgs, KEEPER, "读取房间成员的真实角色快照"),
     "request_skill_check": ToolDefinition(
         s.CheckRequest, KEEPER, "为角色请求一次服务端检定；不能指定技能值或骰点"
@@ -93,7 +104,9 @@ TOOLS = {
     "write_memory": ToolDefinition(
         s.MemoryArgs, KEEPER, "以来源事件记忆事实；无来源推测只能记为 belief"
     ),
-    "inspect_own_character": ToolDefinition(s.Empty, INVESTIGATOR, "读取自己席位的角色卡"),
+    "inspect_own_character": ToolDefinition(
+        s.Empty, INVESTIGATOR, "读取自己席位的角色卡", read_only=True
+    ),
     "speak": ToolDefinition(
         s.SpeechArgs, INVESTIGATOR, "本轮发言一次，与 propose_action 合计最多一次"
     ),
@@ -123,11 +136,18 @@ def definitions(role, *, structure_navigation=False):
     ]
 
 
+def normalize_arguments(name, arguments):
+    spec = TOOLS.get(name)
+    if spec and spec.read_only and not spec.arguments.model_fields:
+        return {}
+    return arguments
+
+
 def validate(name, arguments, role):
     require(name in TOOLS, "工具未注册", 422)
     spec = TOOLS[name]
     require(role in spec.roles, "此角色无权使用该工具", 403)
-    return spec.arguments.model_validate(arguments)
+    return spec.arguments.model_validate(normalize_arguments(name, arguments))
 
 
 def ensure_public_text(module_record, text):

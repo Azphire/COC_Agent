@@ -1,6 +1,79 @@
 """Shared story selection. Input must already be filtered for the reader's permissions."""
 
+import re
 from collections import Counter
+
+
+def published_incidental_details(details, text):
+    """Extract short verbatim quotes; a draft field is never publication."""
+    return list(
+        dict.fromkeys(
+            d.strip()
+            for d in details
+            if isinstance(d, str) and 0 < len(d.strip()) <= 160 and d.strip() in text
+        )
+    )[:2]
+
+
+def incidental_records(event):
+    payload = event["payload"]
+    if (
+        event.get("visibility") != "public"
+        or event["type"] not in {"keeper.narration", "npc.spoke"}
+        or payload.get("safe_fallback")
+        or payload.get("incidental_source") != "kp_improvisation"
+    ):
+        return []
+    return [
+        {
+            "text": detail,
+            "source": "kp_improvisation",
+            "source_event_seq": event["seq"],
+            "speaker_id": payload.get("entity_id") or event.get("actor_member_id"),
+            "speaker": payload.get("actor_name") or "KP",
+            "scene_id": payload.get("scene_id"),
+        }
+        for detail in published_incidental_details(
+            payload.get("incidental_details", []), payload.get("text", "")
+        )
+    ]
+
+
+def relevant_incidental_memories(visible_events, query, scene_id, *, limit=6, budget=1400):
+    """Retrieve public quotes on the active story branch, independently of summaries."""
+    events, _ = story_events(visible_events)
+
+    def terms(text):
+        # Chinese questions rarely contain spaces. Bigrams also find short
+        # follow-ups without introducing an embedding model or another store.
+        tokens = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", text.lower())
+        return {t for t in tokens if len(t) > 1} | {
+            t[i : i + 2] for t in tokens for i in range(len(t) - 1)
+        }
+
+    wanted = terms(query)
+    ranked = []
+    for event in events:
+        for record in incidental_records(event):
+            current = bool(scene_id and record["scene_id"] == scene_id)
+            score = len(wanted & terms(record["text"] + record["speaker"]))
+            if not current and not score:
+                continue
+            record["fact_scope"] = "current_scene" if current else "historical"
+            ranked.append((score, current, event["seq"], record))
+    selected, used = [], 0
+    import json
+
+    for _, _, _, record in sorted(ranked, key=lambda r: r[:3], reverse=True):
+        size = len(json.dumps(record, ensure_ascii=False))
+        if used + size > budget:
+            continue
+        selected.append(record)
+        used += size
+        if len(selected) >= limit:
+            break
+    return selected
+
 
 STORY_TYPES = {
     "check.rolled",
@@ -35,12 +108,19 @@ INITIAL_TYPES = {"entity.revealed", "entity.corrected", "clue.revealed", "scene.
 
 def epistemic_event(event):
     kind = event["type"]
-    return {**event, "epistemic_status": (
-        "intent_not_result" if kind in {"action.submitted", "agent.action_proposed"}
-        else "attributed_testimony" if kind in {"npc.spoke", "agent.spoke", "chat.message"}
-        else "narration_not_evidence" if kind == "keeper.narration"
-        else "authoritative_result"
-    )}
+    return {
+        **event,
+        **({"incidental_sources": incidental_records(event)} if incidental_records(event) else {}),
+        "epistemic_status": (
+            "intent_not_result"
+            if kind in {"action.submitted", "agent.action_proposed"}
+            else "attributed_testimony"
+            if kind in {"npc.spoke", "agent.spoke", "chat.message"}
+            else "narration_not_evidence"
+            if kind == "keeper.narration"
+            else "authoritative_result"
+        ),
+    }
 
 
 def story_events(visible_events):

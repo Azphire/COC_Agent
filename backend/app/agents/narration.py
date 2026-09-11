@@ -38,10 +38,18 @@ def response_brief(plan, context, results, *, withdrawal=None):
         wanted.add(focus.action_target_id)
     options = context.get("PUBLIC_CLAIM_OPTIONS", [])
     if focus:
+        current_ids = {
+            e["id"]
+            for e in context.get("public_entities", [])
+            if e.get("fact_scope", "current_scene") == "current_scene"
+        }
+        current_ids.add(context.get("module", {}).get("scene", {}).get("id"))
         options = [
             c
             for c in options
-            if c["claim_id"] in wanted or set(c["entity_ids"]) & wanted or c["category"] == "rule"
+            if c["claim_id"] in wanted
+            or set(c["entity_ids"]) & (wanted | current_ids)
+            or c["category"] == "rule"
         ]
     # A profile is portrayal, not testimony or evidence that a conversation happened.
     facts = [c for c in options if not npc or npc["id"] not in c["entity_ids"]]
@@ -50,22 +58,25 @@ def response_brief(plan, context, results, *, withdrawal=None):
         "speaker_id": intent.actor_member_id,
         "question": question,
         "purpose": focus.action if focus and focus.action in raw and focus.action else question,
-        "answer_basis": focus.answer_basis if focus else "social",
+        "answer_basis": "improvise"
+        if focus and focus.answer_basis == "unrecorded"
+        else focus.answer_basis
+        if focus
+        else "social",
         "attempt": attempt,
         "responder": {
             "id": npc["id"],
             "name": npc["title"],
             "kind": "npc",
-            "portrayal": npc["public_summary"]
-            if not focus or focus.answer_basis != "unrecorded"
-            else "",
-            "unrecorded_testimony": "unknown",
+            "portrayal": npc["public_summary"],
         }
         if npc
         else {"id": addressee, "name": people[addressee], "kind": "teammate"}
         if addressee in people
         else {"kind": "keeper"},
         "allowed_facts": [{"id": c["claim_id"], "text": c["statement"]} for c in facts],
+        "current_scene": context.get("module", {}).get("scene", {}),
+        "incidental_memories": context.get("incidental_memories", []),
         "completed_results": results,
         "withdrawal": withdrawal,
         "pending_decisions": list(
@@ -173,7 +184,7 @@ class NarrationValidator:
         }
 
 
-def fallback_narration(intent_type, results, public_scene, *, rejected=False):
+def fallback_narration(intent_type, results, public_scene, *, rejected=False, brief=None):
     checks = [e["payload"] for e in results["events"] if e["type"] == "check.resolved"]
     transitions = [e["payload"] for e in results["events"] if e["type"] == "scene.updated"]
     reveals = [
@@ -202,12 +213,17 @@ def fallback_narration(intent_type, results, public_scene, *, rejected=False):
         return transitions[-1].get("scene_summary") or "你已抵达当前场景，可以继续查看周围。"
     if reveals:
         return "你查看了眼前的目标。\n" + "\n".join(reveals)
-    if rejected:
-        return "你暂时无法完成这项行动，可以根据眼前的情况选择下一步。"
-    if intent_type == "converse":
-        return "你向对方询问了情况，目前没有得到更多可以确认的信息。"
-    if intent_type in {"observe", "investigate"}:
-        return "你仔细查看了周围，目前没有新的发现。" + (
-            "\n" + public_scene if public_scene else ""
-        )
-    return "你留意着眼前的情况，可以继续决定下一步行动。"
+    brief = brief or {}
+    facts = [f["text"] for f in brief.get("allowed_facts", []) if f.get("text")]
+    memories = [
+        f"{m['speaker']}先前提到：{m['text']}" for m in brief.get("incidental_memories", [])[:2]
+    ]
+    available = list(dict.fromkeys(facts[:3] + memories)) or (
+        [public_scene] if public_scene else []
+    )
+    directions = (
+        "你可以继续追问具体细节，或查看这些信息提到的地方；接下来怎么做由你决定。"
+        if intent_type == "converse"
+        else "你可以继续查看眼前的人或物，也可以换个方法尝试；接下来怎么做由你决定。"
+    )
+    return "\n".join([*available, directions])

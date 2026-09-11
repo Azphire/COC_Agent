@@ -1,0 +1,1043 @@
+diff --git a/backend/app/agents/action_policy.py b/backend/app/agents/action_policy.py
+index 046f638..7b10f16 100644
+--- a/backend/app/agents/action_policy.py
++++ b/backend/app/agents/action_policy.py
+@@ -173,7 +173,12 @@ class ActionPolicyValidator:
+         *,
+         after_check=False,
+     ):
+-        from app.agents.tools import TOOLS
++        from app.agents.tools import TOOLS, normalize_arguments, validate
++
++        actions = [
++            t.model_copy(update={"arguments": normalize_arguments(t.name, t.arguments)})
++            for t in actions
++        ]
+ 
+         result = ValidatedActionPlan(
+             plan_id=plan.plan_id,
+@@ -226,6 +231,21 @@ class ActionPolicyValidator:
+                 for i, t in enumerate(actions)
+                 if t.name not in READ_TOOLS
+             ]
++            for action in list(result.approved_actions):
++                try:
++                    validate(action.tool.name, action.tool.arguments, "keeper")
++                except (ValidationError, RoomError) as error:
++                    result.approved_actions.remove(action)
++                    result.rejected_actions.append(
++                        ActionRejection(
++                            index=action.index,
++                            tool=action.tool.name,
++                            code="invalid_arguments"
++                            if isinstance(error, ValidationError)
++                            else "permission_denied",
++                            reason="只读工具参数或权限无效",
++                        )
++                    )
+             return result
+         if not facts.can_move_party and (
+             plan.proposed_transition_id
+diff --git a/backend/app/agents/action_runtime.py b/backend/app/agents/action_runtime.py
+index a48f279..ae62dc1 100644
+--- a/backend/app/agents/action_runtime.py
++++ b/backend/app/agents/action_runtime.py
+@@ -34,8 +34,9 @@ PLAN_INSTRUCTION = (
+     "问过去听见什么不是玩家现在聆听。公开部分与未发现的隐藏部分分开；check_requirements只适用其注明任务。"
+     "说服不肯合作的人、危险移动可以主动叫骰，也可考虑玩家建议技能；不能为凑成败字段发明障碍。"
+     "有检定则name用真实技能key，写实际success_effect和failure_consequence；同任务引用previous_attempts，不重复掷骰。"
+-    "answer_basis选facts相关公开事实、unrecorded未记载见闻、social当下意愿、teammate队友回答或rules规则。"
+-    "人物介绍不是见闻；没记载所问经历就选unrecorded。public_fact_ids仅选相关候选ID，私有知识仍受公开条件限制。"
++    "answer_basis选facts相关公开事实、improvise普通留白、social当下意愿、teammate队友回答或rules规则。"
++    "普通未记载见闻可以适度即兴，不需主机审阅；人物介绍供表达性格，public_fact_ids仅选相关候选ID。"
++    "incidental_memories是先前公开的KP即兴，保留说话人和地点以便续聊，不能当作关键发现；私有知识仍受公开条件限制。"
+     "conversation_parent是等待事项：放弃未掷尝试填pending_action=withdraw，改方法replace，独立交流independent，依赖原结果defer；同句问题仍保留。"
+     "发现和转场必须对应当前动作与批准条件；proposed_transition_id从approved_exits选，旧模组用已有移动工具。"
+     "只回顾用recall，规则用out_of_character。不能替其他人行动或凭空创造关键事实、成功、出口、资源。"
+@@ -45,10 +46,13 @@ NARRATION_INSTRUCTION = (
+     "你是中文跑团的公开叙述者，输出KeeperNarration。只回应response_brief指定的本轮任务。"
+     "question是当前问题，attempt是玩家正在尝试的动作，completed_results是服务端实际结果。"
+     "responder为npc才输出npc_speech.text，写第一人称台词；public_narration只写简短动作或环境，可空，不能重复台词。"
+-    "responder.portrayal是人物介绍，不是亲历见闻。allowed_facts列出的事实才可作为答案，claim_ids只选对应ID。"
+-    "没有资料支持的过去见闻，答不知道或记不准即可，不能编造解释、当时在干什么、听到什么、原因或来源。"
+-    "answer_basis=unrecorded时只表达无法确认这件事，哪怕人物职业似乎适合知道，也不能补写。"
+-    "普通意愿和礼貌可以即兴；关键发现、物品交接、玩家决定、行动成功只能来自completed_results。"
++    "先有内容地回答玩家当前问题，再适度给出可以继续尝试的方向，让玩家选择做法。"
++    "responder.portrayal供人物表达；allowed_facts是公开依据，claim_ids只选对应ID，已知可读文字应准确回答。"
++    "answer_basis=improvise或旧unrecorded时，自然补全普通见闻、环境、可读文字或临时互动对象，不需主机审阅。"
++    "以当前场景和已公开线索引导即兴，不强迫调查路线，不覆盖已有内容，不补写核心真相、隐藏答案或关键发现。"
++    "incidental_memories保留了先前即兴的说话人和地点；追问时保持一致，历史地点不代表当前在场。"
++    "每轮最多两处简短即兴细节，先写入public_narration或npc_speech，再把原样短句列入incidental_details。"
++    "临时对象仅作叙述互动，不创建可结算实体、出口或资源；检定结果、物品交接和行动成功以completed_results为准。"
+     "询问是否还物品仍待玩家递出，提出建议仍待玩家决定，不能描述这些已经发生。"
+     "withdrawal只表示本轮服务端处理的撤回；为空就不能谈撤回。"
+     "responder为teammate时留给队友回答，不冒充队友。"
+@@ -59,6 +63,7 @@ NARRATION_INSTRUCTION = (
+ TEAMMATE_INSTRUCTION = (
+     "你是调查员队友。只返回 TeammateDecision；只使用当前公开信息、自身角色和自身记忆。"
+     "fact_scope=current_scene才能视为在场；其余只可明确回顾，不能推断携带或转移。"
++    "incidental_memories是KP已公开的普通补充，按说话人与地点续聊，不能当作关键发现或检定结果。"
+     "结合性格、近期对话和已知信息决定接话、讨论、协助、尝试或pass。被直接询问时回应问题；协助可以与玩家同目标，但要说明自己的具体贡献，避免无意义复读。"
+     "不得揭示隐藏实体或触发转场。移动建议只能 speak。目标只能复制公开实体 ID。"
+     "related_player_action_seq 复制 triggering_action.seq。行动类型使用真实语义；"
+@@ -766,11 +771,6 @@ class ActionRuntimeMixin:
+                 )
+                 if k in context
+             }
+-            if context["response_brief"]["answer_basis"] == "unrecorded":
+-                instruction += (
+-                    "本轮资料没有记载所问见闻。仅用一句自然台词承认无法确认，public_narration留空。"
+-                    "不解释为什么不知道，不补写当时的活动；‘没听到’是见闻断言，不能替代‘记不清’。"
+-                )
+         result, latency = await self.service.model.generate(
+             [
+                 {
+@@ -828,7 +828,7 @@ class ActionRuntimeMixin:
+             PLAN_INSTRUCTION
+             + "可用proposed_tool_calls：get_current_scene({})、open_module_node({node_id})、"
+             "inspect_approved_entities({})、inspect_character({member_id})、search_rules({query})。"
+-            "缺少模组依据可request_host_review；无需重复输出检定、揭示和转场工具。",
++            "普通资料留白交给公开回应适度即兴；核心事实变更仍按原审阅机制。无需重复输出检定、揭示和转场工具。",
+         )
+ 
+         async def persist(session, room):
+@@ -1377,16 +1377,6 @@ class ActionRuntimeMixin:
+         )
+         public_material = "\n".join(e["public_summary"] for e in public.values())
+         brief = run.context.get("response_brief", {})
+-        if brief.get("answer_basis") == "unrecorded" and output.npc_speech:
+-            require(
+-                not re.search(
+-                    r"(?:那晚|昨晚|当时|那时|之前).{0,14}(?:在|去了|听见|听到|看见|看到)"
+-                    r"|(?:没|没有)(?:听到|看见|看到|听见)|(?:我|他|她)(?:一直|正在)|只记得",
+-                    output.npc_speech.text,
+-                ),
+-                "资料未记载该见闻，只能说记不清或无法确认；删除当时活动和没听见等见闻断言",
+-                422,
+-            )
+         if brief and not brief.get("attempt"):
+             require(
+                 not re.search(
+@@ -1479,7 +1469,7 @@ class ActionRuntimeMixin:
+             scene_id=scene["id"],
+             results=await self.public_results(session, room, cycle),
+         )
+-        ensure_public_text(await self.service.module(session, room.id), output.public_narration)
++        ensure_public_text(await self.service.module(session, room.id), text)
+         if output.npc_speech:
+             npc = next(
+                 (
+@@ -1565,6 +1555,8 @@ class ActionRuntimeMixin:
+             rule_question = rule_question_text(
+                 run.context.get("triggering_action", {}).get("payload", {}).get("text", "")
+             ) and doc.plan.parsed_intent.type not in {"converse", "recall"}
++            if not rule_question:
++                output.needs_host_ruling = doc.validation.status == "host_review_required"
+             if (
+                 rule_question
+                 and run.context.get("knowledge_enabled")
+@@ -1604,6 +1596,7 @@ class ActionRuntimeMixin:
+                     rejected=bool(
+                         doc.validation.rejected_actions and not doc.validation.approved_actions
+                     ),
++                    brief=run.context.get("response_brief"),
+                 )
+ 
+             try:
+@@ -1675,6 +1668,19 @@ class ActionRuntimeMixin:
+                 documents, citations = [], []
+             if fallback_reason and rule_question and not run.context.get("RULE_EVIDENCE"):
+                 content = "需要主持人裁定：目前没有找到可以支持这项规则解释的依据。"
++            from app.memory.events import published_incidental_details
++
++            if fallback_reason:
++                output.incidental_details = []
++            # Record only the exact text that will be published, attributed to
++            # its actual speaker. The same short quote is stored at most once.
++            speech_details = published_incidental_details(
++                output.incidental_details, output.npc_speech.text if output.npc_speech else ""
++            )
++            narration_details = published_incidental_details(
++                [d for d in output.incidental_details if d not in speech_details], content
++            )
++            output.incidental_details = narration_details + speech_details
+             doc.narration_validation = {
+                 **doc.narration_validation,
+                 "valid": fallback_reason is None,
+@@ -1716,7 +1722,9 @@ class ActionRuntimeMixin:
+                         "needs_host_ruling": output.needs_host_ruling,
+                         "safe_fallback": fallback_reason is not None,
+                         "check_notice": None,
+-                        "incidental_details": output.incidental_details,
++                        "incidental_details": narration_details,
++                        "incidental_source": "kp_improvisation",
++                        "scene_id": run.context["current_scene_reference"],
+                     },
+                     request_id=run.id,
+                 )
+@@ -1734,6 +1742,9 @@ class ActionRuntimeMixin:
+                         "entity_id": output.npc_speech.entity_id,
+                         "actor_name": public[output.npc_speech.entity_id]["title"],
+                         "text": output.npc_speech.text,
++                        "incidental_details": speech_details,
++                        "incidental_source": "kp_improvisation",
++                        "scene_id": run.context["current_scene_reference"],
+                     },
+                     request_id=run.id + ":npc",
+                 )
+diff --git a/backend/app/agents/adjudication_schemas.py b/backend/app/agents/adjudication_schemas.py
+index d0062f2..d4debbc 100644
+--- a/backend/app/agents/adjudication_schemas.py
++++ b/backend/app/agents/adjudication_schemas.py
+@@ -1,7 +1,7 @@
+ """Versioned action boundaries; no model reasoning or world-state copies."""
+ 
+ from datetime import datetime
+-from typing import Literal
++from typing import Annotated, Literal
+ 
+ from pydantic import Field, model_validator
+ 
+@@ -73,10 +73,12 @@ class TurnFocus(DomainModel):
+     purpose: str = Field(default="", max_length=240)
+     obstacle: str = Field(default="", max_length=240, json_schema_extra={"x-explicit-output": True})
+     public_fact_ids: list[str] = Field(default_factory=list, max_length=5)
+-    answer_basis: Literal["facts", "unrecorded", "social", "teammate", "rules"] = Field(
+-        default="social",
+-        json_schema_extra={"x-explicit-output": True},
+-        description="所问见闻没有获准相关记载选unrecorded；有相关事实选facts；寒暄/意愿选social",
++    answer_basis: Literal["facts", "improvise", "unrecorded", "social", "teammate", "rules"] = (
++        Field(
++            default="social",
++            json_schema_extra={"x-explicit-output": True},
++            description="有相关公开事实选facts；普通资料留白选improvise（兼容unrecorded）；寒暄/意愿选social",
++        )
+     )
+ 
+ 
+@@ -162,7 +164,7 @@ class KeeperNarration(DomainModel):
+     public_narration: str = Field(
+         default="",
+         max_length=2000,
+-        description="公开环境、动作与回应。NPC台词仅放npc_speech，不在此复述。不得新增模组事实或未结算效果。",
++        description="先回应玩家，可适度补充普通细节。NPC台词仅放npc_speech。不得创造核心真相或未结算效果。",
+     )
+     npc_speech: NPCSpeech | None = Field(
+         default=None, json_schema_extra={"x-explicit-output": True}
+@@ -174,7 +176,12 @@ class KeeperNarration(DomainModel):
+     transition_result_reference: str | None = None
+     needs_host_ruling: bool = False
+     current_scene_reference: str | None = None
+-    incidental_details: list[str] = Field(default_factory=list, max_length=3)
++    incidental_details: list[Annotated[str, Field(min_length=1, max_length=160)]] = Field(
++        default_factory=list,
++        max_length=2,
++        description="本轮已在旁白或NPC台词中原样说出的即兴短句，最多两处；不含草稿、关键发现或结算结果",
++        json_schema_extra={"x-explicit-output": True},
++    )
+ 
+ 
+ class ContextGap(DomainModel):
+diff --git a/backend/app/agents/generation_contracts.py b/backend/app/agents/generation_contracts.py
+index 78b5ebf..85c49d2 100644
+--- a/backend/app/agents/generation_contracts.py
++++ b/backend/app/agents/generation_contracts.py
+@@ -191,7 +191,6 @@ def generation_contract(schema, context):
+                 "check_result_reference": None,
+                 "transition_result_reference": None,
+                 "public_entity_references": [],
+-                "incidental_details": [],
+                 **({"npc_speech": None} if responder.get("kind") != "npc" else {}),
+             },
+             **fields,
+@@ -211,6 +210,16 @@ def restore_output(output, schema, context):
+     value = output.model_dump(mode="json")
+     if schema is KeeperPlan and value.get("focus"):
+         focus = value["focus"]
++        if focus.get("answer_basis") in {"improvise", "unrecorded"}:
++            from app.agents.action_policy import READ_TOOLS
++
++            if (
++                not value.get("proposed_check")
++                and not value.get("proposed_reveal_entity_ids")
++                and not value.get("proposed_transition_id")
++                and all(t["name"] in READ_TOOLS for t in value["proposed_tool_calls"])
++            ):
++                value["needs_host_review"] = False
+         clauses = utterance_clauses(context["triggering_action"]["payload"]["text"])
+         for name in ("action", "question", "suggestion", "hypothesis"):
+             key = name + "_clause_ids"
+diff --git a/backend/app/agents/narration.py b/backend/app/agents/narration.py
+index a943445..cb42c4e 100644
+--- a/backend/app/agents/narration.py
++++ b/backend/app/agents/narration.py
+@@ -38,10 +38,18 @@ def response_brief(plan, context, results, *, withdrawal=None):
+         wanted.add(focus.action_target_id)
+     options = context.get("PUBLIC_CLAIM_OPTIONS", [])
+     if focus:
++        current_ids = {
++            e["id"]
++            for e in context.get("public_entities", [])
++            if e.get("fact_scope", "current_scene") == "current_scene"
++        }
++        current_ids.add(context.get("module", {}).get("scene", {}).get("id"))
+         options = [
+             c
+             for c in options
+-            if c["claim_id"] in wanted or set(c["entity_ids"]) & wanted or c["category"] == "rule"
++            if c["claim_id"] in wanted
++            or set(c["entity_ids"]) & (wanted | current_ids)
++            or c["category"] == "rule"
+         ]
+     # A profile is portrayal, not testimony or evidence that a conversation happened.
+     facts = [c for c in options if not npc or npc["id"] not in c["entity_ids"]]
+@@ -50,22 +58,25 @@ def response_brief(plan, context, results, *, withdrawal=None):
+         "speaker_id": intent.actor_member_id,
+         "question": question,
+         "purpose": focus.action if focus and focus.action in raw and focus.action else question,
+-        "answer_basis": focus.answer_basis if focus else "social",
++        "answer_basis": "improvise"
++        if focus and focus.answer_basis == "unrecorded"
++        else focus.answer_basis
++        if focus
++        else "social",
+         "attempt": attempt,
+         "responder": {
+             "id": npc["id"],
+             "name": npc["title"],
+             "kind": "npc",
+-            "portrayal": npc["public_summary"]
+-            if not focus or focus.answer_basis != "unrecorded"
+-            else "",
+-            "unrecorded_testimony": "unknown",
++            "portrayal": npc["public_summary"],
+         }
+         if npc
+         else {"id": addressee, "name": people[addressee], "kind": "teammate"}
+         if addressee in people
+         else {"kind": "keeper"},
+         "allowed_facts": [{"id": c["claim_id"], "text": c["statement"]} for c in facts],
++        "current_scene": context.get("module", {}).get("scene", {}),
++        "incidental_memories": context.get("incidental_memories", []),
+         "completed_results": results,
+         "withdrawal": withdrawal,
+         "pending_decisions": list(
+@@ -173,7 +184,7 @@ class NarrationValidator:
+         }
+ 
+ 
+-def fallback_narration(intent_type, results, public_scene, *, rejected=False):
++def fallback_narration(intent_type, results, public_scene, *, rejected=False, brief=None):
+     checks = [e["payload"] for e in results["events"] if e["type"] == "check.resolved"]
+     transitions = [e["payload"] for e in results["events"] if e["type"] == "scene.updated"]
+     reveals = [
+@@ -202,12 +213,17 @@ def fallback_narration(intent_type, results, public_scene, *, rejected=False):
+         return transitions[-1].get("scene_summary") or "你已抵达当前场景，可以继续查看周围。"
+     if reveals:
+         return "你查看了眼前的目标。\n" + "\n".join(reveals)
+-    if rejected:
+-        return "你暂时无法完成这项行动，可以根据眼前的情况选择下一步。"
+-    if intent_type == "converse":
+-        return "你向对方询问了情况，目前没有得到更多可以确认的信息。"
+-    if intent_type in {"observe", "investigate"}:
+-        return "你仔细查看了周围，目前没有新的发现。" + (
+-            "\n" + public_scene if public_scene else ""
+-        )
+-    return "你留意着眼前的情况，可以继续决定下一步行动。"
++    brief = brief or {}
++    facts = [f["text"] for f in brief.get("allowed_facts", []) if f.get("text")]
++    memories = [
++        f"{m['speaker']}先前提到：{m['text']}" for m in brief.get("incidental_memories", [])[:2]
++    ]
++    available = list(dict.fromkeys(facts[:3] + memories)) or (
++        [public_scene] if public_scene else []
++    )
++    directions = (
++        "你可以继续追问具体细节，或查看这些信息提到的地方；接下来怎么做由你决定。"
++        if intent_type == "converse"
++        else "你可以继续查看眼前的人或物，也可以换个方法尝试；接下来怎么做由你决定。"
++    )
++    return "\n".join([*available, directions])
+diff --git a/backend/app/agents/tools.py b/backend/app/agents/tools.py
+index fca5672..e311b6c 100644
+--- a/backend/app/agents/tools.py
++++ b/backend/app/agents/tools.py
+@@ -36,6 +36,7 @@ class ToolDefinition:
+     arguments: type
+     roles: frozenset[str]
+     description: str
++    read_only: bool = False
+ 
+ 
+ KEEPER, INVESTIGATOR, BOTH = (
+@@ -49,18 +50,26 @@ TOOLS = {
+         KEEPER,
+         "请求批准实体的 SAN 效果；复制 effect_id 和具体遭遇事件 seq，不接受损失点数",
+     ),
+-    "get_current_scene": ToolDefinition(s.Empty, KEEPER, "按权威导航读取当前场景"),
+-    "list_scene_contents": ToolDefinition(s.Empty, KEEPER, "当前场景内的节点与区块索引"),
++    "get_current_scene": ToolDefinition(s.Empty, KEEPER, "按权威导航读取当前场景", read_only=True),
++    "list_scene_contents": ToolDefinition(
++        s.Empty, KEEPER, "当前场景内的节点与区块索引", read_only=True
++    ),
+     "open_module_node": ToolDefinition(NodeArgs, KEEPER, "读取当前、祖先或显式关联节点的受限内容"),
+     "lookup_module_entity": ToolDefinition(
+         LookupArgs, KEEPER, "按实体 ID 或准确标题查找，返回同名候选"
+     ),
+-    "list_scene_transitions": ToolDefinition(s.Empty, KEEPER, "列出当前场景的批准转换及条件"),
+-    "get_public_scene": ToolDefinition(s.Empty, BOTH, "读取当前公开场景"),
+-    "list_public_entities": ToolDefinition(s.Empty, BOTH, "读取公开调查板"),
++    "list_scene_transitions": ToolDefinition(
++        s.Empty, KEEPER, "列出当前场景的批准转换及条件", read_only=True
++    ),
++    "get_public_scene": ToolDefinition(s.Empty, BOTH, "读取当前公开场景", read_only=True),
++    "list_public_entities": ToolDefinition(s.Empty, BOTH, "读取公开调查板", read_only=True),
+     "lookup_public_entity": ToolDefinition(LookupArgs, BOTH, "仅查询已公开实体"),
+-    "inspect_approved_entities": ToolDefinition(s.Empty, KEEPER, "查看当前房间批准实体与公开条件"),
+-    "inspect_public_entities": ToolDefinition(s.Empty, BOTH, "读取与真人调查板相同的公开实体"),
++    "inspect_approved_entities": ToolDefinition(
++        s.Empty, KEEPER, "查看当前房间批准实体与公开条件", read_only=True
++    ),
++    "inspect_public_entities": ToolDefinition(
++        s.Empty, BOTH, "读取与真人调查板相同的公开实体", read_only=True
++    ),
+     "reveal_entity": ToolDefinition(
+         EntityArgs, KEEPER, "按批准条件揭示当前房间实体，不接受自行编写的文本"
+     ),
+@@ -80,7 +89,9 @@ TOOLS = {
+     "get_evidence_excerpt": ToolDefinition(
+         ExcerptArgs, BOTH, "读取当前 run 已授权获得的证据短摘录"
+     ),
+-    "inspect_public_state": ToolDefinition(s.Empty, BOTH, "读取当前公开场景、NPC 和已公开线索"),
++    "inspect_public_state": ToolDefinition(
++        s.Empty, BOTH, "读取当前公开场景、NPC 和已公开线索", read_only=True
++    ),
+     "inspect_character": ToolDefinition(s.CharacterArgs, KEEPER, "读取房间成员的真实角色快照"),
+     "request_skill_check": ToolDefinition(
+         s.CheckRequest, KEEPER, "为角色请求一次服务端检定；不能指定技能值或骰点"
+@@ -93,7 +104,9 @@ TOOLS = {
+     "write_memory": ToolDefinition(
+         s.MemoryArgs, KEEPER, "以来源事件记忆事实；无来源推测只能记为 belief"
+     ),
+-    "inspect_own_character": ToolDefinition(s.Empty, INVESTIGATOR, "读取自己席位的角色卡"),
++    "inspect_own_character": ToolDefinition(
++        s.Empty, INVESTIGATOR, "读取自己席位的角色卡", read_only=True
++    ),
+     "speak": ToolDefinition(
+         s.SpeechArgs, INVESTIGATOR, "本轮发言一次，与 propose_action 合计最多一次"
+     ),
+@@ -123,11 +136,18 @@ def definitions(role, *, structure_navigation=False):
+     ]
+ 
+ 
++def normalize_arguments(name, arguments):
++    spec = TOOLS.get(name)
++    if spec and spec.read_only and not spec.arguments.model_fields:
++        return {}
++    return arguments
++
++
+ def validate(name, arguments, role):
+     require(name in TOOLS, "工具未注册", 422)
+     spec = TOOLS[name]
+     require(role in spec.roles, "此角色无权使用该工具", 403)
+-    return spec.arguments.model_validate(arguments)
++    return spec.arguments.model_validate(normalize_arguments(name, arguments))
+ 
+ 
+ def ensure_public_text(module_record, text):
+diff --git a/backend/app/memory/events.py b/backend/app/memory/events.py
+index a2ad10a..07f184d 100644
+--- a/backend/app/memory/events.py
++++ b/backend/app/memory/events.py
+@@ -1,7 +1,80 @@
+ """Shared story selection. Input must already be filtered for the reader's permissions."""
+ 
++import re
+ from collections import Counter
+ 
++
++def published_incidental_details(details, text):
++    """Extract short verbatim quotes; a draft field is never publication."""
++    return list(
++        dict.fromkeys(
++            d.strip()
++            for d in details
++            if isinstance(d, str) and 0 < len(d.strip()) <= 160 and d.strip() in text
++        )
++    )[:2]
++
++
++def incidental_records(event):
++    payload = event["payload"]
++    if (
++        event.get("visibility") != "public"
++        or event["type"] not in {"keeper.narration", "npc.spoke"}
++        or payload.get("safe_fallback")
++        or payload.get("incidental_source") != "kp_improvisation"
++    ):
++        return []
++    return [
++        {
++            "text": detail,
++            "source": "kp_improvisation",
++            "source_event_seq": event["seq"],
++            "speaker_id": payload.get("entity_id") or event.get("actor_member_id"),
++            "speaker": payload.get("actor_name") or "KP",
++            "scene_id": payload.get("scene_id"),
++        }
++        for detail in published_incidental_details(
++            payload.get("incidental_details", []), payload.get("text", "")
++        )
++    ]
++
++
++def relevant_incidental_memories(visible_events, query, scene_id, *, limit=6, budget=1400):
++    """Retrieve public quotes on the active story branch, independently of summaries."""
++    events, _ = story_events(visible_events)
++
++    def terms(text):
++        # Chinese questions rarely contain spaces. Bigrams also find short
++        # follow-ups without introducing an embedding model or another store.
++        tokens = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", text.lower())
++        return {t for t in tokens if len(t) > 1} | {
++            t[i : i + 2] for t in tokens for i in range(len(t) - 1)
++        }
++
++    wanted = terms(query)
++    ranked = []
++    for event in events:
++        for record in incidental_records(event):
++            current = bool(scene_id and record["scene_id"] == scene_id)
++            score = len(wanted & terms(record["text"] + record["speaker"]))
++            if not current and not score:
++                continue
++            record["fact_scope"] = "current_scene" if current else "historical"
++            ranked.append((score, current, event["seq"], record))
++    selected, used = [], 0
++    import json
++
++    for _, _, _, record in sorted(ranked, key=lambda r: r[:3], reverse=True):
++        size = len(json.dumps(record, ensure_ascii=False))
++        if used + size > budget:
++            continue
++        selected.append(record)
++        used += size
++        if len(selected) >= limit:
++            break
++    return selected
++
++
+ STORY_TYPES = {
+     "check.rolled",
+     "check.luck_spent",
+@@ -35,12 +108,19 @@ INITIAL_TYPES = {"entity.revealed", "entity.corrected", "clue.revealed", "scene.
+ 
+ def epistemic_event(event):
+     kind = event["type"]
+-    return {**event, "epistemic_status": (
+-        "intent_not_result" if kind in {"action.submitted", "agent.action_proposed"}
+-        else "attributed_testimony" if kind in {"npc.spoke", "agent.spoke", "chat.message"}
+-        else "narration_not_evidence" if kind == "keeper.narration"
+-        else "authoritative_result"
+-    )}
++    return {
++        **event,
++        **({"incidental_sources": incidental_records(event)} if incidental_records(event) else {}),
++        "epistemic_status": (
++            "intent_not_result"
++            if kind in {"action.submitted", "agent.action_proposed"}
++            else "attributed_testimony"
++            if kind in {"npc.spoke", "agent.spoke", "chat.message"}
++            else "narration_not_evidence"
++            if kind == "keeper.narration"
++            else "authoritative_result"
++        ),
++    }
+ 
+ 
+ def story_events(visible_events):
+diff --git a/backend/app/memory/recovery.py b/backend/app/memory/recovery.py
+index 9873919..a4c4295 100644
+--- a/backend/app/memory/recovery.py
++++ b/backend/app/memory/recovery.py
+@@ -10,7 +10,12 @@ from sqlalchemy import func, select
+ from app.agents.adjudication_schemas import SummaryRecoveryState
+ from app.agents.schemas import SummaryOutput
+ from app.domain.character import utc_now
+-from app.memory.events import current_participants, epistemic_event, story_events
++from app.memory.events import (
++    current_participants,
++    epistemic_event,
++    incidental_records,
++    story_events,
++)
+ from app.persistence.adjudication_models import SummaryRecoveryRecord
+ from app.persistence.agent_models import AgentCycle, AgentMemory, AgentRun, ProfileRecord
+ from app.rooms.service import Identity, require
+@@ -23,6 +28,7 @@ SUMMARY_INSTRUCTION = (
+     "不确定的安排直接省略。返回 content，不输出推理。"
+     "NPC、队友台词必须保留说话人与‘说/声称/猜测’属性，不能写成已证实事实。"
+     "keeper.narration只是模型叙述；关键发现与成功仅以entity.revealed、clue.revealed、check.resolved、scene.updated确认。"
++    "incidental_sources是已经公开说出的KP即兴补充，摘要提及时保留其即兴来源、说话人和场景，不能升级为关键发现。"
+     "action.submitted和agent.action_proposed是意图；提问、建议、条件假设不是已执行动作。"
+ )
+ 
+@@ -265,6 +271,25 @@ class SummaryRecoveryService:
+                         require(identifier in source, "摘要引用了未提供的标识", 422)
+                     old = await session.get(AgentMemory, old_id) if old_id else None
+                     require(not old or old.active, "摘要已被其他请求更新")
++                    source_events, _ = story_events(
++                        await self.agents.rooms.events(
++                            session, room, Identity(binding.member_id, role == "keeper")
++                        )
++                    )
++                    incidental = [
++                        record
++                        for event in source_events
++                        if event["seq"] in known_seqs
++                        for record in incidental_records(event)
++                    ][-6:]
++                    if incidental:
++                        # Keep bounded attribution even if the summary model
++                        # omits it. Older quotes remain retrievable from events.
++                        content += "\nKP即兴补充出处（非关键发现，不证明当前在场）：\n" + "\n".join(
++                            f"事件#{r['source_event_seq']}，{r['speaker']}，"
++                            f"场景 {r['scene_id']}：{r['text']}"
++                            for r in incidental
++                        )
+                     if old:
+                         old.active = False
+                     seqs = [e["seq"] for e in context["events"]]
+diff --git a/backend/app/memory/service.py b/backend/app/memory/service.py
+index 2122a5f..9bf61a9 100644
+--- a/backend/app/memory/service.py
++++ b/backend/app/memory/service.py
+@@ -6,7 +6,12 @@ from uuid import uuid4
+ from sqlalchemy import select
+ 
+ from app.agents.modules import public_module
+-from app.memory.events import current_participants, epistemic_event, story_events
++from app.memory.events import (
++    current_participants,
++    epistemic_event,
++    relevant_incidental_memories,
++    story_events,
++)
+ from app.persistence.agent_models import AgentMemory
+ from app.rooms.service import Identity, require
+ 
+@@ -363,7 +368,28 @@ async def build_context(
+     )
+     if budget < 2500:
+         budget = 2500
++    # Select from the full permission-filtered active branch before dialogue and
++    # summary trimming, so an older public improvisation remains available.
+     navigation = await service.navigation.state(session, room.id)
++    memory_base = {
++        k: v for k, v in context.items() if not navigation or k not in {"module", "public_entities"}
++    }
++    incidental = relevant_incidental_memories(
++        all_events,
++        (trigger or {}).get("payload", {}).get("text", ""),
++        prepared.current_scene if prepared else module.state["scene_id"],
++        budget=min(
++            1400,
++            max(
++                0,
++                budget
++                - len(json.dumps(memory_base, ensure_ascii=False))
++                - (2300 if navigation else 1600),
++            ),
++        ),
++    )
++    if incidental:
++        context["incidental_memories"] = incidental
+     if navigation:
+         base_size = len(
+             json.dumps(
+diff --git a/backend/tests/test_agent_runtime.py b/backend/tests/test_agent_runtime.py
+index 864c411..1f0a23d 100644
+--- a/backend/tests/test_agent_runtime.py
++++ b/backend/tests/test_agent_runtime.py
+@@ -219,8 +219,11 @@ def test_module_validation_hash():
+ 
+ 
+ @pytest.mark.parametrize("name", list(TOOLS))
+-def test_every_tool_rejects_unknown_argument(name):
++def test_tool_arguments_preserve_validation_except_empty_reads(name):
+     spec = TOOLS[name]
++    if spec.read_only and not spec.arguments.model_fields:
++        assert validate(name, {"forged_result": 1}, next(iter(spec.roles))).model_dump() == {}
++        return
+     with pytest.raises(ValidationError):
+         validate(name, {"forged_result": 1}, next(iter(spec.roles)))
+ 
+diff --git a/backend/tests/test_batch13.py b/backend/tests/test_batch13.py
+index 8e8f088..0778731 100644
+--- a/backend/tests/test_batch13.py
++++ b/backend/tests/test_batch13.py
+@@ -139,7 +139,7 @@ def test_brief_keeps_profile_separate_from_testimony_and_current_receipt():
+     brief, _ = response_brief(plan, context, {"events": [], "failed_tools": []})
+     assert brief["trigger_seq"] == 91
+     assert brief["allowed_facts"] == []
+-    assert brief["responder"]["unrecorded_testimony"] == "unknown"
++    assert brief["responder"]["portrayal"] == "愿意出借雨伞。"
+     assert brief["withdrawal"] is None
+     plan.focus.question = "为什么有私有的紫月暗号？"
+     plan.focus.purpose = "寻找私有的紫月暗号"
+diff --git a/backend/tests/test_batch14.py b/backend/tests/test_batch14.py
+new file mode 100644
+--- /dev/null
++++ b/backend/tests/test_batch14.py
+@@ -0,0 +1,283 @@
++"""Fake output tests exercise publication, permissions and durable quote retrieval."""
++
++import json
++
++import pytest
++from pydantic import ValidationError
++from test_agent_runtime import game, submit, wait_cycle  # noqa: F401
++from test_batch10 import restore, save
++from test_batch12 import conversational
++from test_check_narration_policy import policy_case
++from test_rooms import lobby, ok  # noqa: F401
++
++from app.agents.action_policy import ActionPolicyValidator
++from app.agents.adjudication_schemas import KeeperNarration, KeeperPlan, TurnFocus
++from app.agents.generation_contracts import generation_contract, restore_output
++from app.agents.model import FakeModelAdapter
++from app.agents.narration import fallback_narration, response_brief
++from app.agents.schemas import Empty, PlannedTool
++from app.agents.tools import TOOLS, ToolDefinition, validate
++from app.memory.events import epistemic_event, relevant_incidental_memories
++from app.models.ollama import generation_schema
++
++
++def event(seq, text, *, kind="keeper.narration", scene="square", **payload):
++    return dict(
++        seq=seq,
++        type=kind,
++        visibility="public",
++        actor_member_id="kp",
++        payload={
++            "text": text,
++            "incidental_details": [text],
++            "scene_id": scene,
++            "incidental_source": "kp_improvisation",
++            "actor_name": "林先生",
++            **payload,
++        },
++    )
++
++
++def install(client, narration, seen=None, basis="improvise"):
++    def respond(messages, kwargs):
++        c = json.loads(messages[1]["content"])
++        schema = kwargs["response_schema"].__name__
++        if seen is not None:
++            seen.append((schema, c))
++        if schema == "KeeperNarration":
++            return narration(c) if callable(narration) else narration
++        if schema == "TeammateDecision":
++            return {"mode": "pass", "confidence": 1}
++        result = conversational(messages, kwargs)
++        if schema == "KeeperPlan":
++            result.update(
++                focus={
++                    "question": c["triggering_action"]["payload"]["text"],
++                    "addressee_id": "caretaker",
++                    "answer_basis": basis,
++                },
++                needs_host_review=True,
++                proposed_tool_calls=[
++                    {"name": "inspect_public_state", "arguments": {"scene_id": "irrelevant"}}
++                ],
++            )
++            if c["triggering_action"]["payload"]["text"].startswith("队友"):
++                member = next(
++                    mid
++                    for mid, name in c["current_participants"]["members"].items()
++                    if "队友" in name
++                )
++                result["focus"].update(addressee_id=member, answer_basis="teammate")
++        return result
++
++    client.app.state.agent_service.model.adapter = FakeModelAdapter(responder=respond)
++
++
++def test_improvisation_generation_limits():
++    c = {"current_scene_reference": "square"}
++    schema = generation_contract(KeeperNarration, c)
++    grammar = generation_schema(schema.model_json_schema())
++    assert grammar["properties"]["incidental_details"]["maxItems"] == 2
++    output = restore_output(schema(incidental_details=["风吹响门边的铃铛。"]), KeeperNarration, c)
++    assert output.incidental_details == ["风吹响门边的铃铛。"]
++    for details in (["一", "二", "三"], ["字" * 161], [""]):
++        with pytest.raises(ValidationError):
++            schema(incidental_details=details)
++
++
++def test_quotes_require_public_actual_speech_and_active_branch():
++    good = event(1, "窗沿放着绿色瓷杯。")
++    draft = event(2, "只说了风声。", incidental_details=["草稿里有红色信封。"])
++    secret = {**event(3, "秘密暗号藏在杯底。"), "visibility": "host_only"}
++    rejected = event(4, "紫色花瓶。", safe_fallback=True)
++    wrong_type = event(5, "草稿中的黄铜勺。", kind="agent.action_proposed")
++    abandoned = event(6, "窗沿放着蓝色瓷杯。")
++    loaded = dict(seq=7, type="snapshot.loaded", visibility="public", payload={"source_seq": 5})
++    events = [good, draft, secret, rejected, wrong_type, abandoned, loaded]
++    rows = relevant_incidental_memories(events, "窗沿的瓷杯呢？", "square")
++    assert [r["text"] for r in rows] == [good["payload"]["text"]]
++    assert rows[0]["source_event_seq"] == 1 and rows[0]["speaker_id"] == "kp"
++    assert rows[0]["fact_scope"] == "current_scene"
++    historical = relevant_incidental_memories(events, "瓷杯呢？", "workshop")
++    assert historical[0]["fact_scope"] == "historical"
++    assert not relevant_incidental_memories(events, "码头？", "workshop")
++    assert epistemic_event(good)["incidental_sources"][0]["source"] == "kp_improvisation"
++
++
++def test_question_retrieval_precedes_recency_and_is_bounded():
++    old = event(1, "窗沿放着绿色瓷杯。", scene="old-room")
++    recent = [event(seq, f"屋里第{seq}盏油灯亮着。") for seq in range(2, 40)]
++    rows = relevant_incidental_memories([old, *recent], "绿色瓷杯在哪里？", "square")
++    assert rows[0]["source_event_seq"] == 1
++    assert len(rows) <= 6 and len(json.dumps(rows, ensure_ascii=False)) < 1450
++
++
++def test_missing_plan_fact_selection_keeps_readable_public_text():
++    facts, intent, _ = policy_case()
++    plan = KeeperPlan(
++        plan_id="p",
++        cycle_id=facts.cycle_id,
++        current_scene_id=facts.scene_id,
++        parsed_intent=intent,
++        focus=TurnFocus(question="我读公告上的文字。"),
++    )
++    c = {
++        "triggering_action": {"seq": 1, "payload": {"text": plan.focus.question}},
++        "public_entities": [
++            {"id": "notice", "type": "clue", "title": "公告", "fact_scope": "current_scene"}
++        ],
++        "PUBLIC_CLAIM_OPTIONS": [
++            {
++                "claim_id": "entity_notice",
++                "entity_ids": ["notice"],
++                "category": "module_fact",
++                "statement": "请从东门入内。",
++            }
++        ],
++    }
++    brief, options = response_brief(plan, c, {"events": [], "failed_tools": []})
++    assert brief["allowed_facts"][0]["text"] == "请从东门入内。"
++    assert options[0]["claim_id"] == "entity_notice"
++    fallback = fallback_narration("investigate", {"events": []}, "", rejected=True, brief=brief)
++    assert "请从东门入内。" in fallback and "怎么做由你决定" in fallback
++    assert "无法完成这项行动" not in fallback
++
++
++def test_empty_read_tools_normalize_without_weakening_other_schemas(monkeypatch):
++    for name, spec in TOOLS.items():
++        if spec.read_only and not spec.arguments.model_fields:
++            assert validate(name, {"wrong": 7}, next(iter(spec.roles))).model_dump() == {}
++    with pytest.raises(ValidationError):
++        validate("inspect_character", {"wrong": 7}, "keeper")
++    with pytest.raises(ValidationError):
++        validate("reveal_clue", {"clue_id": "notice", "wrong": 7}, "keeper")
++    monkeypatch.setitem(
++        TOOLS, "mutating_empty", ToolDefinition(Empty, frozenset({"keeper"}), "test")
++    )
++    with pytest.raises(ValidationError):
++        validate("mutating_empty", {"wrong": 7}, "keeper")
++    facts, intent, _ = policy_case()
++    plan = KeeperPlan(
++        plan_id="p",
++        cycle_id=facts.cycle_id,
++        current_scene_id=facts.scene_id,
++        parsed_intent=intent,
++        focus=TurnFocus(question="你好吗？"),
++    )
++    verdict = ActionPolicyValidator().validate(
++        intent,
++        plan,
++        facts,
++        [
++            PlannedTool(name="inspect_public_state", arguments={"wrong": 7}),
++            PlannedTool(name="inspect_character", arguments={"wrong": 7}),
++        ],
++    )
++    assert verdict.approved_actions[0].tool.arguments == {}
++    assert verdict.rejected_actions[0].code == "invalid_arguments"
++
++
++@pytest.mark.parametrize("basis", ["improvise", "unrecorded"])
++def test_npc_improvisation_published_and_recalled_by_all_roles(client, game, basis):  # noqa: F811
++    detail = "那晚我在擦窗沿的绿色瓷杯。"
++    seen = []
++    install(client, {"npc_speech": {"text": detail}, "incidental_details": [detail]}, seen, basis)
++    ok(submit(client, game, "林先生，昨晚你在做什么？"))
++    assert wait_cycle(client, game)["status"] == "completed"
++    events = ok(client.get(game["prefix"] + "/events"))["events"]
++    speech = next(e for e in events if e["type"] == "npc.spoke")
++    assert speech["payload"]["incidental_details"] == [detail]
++    assert speech["payload"]["entity_id"] == "caretaker"
++    assert speech["payload"]["scene_id"] == "square"
++    assert not any(e["type"] == "keeper.narration" for e in events)
++    assert not any(schema == "ArgumentRepair" for schema, _ in seen)
++    narrator = next(c for schema, c in seen if schema == "KeeperNarration")
++    assert narrator["response_brief"]["answer_basis"] == "improvise"
++    assert narrator["response_brief"]["responder"]["portrayal"]
++    ok(submit(client, game, "林先生，绿色瓷杯是什么样？"))
++    assert wait_cycle(client, game)["status"] == "completed"
++    for schema in ("KeeperPlan", "KeeperNarration"):
++        c = next(c for s, c in reversed(seen) if s == schema)
++        rows = c.get("response_brief", c)["incidental_memories"]
++        assert any(r["text"] == detail and r["speaker_id"] == "caretaker" for r in rows)
++    ok(submit(client, game, "队友，你还记得绿色瓷杯吗？"))
++    assert wait_cycle(client, game)["status"] == "completed"
++    c = next(c for s, c in reversed(seen) if s == "TeammateDecision")
++    assert any(r["text"] == detail for r in c["incidental_memories"])
++
++
++def test_publication_keeps_speakers_and_excludes_unspoken_draft(client, game):  # noqa: F811
++    narration, speech = "门边的小铃轻轻晃动。", "我习惯在午后擦拭窗框。"
++    install(
++        client,
++        {
++            "public_narration": narration,
++            "npc_speech": {"text": speech},
++            "incidental_details": [narration, speech],
++        },
++    )
++    ok(submit(client, game, "林先生，平时你做些什么？"))
++    assert wait_cycle(client, game)["status"] == "completed"
++    events = ok(client.get(game["prefix"] + "/events"))["events"]
++    assert next(e for e in events if e["type"] == "keeper.narration")["payload"][
++        "incidental_details"
++    ] == [narration]
++    assert next(e for e in events if e["type"] == "npc.spoke")["payload"]["incidental_details"] == [
++        speech
++    ]
++    install(
++        client,
++        {"npc_speech": {"text": "午后我通常有空。"}, "incidental_details": ["未发布的红色信封。"]},
++    )
++    ok(submit(client, game, "林先生，午后有空吗？"))
++    assert wait_cycle(client, game)["status"] == "completed"
++    events = ok(client.get(game["prefix"] + "/events"))["events"]
++    rows = relevant_incidental_memories(events, "红色信封", "square")
++    assert not any("红色信封" in r["text"] for r in rows)
++    cycle = ok(client.get(game["prefix"] + "/agent-cycle"))
++    client.portal.call(
++        client.app.state.agent_service.summary_recovery.update,
++        game["room"]["id"],
++        cycle["id"],
++        True,
++    )
++    summary = next(
++        m for m in ok(client.get(game["prefix"] + "/memories")) if m["kind"] == "summary"
++    )
++    assert "KP即兴补充出处" in summary["content"]
++    assert "square" in summary["content"] and speech in summary["content"]
++    assert "红色信封" not in summary["content"]
++
++
++def test_rejected_private_draft_never_enters_public_memory(client, game):  # noqa: F811
++    from app.agents.modules import load_modules
++
++    secret = load_modules()["stopped-clock"].clues[-1].content
++    install(client, {"public_narration": "门外有微风。", "incidental_details": [secret[:160]]})
++    ok(submit(client, game, "林先生，今天天气如何？"))
++    assert wait_cycle(client, game)["status"] == "completed"
++    events = ok(client.get(game["prefix"] + "/events"))["events"]
++    public = [e for e in events if e["visibility"] == "public"]
++    assert secret[:160] not in json.dumps(public, ensure_ascii=False)
++    assert not relevant_incidental_memories(events, "门外", "square")
++    assert any(e["type"] == "keeper.narration" and e["payload"]["safe_fallback"] for e in public)
++
++
++def test_snapshot_reload_retains_only_effective_improvisation_branch(client, game):  # noqa: F811
++    first, abandoned = "窗沿上摆着绿色瓷杯。", "桌边摆着紫色花瓶。"
++    install(client, {"npc_speech": {"text": first}, "incidental_details": [first]})
++    ok(submit(client, game, "林先生，窗边有什么？"))
++    assert wait_cycle(client, game)["status"] == "completed"
++    snapshot = save(client, game)
++    install(client, {"npc_speech": {"text": abandoned}, "incidental_details": [abandoned]})
++    ok(submit(client, game, "林先生，桌边有什么？"))
++    assert wait_cycle(client, game)["status"] == "completed"
++    restore(client, game, snapshot)
++    seen = []
++    install(client, {"npc_speech": {"text": "瓷杯还在那里。"}}, seen)
++    ok(submit(client, game, "林先生，瓷杯和花瓶呢？"))
++    assert wait_cycle(client, game)["status"] == "completed"
++    c = next(c for schema, c in seen if schema == "KeeperNarration")
++    rows = c["response_brief"]["incidental_memories"]
++    assert first in [r["text"] for r in rows]
++    assert abandoned not in [r["text"] for r in rows]
+diff --git a/docs/batch-14-report.md b/docs/batch-14-report.md
+new file mode 100644
+--- /dev/null
++++ b/docs/batch-14-report.md
+@@ -0,0 +1,62 @@
++# 第十四批：允许 KP 适度即兴并记住补充内容
++
++本批基于 `363957b966aaf1aeef8622ab4bbbe860ce377672`，执行前 HEAD 与该提交一致、工作区干净。代码允许 KP 补全普通资料留白，并从已发布事件检索补充内容。第十三批报告及其历史结论保留原样。**本次原模型短会话仍未通过自然主持验收。**
++
++## 实现
++
++- 新增 `improvise` 回应类别，旧 `unrecorded` 进入同一流程。删除必须回答“不知道／记不准”的提示及字面拦截；保留 NPC 人物描述，要求先回答当前问题，再适度给出可探索方向，由玩家决定做法。普通留白无需主机审阅；核心事实变更、隐藏信息、检定、资源、玩家决定仍受原机制约束。
++- KP 可以补充普通见闻、环境、可读文字及临时互动对象。`incidental_details` 进入实际生成语法，每轮最多两条、每条最多 160 字符；这些文字不会创建线索实体、出口或资源。
++- 发布阶段只保存最终旁白或 NPC 台词中原样出现的短句，分别归入 `keeper.narration` 和 `npc.spoke`。事件保留说话人、`scene_id`、`incidental_source=kp_improvisation`。未说出的草稿被排除；被拒绝输出和回退内容不产生即兴记录。公开校验同时检查该字段中的私密内容。
++- 后续 KP、队友与公开回应按当前问题检索事件记录。沿用 `story_v1` 的有效读档分支，在近期对话和摘要裁剪之前选取；按问题文字相关性、场景和事件新近程度排序，最多六条、约 1400 字符预算，标注当前场景或历史位置。检索为有界字词匹配，不是完整语义检索。
++- 摘要输入保留即兴出处，服务端为摘要附上最多六条相关来源记录的说话人、场景、事件序号及原话，明确不是关键发现。更早的原始记录仍可从事件档案独立检索。
++- 即使规划没有选中公开事实，公开回应也能取得当前场景候选。模型回退文本提供已有公开内容和可继续尝试的方向，删除通用“无法完成这项行动”结束语。
++- 仅对明确标记为只读且参数模型为空的工具归一化参数为 `{}`，规划校验及工具执行均采用这一规则。有参数工具和修改状态的工具保持原参数校验。对应的旧测试断言按新要求更新。
++
++主要变更在 `backend/app/agents/` 和 `backend/app/memory/`。线索面板、前端源码、依赖声明、原始模组、规则资料、原 `.env` 和用户库未修改；没有 commit 或 push。
++
++## 自动验证
++
++本次重新运行的结果与任务说明中已有的统计分开记录，不把它们当作本次复验结果。
++
++- 初次定向运行：22 passed、7 errors。错误均出现在 Windows 默认临时目录的访问权限，另有 pytest 缓存权限警告；随后将临时目录和缓存放到 `.cache/batch-14/`。[原日志](../.cache/batch-14/pytest-targeted.txt)
++- 隔离目录后的定向运行：27 passed、2 failed。新测试未直接询问队友，却断言已经生成队友回应，触发 `StopIteration`。补充真实队友回合后，定向复验 **29 passed、1 warning，102.04 秒**，进程返回 0，包含第十三批、第十四批及模型工厂测试。[复验日志](../.cache/batch-14/pytest-targeted-fixed.txt)
++- 首次全量运行在约 33% 后中止，日志保留。已出现的九项失败是旧“每个工具必须拒绝未知参数”断言与本批无参数只读工具的新行为冲突；已更新断言，其余工具仍断言拒绝。该次没有完成汇总，**不算完整通过**。[中止日志](../.cache/batch-14/pytest-full.txt)
++- 最终完整回归：**640 passed、1 skipped、1 warning，1608.29 秒（26 分 48 秒），进程返回 0**。收集的 641 项均有最终结果，日志保留完成汇总；跳过项为 Windows 符号链接权限测试，warning 为 Starlette 使用 AnyIO 弃用别名。本次 WebSocket 重连及 presence 用例在完整运行中通过。[最终日志](../.cache/batch-14/pytest-final.txt)、[命令与退出码](../.cache/batch-14/pytest-final-result.json)
++- Ruff 与 `git diff --check` 已通过；无前端源码改动，未重跑前端构建。测试使用 Fake 模型和真实房间、事件、权限与存档服务，证明代码行为，不能替代自然主持体验。
++
++测试进程启动器会过滤继承的代理变量；本次记录的被过滤变量列表为空。没有复现任务说明中的 SOCKS 客户端构造失败，也没有据此修改 `.env` 或安装依赖。各次命令与退出状态保存在 `.cache/batch-14/pytest-*-result.json`，中止的运行没有完成结果文件。
++
++## 原模型短会话
++
++与任务说明中的环境记录不同，本次可以访问 `127.0.0.1:11434`，已确认存在原模型 `qwen3:8b`（8.2B、Q4_K_M），实际配置上下文 8192、默认输出上限 900。没有下载或替换模型。
++
++使用端口 8014 的独立后端，所有测试库和输出在 `.cache/batch-14/live/`；房间为 `826c1d01-72fa-4ee7-baa2-07b37cbac9a1`，原仓库模组《停摆的钟楼》，玩家周岚、AI 队友沈砚。逐轮查看实际输出后再提交下一句，无预设骰点。结束后已停止自建后端。
++
++共提交七次输入，首尾输入间隔 405.28 秒。第一条输入发生于最后一次上下文预算修正的后端重启前，保留为开发段，不作为最终代码验收。重启后的最终短验从事件 #67 开始，共六次输入（18:38:39–18:44:15 UTC）；不是完整长期自由会话，也没有覆盖第二个模组。完整记录包含 15 次真实模型调用；最终短验不能与开发段合并声称验收通过。
++
++| 实际输入与输出 | 结论 |
++|---|---|
++| 开发段询问平时一天如何度过，回应转向公告调查并揭示路线。 | 没有回答原问题，保留失败，不计入最终代码验收。 |
++| #67 询问午饭喜好；#88 NPC 回答清淡的粥或面条。 | 普通未记载见闻确实有内容可答，但台词仍夹带第三人称动作描述。模型只把环境句列入即兴字段，午饭细节没有成为该类记忆。 |
++| #94 追问粥里加什么；#114 只有雨水、钟面和公告描写。 | 追问失败，不能声称即兴多轮体验已解决。 |
++| #120 阅读已知路线和旁注；#140 提到维修间通往齿轮平台。 | 取得了部分已知内容，但漏答“先查交接簿”的旁注，没有完整满足阅读请求。 |
++| #146 攀爬湿滑外墙；#160 请求闪避检定，进入待掷状态。 | 产生了 KP 主动检定，但技能选择不合适，不能算合理主动检定验收通过；未掷骰。 |
++| #163 放弃攀爬、改用地面照明并询问 NPC；#167 仍要求等待原结果。 | 第一次等待中改方法失败。 |
++| 待掷时存档、停止后端、重启、读档；#174 更明确地放弃攀爬并询问钟面位置。#178 取消原检定，#197 NPC 回答先前即兴的“三点方向”。 | 存档恢复和明确撤回成功；实际上下文及事件保留了即兴出处。只能证明这个短样本，不能证明所有补充都被正确选择、长期一致或不引导固定路线。 |
++
++存档 `c6003170-e133-463c-817f-cdbb52859c9a`，读档 #172，来源序号 169。没有修改角色数值或骰点。短验未发现 `ArgumentRepair` 调用，但这不是所有自然输入都无需修复的证明。
++
++[PUBLIC 对话](../.cache/batch-14/live/PUBLIC.md)、[HOST_DEBUG](../.cache/batch-14/live/HOST_DEBUG.md)、[模型调用](../.cache/batch-14/live/model-calls.json)、[实际规划](../.cache/batch-14/live/HOST_DEBUG-plans.json)。这些是本地测试产物，不进入交付补丁。
++
++## 交付与剩余限制
++
++本批完成代码层的适度即兴与事件记忆通路；提问误分类、漏答、错误检定技能、即兴字段漏选和路线引导仍须继续看真实对话。现有校验不构成完整语义证明，**不能宣称第十三批自然主持问题全部解决**。
++
++补丁为仓库根目录 `batch-14-fix.patch`，基于上述提交。当前工作区已经包含改动，不应再次应用；在同一基线的干净仓库中可执行：
++
++```powershell
++git apply --check batch-14-fix.patch
++git apply batch-14-fix.patch
++```
++
++补丁已在基线导出的隔离副本上通过 `git apply --check` 和实际应用，应用后的文本内容与工作区一致。补丁校验结果保存在 `.cache/batch-14/patch-result.json`。最终全量运行期间应用及测试文件未再变化，文件指纹保存在 `.cache/batch-14/final-code.json`。

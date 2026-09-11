@@ -173,7 +173,12 @@ class ActionPolicyValidator:
         *,
         after_check=False,
     ):
-        from app.agents.tools import TOOLS
+        from app.agents.tools import TOOLS, normalize_arguments, validate
+
+        actions = [
+            t.model_copy(update={"arguments": normalize_arguments(t.name, t.arguments)})
+            for t in actions
+        ]
 
         result = ValidatedActionPlan(
             plan_id=plan.plan_id,
@@ -226,6 +231,21 @@ class ActionPolicyValidator:
                 for i, t in enumerate(actions)
                 if t.name not in READ_TOOLS
             ]
+            for action in list(result.approved_actions):
+                try:
+                    validate(action.tool.name, action.tool.arguments, "keeper")
+                except (ValidationError, RoomError) as error:
+                    result.approved_actions.remove(action)
+                    result.rejected_actions.append(
+                        ActionRejection(
+                            index=action.index,
+                            tool=action.tool.name,
+                            code="invalid_arguments"
+                            if isinstance(error, ValidationError)
+                            else "permission_denied",
+                            reason="只读工具参数或权限无效",
+                        )
+                    )
             return result
         if not facts.can_move_party and (
             plan.proposed_transition_id

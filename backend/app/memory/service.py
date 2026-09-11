@@ -6,7 +6,12 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from app.agents.modules import public_module
-from app.memory.events import current_participants, epistemic_event, story_events
+from app.memory.events import (
+    current_participants,
+    epistemic_event,
+    relevant_incidental_memories,
+    story_events,
+)
 from app.persistence.agent_models import AgentMemory
 from app.rooms.service import Identity, require
 
@@ -363,7 +368,28 @@ async def build_context(
     )
     if budget < 2500:
         budget = 2500
+    # Select from the full permission-filtered active branch before dialogue and
+    # summary trimming, so an older public improvisation remains available.
     navigation = await service.navigation.state(session, room.id)
+    memory_base = {
+        k: v for k, v in context.items() if not navigation or k not in {"module", "public_entities"}
+    }
+    incidental = relevant_incidental_memories(
+        all_events,
+        (trigger or {}).get("payload", {}).get("text", ""),
+        prepared.current_scene if prepared else module.state["scene_id"],
+        budget=min(
+            1400,
+            max(
+                0,
+                budget
+                - len(json.dumps(memory_base, ensure_ascii=False))
+                - (2300 if navigation else 1600),
+            ),
+        ),
+    )
+    if incidental:
+        context["incidental_memories"] = incidental
     if navigation:
         base_size = len(
             json.dumps(

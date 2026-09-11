@@ -1,7 +1,7 @@
 """Versioned action boundaries; no model reasoning or world-state copies."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
@@ -73,10 +73,12 @@ class TurnFocus(DomainModel):
     purpose: str = Field(default="", max_length=240)
     obstacle: str = Field(default="", max_length=240, json_schema_extra={"x-explicit-output": True})
     public_fact_ids: list[str] = Field(default_factory=list, max_length=5)
-    answer_basis: Literal["facts", "unrecorded", "social", "teammate", "rules"] = Field(
-        default="social",
-        json_schema_extra={"x-explicit-output": True},
-        description="所问见闻没有获准相关记载选unrecorded；有相关事实选facts；寒暄/意愿选social",
+    answer_basis: Literal["facts", "improvise", "unrecorded", "social", "teammate", "rules"] = (
+        Field(
+            default="social",
+            json_schema_extra={"x-explicit-output": True},
+            description="有相关公开事实选facts；普通资料留白选improvise（兼容unrecorded）；寒暄/意愿选social",
+        )
     )
 
 
@@ -162,7 +164,7 @@ class KeeperNarration(DomainModel):
     public_narration: str = Field(
         default="",
         max_length=2000,
-        description="公开环境、动作与回应。NPC台词仅放npc_speech，不在此复述。不得新增模组事实或未结算效果。",
+        description="先回应玩家，可适度补充普通细节。NPC台词仅放npc_speech。不得创造核心真相或未结算效果。",
     )
     npc_speech: NPCSpeech | None = Field(
         default=None, json_schema_extra={"x-explicit-output": True}
@@ -174,7 +176,12 @@ class KeeperNarration(DomainModel):
     transition_result_reference: str | None = None
     needs_host_ruling: bool = False
     current_scene_reference: str | None = None
-    incidental_details: list[str] = Field(default_factory=list, max_length=3)
+    incidental_details: list[Annotated[str, Field(min_length=1, max_length=160)]] = Field(
+        default_factory=list,
+        max_length=2,
+        description="本轮已在旁白或NPC台词中原样说出的即兴短句，最多两处；不含草稿、关键发现或结算结果",
+        json_schema_extra={"x-explicit-output": True},
+    )
 
 
 class ContextGap(DomainModel):
