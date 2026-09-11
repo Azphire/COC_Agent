@@ -62,10 +62,16 @@ def generation_schema(value):
             for k, v in value.items()
             if k not in {"maxLength", "x-explicit-output"}
         }
+        if "properties" in result:
+            hidden = {k for k, v in value["properties"].items() if v.get("x-server-bound")}
+            result["properties"] = {
+                k: v for k, v in result["properties"].items() if k not in hidden
+            }
+            result["required"] = [k for k in result.get("required", []) if k not in hidden]
         explicit = [
             name
             for name, prop in value.get("properties", {}).items()
-            if prop.get("x-explicit-output")
+            if prop.get("x-explicit-output") and not prop.get("x-server-bound")
         ]
         if explicit:
             # Require an explicit object or null for critical action decisions.

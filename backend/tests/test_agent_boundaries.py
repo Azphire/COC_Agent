@@ -219,7 +219,7 @@ def test_credentials_and_hidden_reasoning_removed(client, game):  # noqa: F811
     public_prompts = [
         json.loads(p[-1]["content"])
         for p in game["adapter"].prompts
-        if json.loads(p[-1]["content"]).get("phase") == "generate_keeper_narration"
+        if json.loads(p[-1]["content"]).get("response_brief")
     ]
     assert public_prompts
     for prompt in public_prompts:

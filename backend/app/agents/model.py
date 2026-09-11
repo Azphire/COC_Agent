@@ -51,6 +51,7 @@ class AgentModelClient:
                 if on_call:
                     await on_call()
                 call_started = time.monotonic()
+                call_prompt = list(prompt)
                 usage = None
                 issues = []
                 try:
@@ -120,6 +121,9 @@ class AgentModelClient:
                         "attempt": attempt + 1,
                         "token_usage": usage,
                         "validation_issues": issues,
+                        "schema": response_schema.__name__ if response_schema else None,
+                        "input_chars": len(json.dumps(call_prompt, ensure_ascii=False)),
+                        "input_messages": call_prompt,
                     }
                     self.calls.append(call)
                     if on_result:

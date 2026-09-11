@@ -100,29 +100,22 @@ def rag_game(client, game):  # noqa: F811
 
     def responder(messages, kwargs):
         context = json.loads(messages[-1]["content"])
-        if context.get("phase") == "generate_keeper_narration":
+        if context.get("response_brief"):
             rules = context.get("RULE_EVIDENCE", [])
             if rules:
                 return {
-                    "claims": [
+                    "public_narration": "奖励骰增加一个候选结果。",
+                    "grounded_claims": [
                         {
                             "claim_id": "rule-1",
                             "category": "rule",
                             "statement": "奖励骰增加一个候选结果。",
                             "evidence_ids": [rules[0]["evidence_id"]],
                         }
-                    ]
+                    ],
                 }
-            scene = context["module"]["scene"]
             return {
-                "claims": [
-                    {
-                        "claim_id": "scene-1",
-                        "category": "module_fact",
-                        "statement": scene["public_description"],
-                        "entity_ids": [scene["id"]],
-                    }
-                ]
+                "claim_ids": [c["claim_id"] for c in context["PUBLIC_CLAIM_OPTIONS"][:1]],
             }
         response = scenario(messages, kwargs)
         if context["phase"] == "plan_keeper_action":
@@ -339,37 +332,37 @@ def test_binding_save_version_retention_missing_index_and_memory(client, rag_gam
 def test_unsupported_rule_request_needs_host_ruling(client, rag_game, scene_evasion):
     game = rag_game  # noqa: F811
     original = game["adapter"].responder
+    attempted = []
 
     def responder(messages, kwargs):
         context = json.loads(messages[-1]["content"])
-        if context.get("phase") == "generate_keeper_narration":
+        if context.get("response_brief"):
+            attempted.append(True)
             if scene_evasion:
-                scene = context["module"]["scene"]
+                scene = next(
+                    c for c in context["PUBLIC_CLAIM_OPTIONS"] if c["category"] == "module_fact"
+                )
                 return {
-                    "claims": [
-                        {
-                            "claim_id": "evade",
-                            "category": "module_fact",
-                            "statement": scene["public_description"],
-                            "entity_ids": [scene["id"]],
-                        }
-                    ]
+                    "public_narration": scene["statement"],
+                    "grounded_claims": [scene],
                 }
             return {
-                "claims": [
+                "public_narration": "未验证规则为9999",
+                "grounded_claims": [
                     {
                         "claim_id": "bad",
                         "category": "rule",
                         "statement": "未验证规则为9999",
                         "evidence_ids": ["ev_fake"],
                     }
-                ]
+                ],
             }
         return original(messages, kwargs)
 
     game["adapter"].responder = responder
     ok(submit(client, game, "未知量子跃迁规则"))
     assert wait_cycle(client, game)["status"] == "completed"
+    assert attempted
     log = client.get(
         game["prefix"] + "/logs?format=jsonl", headers=headers(game["remote"]["member_token"])
     ).text

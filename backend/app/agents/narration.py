@@ -6,6 +6,85 @@ from app.rooms.service import require
 from app.rules.display import check_display
 
 
+def response_brief(plan, context, results, *, withdrawal=None):
+    """Project approved public candidates and receipts, never private KP prose."""
+    focus = plan.focus
+    intent = plan.parsed_intent
+    raw = context["triggering_action"].get("payload", {}).get("text", intent.evidence_quote)
+    attempt = focus.action if focus else intent.evidence_quote
+    attempt = attempt if attempt in raw else ""
+    question = focus.question if focus and focus.question in raw else raw
+    addressee = (
+        focus.addressee_id if focus else (intent.target_id if intent.type == "converse" else None)
+    )
+    people = context.get("current_participants", {}).get("members", {})
+    npc = next(
+        (
+            e
+            for e in context.get("public_entities", [])
+            if e["id"] == addressee
+            and e["type"] == "npc"
+            and e.get("fact_scope", "current_scene") == "current_scene"
+        ),
+        None,
+    )
+    result_ids = {
+        e["payload"].get("entity_id", e["payload"].get("id"))
+        for e in results["events"]
+        if e["type"] in {"clue.revealed", "entity.revealed"}
+    }
+    wanted = set(focus.public_fact_ids if focus else []) | result_ids
+    if focus and focus.action and focus.action_target_id:
+        wanted.add(focus.action_target_id)
+    options = context.get("PUBLIC_CLAIM_OPTIONS", [])
+    if focus:
+        options = [
+            c
+            for c in options
+            if c["claim_id"] in wanted or set(c["entity_ids"]) & wanted or c["category"] == "rule"
+        ]
+    # A profile is portrayal, not testimony or evidence that a conversation happened.
+    facts = [c for c in options if not npc or npc["id"] not in c["entity_ids"]]
+    return {
+        "trigger_seq": context["triggering_action"]["seq"],
+        "speaker_id": intent.actor_member_id,
+        "question": question,
+        "purpose": focus.action if focus and focus.action in raw and focus.action else question,
+        "answer_basis": focus.answer_basis if focus else "social",
+        "attempt": attempt,
+        "responder": {
+            "id": npc["id"],
+            "name": npc["title"],
+            "kind": "npc",
+            "portrayal": npc["public_summary"]
+            if not focus or focus.answer_basis != "unrecorded"
+            else "",
+            "unrecorded_testimony": "unknown",
+        }
+        if npc
+        else {"id": addressee, "name": people[addressee], "kind": "teammate"}
+        if addressee in people
+        else {"kind": "keeper"},
+        "allowed_facts": [{"id": c["claim_id"], "text": c["statement"]} for c in facts],
+        "completed_results": results,
+        "withdrawal": withdrawal,
+        "pending_decisions": list(
+            filter(
+                None,
+                [
+                    plan.next_decision
+                    if plan.next_decision in raw
+                    else "后续行动仍需你决定。"
+                    if plan.next_decision
+                    else "",
+                    focus.suggestion if focus and focus.suggestion in raw else "",
+                    focus.hypothesis if focus and focus.hypothesis in raw else "",
+                ],
+            )
+        ),
+    }, options
+
+
 def action_lead(intent, results):
     if intent == "recall":
         return "你回顾了先前获知的信息。"

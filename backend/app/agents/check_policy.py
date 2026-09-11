@@ -110,7 +110,10 @@ class CheckPolicyEvaluator:
             return decision(False, "not_visible", "目标不在当前场景可见范围")
         if p.clue_id and p.clue_id != target:
             return decision(False, "target_mismatch", "检定目标与关联实体不一致")
-        speaking_to_member = intent.type == "converse" and intent.target_id in facts.member_ids
+        speaking_to_member = intent.type == "converse" and (
+            intent.target_id in facts.member_ids
+            or facts.approved_entities.get(intent.target_id, {}).get("type") == "npc"
+        )
         if (
             intent.target_id
             and intent.target_id not in {target, facts.scene_id}

@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from app.agents.adjudication_schemas import SummaryRecoveryState
 from app.agents.schemas import SummaryOutput
 from app.domain.character import utc_now
-from app.memory.events import current_participants, story_events
+from app.memory.events import current_participants, epistemic_event, story_events
 from app.persistence.adjudication_models import SummaryRecoveryRecord
 from app.persistence.agent_models import AgentCycle, AgentMemory, AgentRun, ProfileRecord
 from app.rooms.service import Identity, require
@@ -21,6 +21,9 @@ SUMMARY_INSTRUCTION = (
     "只总结剧情；不要保留旧摘要中的初始化、房间管理和角色发布或分配安排。"
     "current_participants是当前权威状态，旧摘要不能覆盖它，不把发布角色推断为已分配。"
     "不确定的安排直接省略。返回 content，不输出推理。"
+    "NPC、队友台词必须保留说话人与‘说/声称/猜测’属性，不能写成已证实事实。"
+    "keeper.narration只是模型叙述；关键发现与成功仅以entity.revealed、clue.revealed、check.resolved、scene.updated确认。"
+    "action.submitted和agent.action_proposed是意图；提问、建议、条件假设不是已执行动作。"
 )
 
 
@@ -146,7 +149,7 @@ class SummaryRecoveryService:
                     ),
                 )
                 for event in eligible:
-                    proposed = {**context, "events": [*context["events"], event]}
+                    proposed = {**context, "events": [*context["events"], epistemic_event(event)]}
                     if len(json.dumps(proposed, ensure_ascii=False)) > budget:
                         break
                     context = proposed
@@ -237,6 +240,7 @@ class SummaryRecoveryService:
                         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
                     ],
                     response_schema=SummaryOutput,
+                    max_attempts=1,
                     on_call=once,
                     on_result=self.agents.runtime.call_recorder(room_id, run_id),
                 )

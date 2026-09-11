@@ -6,27 +6,32 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from app.agents.modules import public_module
-from app.memory.events import current_participants, story_events
+from app.memory.events import current_participants, epistemic_event, story_events
 from app.persistence.agent_models import AgentMemory
 from app.rooms.service import Identity, require
 
 
 def memory_view(memory):
     return {
-        key: getattr(memory, key)
-        for key in (
-            "id",
-            "profile_id",
-            "kind",
-            "scope",
-            "content",
-            "source_event_ids",
-            "salience",
-            "supersedes_id",
-            "active",
-            "coverage_start",
-            "coverage_end",
-        )
+        "epistemic_status": "derived_summary_not_fact_authority"
+        if memory.kind == "summary"
+        else "attributed_memory",
+        **{
+            key: getattr(memory, key)
+            for key in (
+                "id",
+                "profile_id",
+                "kind",
+                "scope",
+                "content",
+                "source_event_ids",
+                "salience",
+                "supersedes_id",
+                "active",
+                "coverage_start",
+                "coverage_end",
+            )
+        },
     }
 
 
@@ -149,6 +154,23 @@ async def build_context(
                 }
             )
     trigger = next((e for e in all_events if e["seq"] == cycle.state["triggering_event_seq"]), None)
+    # Never let later queued input or another cycle's intent become this turn's task.
+    from app.persistence.agent_models import AgentCycle
+
+    pending_seqs = {
+        row.state["triggering_event_seq"]
+        for row in await session.scalars(
+            select(AgentCycle).where(
+                AgentCycle.room_id == room.id,
+                AgentCycle.status.in_(["queued", "queued_action", "suspended"]),
+            )
+        )
+    }
+    history_events = [
+        epistemic_event(e)
+        for e in all_events
+        if e["seq"] != cycle.state["triggering_event_seq"] and e["seq"] not in pending_seqs
+    ]
     if keeper:
         actor_id = (trigger or {}).get("actor_member_id")
         cards = [
@@ -195,9 +217,10 @@ async def build_context(
             "seq": e["seq"],
             "speaker": e["payload"].get("actor_name", e.get("actor_member_id")),
             "type": e["type"],
+            "epistemic_status": e["epistemic_status"],
             "text": e["payload"].get("text", "")[:180],
         }
-        for e in all_events
+        for e in history_events
         if e["visibility"] == "public"
         and e["type"]
         in {
@@ -447,13 +470,26 @@ async def build_context(
                         context = proposed
     selected = []
     for memory in ranked:
-        candidate = memory_view(memory)
+        candidate = {
+            k: v
+            for k, v in memory_view(memory).items()
+            if k in {"kind", "scope", "content", "source_event_ids", "epistemic_status"}
+        }
         proposed = {**context, "memories": [*context["memories"], candidate]}
         if len(json.dumps(proposed, ensure_ascii=False)) > budget - 1200:
             continue
         context["memories"].append(candidate)
         selected.append(memory.id)
-    window = all_events[-service.settings.agent_event_window :]
+    dialogue_seqs = {e["seq"] for e in recent_dialogue}
+    summary_seqs = {
+        seq
+        for m in ranked
+        if m.kind == "summary" and m.id in selected
+        for seq in m.source_event_ids
+    }
+    window = [e for e in history_events if e["seq"] not in dialogue_seqs | summary_seqs][
+        -service.settings.agent_event_window :
+    ]
     if narrator:
         window = [
             {
@@ -480,7 +516,7 @@ async def build_context(
             if recovery.stale and recovery.pending_start_seq:
                 pending_window = [
                     e
-                    for e in all_events
+                    for e in history_events
                     if recovery.pending_start_seq
                     <= e["seq"]
                     <= (recovery.pending_end_seq or e["seq"])

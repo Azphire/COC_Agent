@@ -458,7 +458,10 @@ def test_summary_stale_pending_retry_stop_and_manual_atomic_rebuild(client, game
                 svc, session, room, binding, profile, cycle, phase="plan_keeper_action"
             )
             assert context["summary_status"]["stale"]
-            assert any(e["seq"] == status["pending_start_seq"] for e in context["events"])
+            assert status["pending_start_seq"] in {
+                context["triggering_action"]["seq"],
+                *[e["seq"] for e in context["events"]],
+            }
             assert (await session.get(AgentMemory, old_id)).active
 
     client.portal.call(pending_context)

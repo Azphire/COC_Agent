@@ -213,29 +213,35 @@ async def route(runtime, state):
                         queued.state = {**queued.state, "status": "cancelled"}
                 child.state = {**child.state, "parent_cycle_id": None}
                 if choice == "withdraw":
-                    plan.parsed_intent.type = "out_of_character"
                     plan.proposed_check = None
                     plan.proposed_tool_calls = []
                     plan.proposed_reveal_entity_ids = []
                     plan.proposed_transition_id = None
                     reply = "好，这次尚未掷骰的尝试已撤回。你可以继续说话或换个做法。"
-                    child.state = {**child.state, "conversation_reply": reply}
-                    runtime.rooms.append(
-                        session,
-                        room,
-                        "keeper.narration",
-                        room.host_member_id,
-                        {"text": reply, "cycle_id": child.id},
-                        request_id=child.id + ":withdraw",
-                    )
+                    child.state = {**child.state, "withdrawal_result": {
+                        "check_id": pending.id, "withdrawn": True, "message": reply,
+                    }}
+                    if not plan.focus or not (plan.focus.question or plan.focus.addressee_id):
+                        plan.parsed_intent.type = "out_of_character"
+                        child.state = {**child.state, "conversation_reply": reply}
+                        runtime.rooms.append(
+                            session, room, "keeper.narration", room.host_member_id,
+                            {"text": reply, "cycle_id": child.id},
+                            request_id=child.id + ":withdraw",
+                        )
             else:
                 choice = "independent"
-                plan.parsed_intent.type = "out_of_character"
+                plan.parsed_intent.type = (
+                    "converse" if plan.focus and plan.focus.addressee_id else "out_of_character"
+                )
                 plan.proposed_check = None
                 plan.proposed_tool_calls = []
                 plan.proposed_reveal_entity_ids = []
                 plan.proposed_transition_id = None
                 plan.next_decision = "原骰或遭遇已经发生，不能撤销；仍可选择当前可用的结算选项。"
+                child.state = {**child.state, "withdrawal_result": {
+                    "withdrawn": False, "message": plan.next_decision,
+                }}
         if choice == "independent" and (
             plan.proposed_check
             or plan.proposed_reveal_entity_ids

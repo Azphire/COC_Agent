@@ -33,6 +33,16 @@ STORY_TYPES = {
 INITIAL_TYPES = {"entity.revealed", "entity.corrected", "clue.revealed", "scene.updated"}
 
 
+def epistemic_event(event):
+    kind = event["type"]
+    return {**event, "epistemic_status": (
+        "intent_not_result" if kind in {"action.submitted", "agent.action_proposed"}
+        else "attributed_testimony" if kind in {"npc.spoke", "agent.spoke", "chat.message"}
+        else "narration_not_evidence" if kind == "keeper.narration"
+        else "authoritative_result"
+    )}
+
+
 def story_events(visible_events):
     selected, excluded = [], Counter()
     started = False

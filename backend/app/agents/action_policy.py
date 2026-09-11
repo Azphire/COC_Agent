@@ -185,9 +185,15 @@ class ActionPolicyValidator:
             result.status, reason = invalid
             result.validation_reasons.append(reason)
             if result.status == "clarification_required":
-                result.clarification_question = (
-                    intent.clarification_question or "你指的是哪一个人或物件？"
-                )
+                # KP free prose can contain unrevealed discoveries. A rejected
+                # plan cannot publish that prose through the clarification path.
+                result.clarification_question = {
+                    "行动依据不是玩家原文的真实子串": "这一步你想先尝试哪一个动作？",
+                    "行动意图不明确": "这一步你准备实际做什么，还是先和谁说话？",
+                    "玩家尚未明确表示移动": "你是现在过去，还是先在原地查看？",
+                    "移动目标不能唯一匹配当前批准出口": "你打算前往哪个位置？",
+                    "当前场景有多个同名目标": "同名目标不止一个，你指的是哪处？",
+                }.get(reason, "你指的是眼前哪一个人或物件？")
             result.rejected_actions = [
                 ActionRejection(
                     index=i,
@@ -202,6 +208,24 @@ class ActionPolicyValidator:
             return result
         if intent.type in {"out_of_character", "recall"}:
             result.validation_reasons.append("场外讨论或回顾不执行角色行动或检定")
+            return result
+        if plan.focus and not plan.focus.action.strip():
+            result.validation_reasons.append("本轮只有交流、建议或假设，不执行世界动作")
+            result.approved_actions = [
+                ValidatedAction(index=i, tool=t, phase="read")
+                for i, t in enumerate(actions)
+                if t.name in READ_TOOLS
+            ]
+            result.rejected_actions = [
+                ActionRejection(
+                    index=i,
+                    tool=t.name,
+                    code="precondition_failed",
+                    reason="没有当前行动，提问或建议不能产生结果",
+                )
+                for i, t in enumerate(actions)
+                if t.name not in READ_TOOLS
+            ]
             return result
         if not facts.can_move_party and (
             plan.proposed_transition_id

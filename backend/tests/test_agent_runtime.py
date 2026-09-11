@@ -21,8 +21,13 @@ from app.rules.checks import check_value, judge, roll_check, threshold
 
 def scenario(messages, kwargs):
     context = json.loads(messages[-1]["content"])
-    if context.get("phase") == "generate_keeper_narration":
-        check = context["checks"][-1] if context["checks"] else None
+    if context.get("phase") == "generate_keeper_narration" or context.get("response_brief"):
+        checks = [
+            e["payload"]
+            for e in context.get("public_tool_results", {}).get("events", [])
+            if e["type"] == "check.resolved"
+        ]
+        check = checks[-1] if checks else None
         return {
             "content": f"本次检定出目 {check['result']['total']}，"
             f"目标 {check['result']['threshold']}。"

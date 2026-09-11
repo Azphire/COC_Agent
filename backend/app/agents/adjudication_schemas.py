@@ -57,7 +57,31 @@ class PlayerIntent(DomainModel):
     clarification_question: str | None = Field(default=None, max_length=300)
 
 
+class TurnFocus(DomainModel):
+    """Semantic clauses, interpreted once by KP; IDs are checked by the server."""
+
+    question: str = Field(
+        default="", max_length=2000, json_schema_extra={"x-explicit-output": True}
+    )
+    action: str = Field(default="", max_length=2000, json_schema_extra={"x-explicit-output": True})
+    suggestion: str = Field(default="", max_length=2000)
+    hypothesis: str = Field(default="", max_length=2000)
+    addressee_id: str | None = Field(default=None, json_schema_extra={"x-explicit-output": True})
+    action_target_id: str | None = Field(
+        default=None, json_schema_extra={"x-explicit-output": True}
+    )
+    purpose: str = Field(default="", max_length=240)
+    obstacle: str = Field(default="", max_length=240, json_schema_extra={"x-explicit-output": True})
+    public_fact_ids: list[str] = Field(default_factory=list, max_length=5)
+    answer_basis: Literal["facts", "unrecorded", "social", "teammate", "rules"] = Field(
+        default="social",
+        json_schema_extra={"x-explicit-output": True},
+        description="所问见闻没有获准相关记载选unrecorded；有相关事实选facts；寒暄/意愿选social",
+    )
+
+
 class KeeperPlan(DomainModel):
+    focus: TurnFocus | None = None
     pending_action: Literal["independent", "defer", "replace", "withdraw"] = Field(
         default="independent", json_schema_extra={"x-explicit-output": True}
     )
@@ -144,6 +168,7 @@ class KeeperNarration(DomainModel):
         default=None, json_schema_extra={"x-explicit-output": True}
     )
     grounded_claims: list[GroundedClaim] = Field(default_factory=list, max_length=5)
+    claim_ids: list[str] = Field(default_factory=list, max_length=5)
     public_entity_references: list[str] = Field(default_factory=list, max_length=8)
     check_result_reference: str | None = None
     transition_result_reference: str | None = None

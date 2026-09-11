@@ -172,6 +172,7 @@ class AgentCycleState(TypedDict):
     push_review_attempted: bool
     push_review_error: str | None
     conversation_reply: str | None
+    withdrawal_result: dict | None
     restart_plan: bool
     related_player_cycle_id: str | None
     parent_cycle_id: str | None
