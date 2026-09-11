@@ -1105,6 +1105,29 @@ class AgentRuntime(ActionRuntimeMixin):
         if not check_id:
             return state
         async with self.rooms.database.sessions() as session:
+            record = await session.get(CheckRecord, check_id)
+            opposed = bool(record.document.get("opposed"))
+        if opposed:
+
+            async def progress(session, room):
+                record = await session.get(CheckRecord, check_id)
+                await self.service.compound.advance(session, room, record)
+                return record.status
+
+            status = await self.service.mutate(state["room_id"], progress)
+            if status != "resolved":
+                interrupt({"wait_reason": "opposed", "check_id": check_id})
+
+            async def complete(session, room):
+                record = await session.get(CheckRecord, check_id)
+                require(record.status == "resolved", "双方对抗尚未完成")
+                cycle = await session.get(AgentCycle, state["cycle_id"])
+                cycle.status = "running"
+                cycle.state = {**cycle.state, "status": "running", "wait_reason": None}
+                return cycle.state
+
+            return await self.service.mutate(state["room_id"], complete)
+        async with self.rooms.database.sessions() as session:
             check = await session.get(CheckRecord, check_id)
             if check.status == "resolved":
 

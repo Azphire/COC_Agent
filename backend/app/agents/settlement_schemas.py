@@ -1,6 +1,7 @@
 """Player decisions and host approvals; never exposed as model tools."""
 
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import Field, StrictBool, StrictInt, StringConstraints, model_validator
 
@@ -10,6 +11,8 @@ Explanation = Annotated[str, StringConstraints(strip_whitespace=True, min_length
 
 
 class CheckChoice(DomainModel):
+    # Routing metadata is not part of old ordinary decision receipts.
+    participant_id: UUID | None = Field(default=None, exclude=True)
     operation: Literal["accept", "luck", "push"]
     spend: Annotated[StrictInt, Field(ge=1, le=99)] | None = None
     effort: str = Field(default="", max_length=500)

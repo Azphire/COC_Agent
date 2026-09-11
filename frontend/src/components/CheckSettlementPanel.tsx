@@ -19,7 +19,8 @@ export default function CheckSettlementPanel({ check, room, busy, command }: Pro
   const canChoose = room.self_member_id === check.target_member_id || room.is_host && (member?.controller_type === 'agent' || member?.access_type === 'host_managed')
   const disabled = busy || room.status !== 'running'
   const path = `/checks/${check.id}`
-  const luckChoices = (check.options?.luck || []).filter(o => o.result.passed !== p.original_result.passed || o.result.level !== p.original_result.level).filter((o, i, values) => values.findIndex(v => v.result.level === o.result.level && v.result.passed === o.result.passed) === i)
+  const signature = (r: NonNullable<Check['result']>) => JSON.stringify((r.components || [r]).map(c => [c.level, c.passed]))
+  const luckChoices = (check.options?.luck || []).filter(o => signature(o.result) !== signature(p.original_result)).filter((o, i, values) => values.findIndex(v => signature(v.result) === signature(o.result)) === i)
   return <div className="check-settlement">
     <p>原骰点 <strong>{p.original_result.total}</strong> · {resultLabels[p.original_result.level]} · {p.original_result.passed ? '通过' : '未通过'}{p.stage !== 'final' && ' · 尚未最终裁决'}</p>
     {!!p.luck_spent && <p>花费 Luck {p.luck_spent}（{p.luck_before} → {p.luck_after}）；不获得技能成长标记。</p>}
@@ -30,7 +31,7 @@ export default function CheckSettlementPanel({ check, room, busy, command }: Pro
     {check.status === 'pending' && p.stage === 'choice' && canChoose && <>
       <button disabled={disabled} onClick={() => void command(path + '/choice', { operation: 'accept' })}>接受原结果</button>
       {!!luckChoices.length && <form onSubmit={e => { e.preventDefault(); void command(path + '/choice', { operation: 'luck', spend: Number(spend) }) }}>
-        <label>幸运消耗（可选规则）<select required value={spend} onChange={e => setSpend(e.target.value)}><option value="">选择花费与结果</option>{luckChoices.map(o => <option key={o.spend} value={o.spend}>花费 {o.spend} → {o.result.total} · {resultLabels[o.result.level]} · {o.result.passed ? '通过' : '未通过'}</option>)}</select></label><button disabled={disabled || !spend}>确认扣除 Luck 并结算</button>
+        <label>幸运消耗（可选规则）<select required value={spend} onChange={e => setSpend(e.target.value)}><option value="">选择花费与结果</option>{luckChoices.map(o => <option key={o.spend} value={o.spend}>花费 {o.spend} → {o.result.total} · {o.result.components ? o.result.components.map(c => `${c.display_name} ${resultLabels[c.level]}`).join(' / ') : resultLabels[o.result.level]} · {o.result.passed ? '通过' : '未通过'}</option>)}</select></label><button disabled={disabled || !spend}>确认扣除 Luck 并结算</button>
       </form>}
       {check.options?.push && <form onSubmit={e => { e.preventDefault(); void command(path + '/choice', { operation: 'push', effort }) }}><label>额外努力或时间花费<textarea required maxLength={500} value={effort} onChange={e => setEffort(e.target.value)} /></label><button disabled={disabled}>申请一次孤注</button></form>}
     </>}

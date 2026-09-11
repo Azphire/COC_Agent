@@ -336,6 +336,9 @@ async def build_context(
             for c in context["checks"]
             if c["visibility"] == "public" and c["status"] == "resolved"
         ]
+    from app.rules.compound import compound_context
+
+    context["checks"] = [compound_context(c) for c in context["checks"]]
     for check in context["checks"]:
         if check.get("dice"):
             check["dice"] = {k: v for k, v in check["dice"].items() if k != "roll_record"}

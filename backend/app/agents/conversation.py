@@ -48,6 +48,9 @@ async def can_withdraw(session, room, pending):
         or pending.status != "pending"
         or pending.document.get("sanity")
         or pending.document.get("settlement")
+        or any(s.get("dice") for s in (pending.document.get("compound") or {}).get(
+            "participants", []
+        ))
     ):
         return False
     # Loading a pre-roll snapshot rewinds the projection, not fixed dice receipts.

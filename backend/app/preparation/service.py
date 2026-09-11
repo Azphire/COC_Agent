@@ -286,6 +286,8 @@ class PreparationService:
             if action == "edit":
                 require(entity.status == "draft", "请先返回 draft 再编辑")
                 updates = self.safe(body.model_dump(exclude_unset=True, exclude_none=True))
+                if "check_stats" in body.model_fields_set and body.check_stats is None:
+                    updates["check_stats"] = None
                 fields = {
                     k: entity.document[k]
                     for k in s.EntityFields.model_fields

@@ -6,6 +6,7 @@ from app.agents.modules import SuggestedCheck
 from app.domain.character import DomainModel
 from app.knowledge.schemas import SourceRef
 from app.rooms.sanity_schemas import SanityEffect
+from app.rules.compound import NPCCheckStats
 
 EntityType = Literal["scene", "npc", "location", "clue", "item"]
 ReviewStatus = Literal["draft", "approved", "rejected"]
@@ -41,6 +42,7 @@ class RevealConditions(DomainModel):
 
 
 class EntityFields(DomainModel):
+    check_stats: NPCCheckStats | None = None
     sanity_effects: list[SanityEffect] = Field(default_factory=list, max_length=8)
     type: EntityType
     title: str = Field(min_length=1, max_length=120)
@@ -56,12 +58,16 @@ class EntityFields(DomainModel):
 
     @model_validator(mode="after")
     def distinct_sanity_effects(self):
+        if self.check_stats and self.type != "npc":
+            raise ValueError("只有 NPC 可以准备对抗数值")
         if len({e.id for e in self.sanity_effects}) != len(self.sanity_effects):
             raise ValueError("SAN 效果 ID 不能重复")
         return self
 
 
 class EntityDraft(EntityFields):
+    # Numeric NPC preparation must be confirmed by a human, never invented by generation.
+    check_stats: None = None
     # Require an explicit public decision, including an intentional empty value.
     # Otherwise constrained generation can legally omit every useful summary.
     public_summary: str = Field(max_length=1000)
@@ -87,6 +93,7 @@ class HostEntityInput(EntityFields):
 
 
 class EntityPatch(DomainModel):
+    check_stats: NPCCheckStats | None = None
     sanity_effects: list[SanityEffect] | None = Field(default=None, max_length=8)
     type: EntityType | None = None
     title: str | None = Field(default=None, min_length=1, max_length=120)

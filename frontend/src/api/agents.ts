@@ -7,6 +7,13 @@ export type AgentProfileInput = {
 }
 export type AgentProfile = AgentProfileInput & { id: string; created_at: string; updated_at: string }
 export type Check = {
+  opposed?: { opponent_member_id?: string; opponent_npc_id?: string; kind: string; name: string } | null;
+  combined?: { name: string; difficulty: string; requirement: 'any' | 'all' } | null;
+  compound?: {
+    stage?: string; choice_index?: number | null;
+    components?: { name: string; display_name: string; value: number; difficulty: string }[];
+    participants?: { participant_id: string; member_id: string | null; label: string; controller: string; display_name: string; value: number; bonus_dice: number; penalty_dice: number; dice: Check['dice']; result: Check['result']; settlement: Check['settlement']; options?: Check['options'] }[];
+  } | null;
   options?: { luck: { spend: number; result: NonNullable<Check['result']> }[]; push: boolean };
   settlement?: { stage: string; original_result: NonNullable<Check['result']>; luck_spent: number; luck_before?: number; luck_after?: number; effort?: string; push_result?: NonNullable<Check['result']>; consequence_status?: string; handled_reason?: string; review?: { approve: boolean; reason: string; consequence?: { description: string; kind: string } } } | null;
   sanity?: { stage: string; before: number; after: number | null; loss: number | null; immune: boolean } | null;
@@ -14,7 +21,7 @@ export type Check = {
   difficulty: 'regular' | 'hard' | 'extreme'; bonus_dice: number; penalty_dice: number;
   reason: string; visibility: string; status: 'pending' | 'resolved' | 'cancelled';
   dice: { units: number; tens: number[]; candidates: number[]; selected: number } | null;
-  result: { total: number; threshold: number; level: string; passed: boolean; outcome: string } | null;
+  result: { total: number; threshold: number; level: string; passed: boolean; outcome: string; winner?: number | null; both_failed?: boolean; components?: { name: string; display_name: string; value: number; total: number; threshold: number; level: string; passed: boolean }[] } | null;
 }
 export type GameState = {
   host_entities?: { id: string; title: string; sanity_effects?: { id: string; encounter: string; success_loss: string; failure_loss: string; source: string; page: number }[] }[];

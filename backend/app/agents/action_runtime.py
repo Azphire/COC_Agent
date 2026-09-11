@@ -34,6 +34,11 @@ PLAN_INSTRUCTION = (
     "问过去听见什么不是玩家现在聆听。公开部分与未发现的隐藏部分分开；check_requirements只适用其注明任务。"
     "说服不肯合作的人、危险移动可以主动叫骰，也可考虑玩家建议技能；不能为凑成败字段发明障碍。"
     "有检定则name用真实技能key，写实际success_effect和failure_consequence；同任务引用previous_attempts，不重复掷骰。"
+    "非战斗双方目标互斥时可请求opposed，指定一个opponent_member_id或有准备数值的opponent_npc_id及其kind/name；"
+    "双方可以用不同属性或技能，对抗difficulty固定regular，不可孤注，双方完成后服务端裁决。"
+    "同一动作涉及两种技能时可请求combined，name填第二技能，requirement在掷骰前选any任一成功或all全部成功；"
+    "第一技能仍放外层name，共用一次百分骰。普通检定将opposed和combined置null。"
+    "compound_candidates列出可选对手和准备的技能；不要编造NPC数值，不处理战斗。"
     "answer_basis选facts相关公开事实、improvise普通留白、social当下意愿、teammate队友回答或rules规则。"
     "普通未记载见闻可以适度即兴，不需主机审阅；人物介绍供表达性格，public_fact_ids仅选相关候选ID。"
     "incidental_memories是先前公开的KP即兴，保留说话人和地点以便续聊，不能当作关键发现；私有知识仍受公开条件限制。"
@@ -433,7 +438,7 @@ class ActionRuntimeMixin:
                     for eid in sorted(facts.visible_entity_ids)
                     if eid in facts.approved_entities
                 ]
-                from app.module_ir.facts import recalling
+                from app.module_ir.facts import explicit_recall, recalling
 
                 if recalling(facts.raw_text):
                     context["known_targets"] = [
@@ -457,6 +462,25 @@ class ActionRuntimeMixin:
                     and eid not in facts.revealed_entity_ids
                     and entity_access(e) != "automatic"
                 ]
+                # Pure recall already forbids checks; its context needs no opponents.
+                if not explicit_recall(facts.raw_text):
+                    context["compound_candidates"] = {
+                        "members": [
+                            mid for mid in facts.characters if mid != facts.actor_member_id
+                        ],
+                        "npcs": [
+                            {
+                                "npc_id": eid,
+                                "title": entity["title"],
+                                "skills": list(entity["check_stats"].get("skills", {})),
+                                "attributes": list(entity["check_stats"].get("attributes", {})),
+                            }
+                            for eid, entity in facts.approved_entities.items()
+                            if eid in facts.visible_entity_ids & facts.local_entity_ids
+                            and entity.get("type") == "npc"
+                            and entity.get("check_stats")
+                        ],
+                    }
                 context["response_fact_candidates"] = [
                     {"id": eid, "kind": "portrayal" if e.get("type") == "npc" else "fact"}
                     for eid, e in facts.approved_entities.items()
@@ -1320,6 +1344,8 @@ class ActionRuntimeMixin:
                         "result",
                         "display_name",
                         "display_text",
+                        "opposed",
+                        "combined",
                         "difficulty",
                         "kind",
                         "value",

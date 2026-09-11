@@ -194,6 +194,8 @@ def fallback_narration(intent_type, results, public_scene, *, rejected=False, br
     ]
     if checks:
         check = checks[-1]
+        if check.get("opposed"):
+            return "\n".join([check["display_text"], *reveals])
         outcome = (
             "检定成功，行动达到了本次检定的目标。"
             if check["result"]["passed"]

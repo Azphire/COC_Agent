@@ -117,6 +117,9 @@ def generation_contract(schema, context):
                 "uncertainty": "",
             },
         )
+        from app.agents.compound_generation import proposal_contract
+
+        check = proposal_contract(check, context)
         return bound(
             KeeperPlan,
             {

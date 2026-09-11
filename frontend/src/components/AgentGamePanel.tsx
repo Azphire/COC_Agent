@@ -8,6 +8,7 @@ import HostEntityPanel from './HostEntityPanel'
 import InvestigationBoard from './InvestigationBoard'
 import ModuleNavigationPanel from './ModuleNavigationPanel'
 import CheckSettlementPanel from './CheckSettlementPanel'
+import CompoundCheckPanel from './CompoundCheckPanel'
 
 type Props = { room: Room; token: string; acceptRoom: (room: Room) => void }
 
@@ -119,9 +120,10 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
       </form>}
       <div className="check-list">{game.checks.filter(check => check.status === 'pending').map(check => <article key={check.id} className="check-card" data-check-id={check.id}>
         <h3>{check.display_name || check.name}检定</h3>
-        <p>{check.display_text}</p><p>{room.members.find(m => m.id === check.target_member_id)?.display_name} · 数值 {check.value}{check.sanity ? ' · SAN 二元判定' : ` · ${difficultyLabels[check.difficulty]} · 奖励骰 ${check.bonus_dice} / 惩罚骰 ${check.penalty_dice}`}</p><p>{check.reason}</p>
+        <p>{check.display_text}</p>{!check.compound && <p>{room.members.find(m => m.id === check.target_member_id)?.display_name} · 数值 {check.value}{check.sanity ? ' · SAN 二元判定' : ` · ${difficultyLabels[check.difficulty]} · 奖励骰 ${check.bonus_dice} / 惩罚骰 ${check.penalty_dice}`}</p>}<p>{check.reason}</p>
+        <CompoundCheckPanel check={check} room={room} busy={busy} command={command} />
         <CheckSettlementPanel check={check} room={room} busy={busy} command={command} />
-        {check.status === 'pending' && check.settlement ? null : check.status === 'pending' && check.sanity?.stage === 'symptom' ? <p>请主机在理智面板确认症状。</p> : check.status === 'pending' ? <button disabled={busy || room.status !== 'running' || (!room.is_host && room.self_member_id !== check.target_member_id)} onClick={() => void command(check.sanity ? `/sanity/checks/${check.id}/roll` : `/checks/${check.id}/roll`, check.sanity ? { expected_stage: check.sanity.stage } : {})}>{check.sanity ? `确认当前阶段：${check.sanity.stage}` : '掷骰查看原结果'}</button> : check.status === 'cancelled' ? <p>检定已取消</p> : <>
+        {check.opposed || check.status === 'pending' && check.settlement ? null : check.status === 'pending' && check.sanity?.stage === 'symptom' ? <p>请主机在理智面板确认症状。</p> : check.status === 'pending' ? <button disabled={busy || room.status !== 'running' || (!room.is_host && room.self_member_id !== check.target_member_id)} onClick={() => void command(check.sanity ? `/sanity/checks/${check.id}/roll` : `/checks/${check.id}/roll`, check.sanity ? { expected_stage: check.sanity.stage } : {})}>{check.sanity ? `确认当前阶段：${check.sanity.stage}` : '掷骰查看原结果'}</button> : check.status === 'cancelled' ? <p>检定已取消</p> : <>
           {!check.sanity && <p>个位 {check.dice?.units} · 十位 [{check.dice?.tens?.join(', ')}] · 候选 [{check.dice?.candidates?.join(', ')}]</p>}
           {!check.sanity && <p><strong>{check.result?.total} · {resultLabels[check.result?.level || '']}</strong> · 本次目标 {check.result?.threshold} · {check.result?.passed ? '通过' : '未通过'}</p>}
         </>}

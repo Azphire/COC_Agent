@@ -260,7 +260,7 @@ async def checks(room_id: UUID, svc: Service, token: Token):
 
 
 @router.post("/rooms/{room_id}/checks/{check_id}/roll")
-async def roll(room_id: UUID, check_id: UUID, body: s.Empty, svc: Service, token: Token):
+async def roll(room_id: UUID, check_id: UUID, body: s.CheckRoll, svc: Service, token: Token):
     return await svc.rooms.command(room_id, token, "agent.check.roll", body, check_id)
 
 

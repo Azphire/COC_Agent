@@ -9,6 +9,7 @@ from pydantic import Field
 from app.agents.schemas import CheckRequest
 from app.domain.character import DomainModel
 from app.rules.checks import check_value
+from app.rules.compound import preserves_ordinary_condition
 
 AccessPolicy = Literal["automatic", "requires_check", "requires_condition", "host_review"]
 
@@ -100,6 +101,30 @@ class CheckPolicyEvaluator:
 
         try:
             check_value(facts.characters.get(str(p.target_member_id), {}), p.kind, p.name)
+            if p.combined:
+                check_value(
+                    facts.characters.get(str(p.target_member_id), {}), "skill", p.combined.name
+                )
+            if p.opposed:
+                opponent = p.opposed
+                if opponent.opponent_member_id:
+                    check_value(
+                        facts.characters.get(opponent.opponent_member_id, {}),
+                        opponent.kind,
+                        opponent.name,
+                    )
+                else:
+                    eid = opponent.opponent_npc_id
+                    npc = facts.approved_entities.get(eid, {})
+                    stats = (npc.get("check_stats") or {}).get(
+                        "attributes" if opponent.kind == "attribute" else "skills", {}
+                    )
+                    if (
+                        eid not in facts.visible_entity_ids & facts.local_entity_ids
+                        or npc.get("type") != "npc"
+                        or type(stats.get(opponent.name)) is not int
+                    ):
+                        return decision(False, "npc_unprepared", "NPC 缺少当前可用的准备数值")
         except (ValueError, KeyError):
             return decision(False, "unknown_skill", "检定必须引用本房间真实属性或技能")
         if str(p.target_member_id) != facts.actor_member_id:
@@ -167,22 +192,25 @@ class CheckPolicyEvaluator:
         configured = access == "requires_check" and expected and p.clue_id == target
         if (
             configured
-            and (p.kind, p.name, p.difficulty)
-            != (
-                expected["kind"],
-                expected["name"],
-                expected["difficulty"],
+            and (
+                not preserves_ordinary_condition(p)
+                or (p.kind, p.name, p.difficulty)
+                != (expected["kind"], expected["name"], expected["difficulty"])
             )
             and not p.alternative_basis.strip()
         ):
-            return decision(False, "check_mismatch", "检定与实体批准条件不匹配")
+            return decision(False, "check_mismatch", "检定与实体批准条件不匹配，须说明替代依据")
         if configured and (p.basis_entity_id != target or p.clue_id != target):
             return decision(False, "missing_entity_basis", "检定必须关联配置该检定的实体")
         # Necessity is a KP judgement, not a keyword classification. This grants
         # a roll only; entity reveals and state effects still need their own guards.
         if p.necessity == "unnecessary":
             return decision(False, "unnecessary", "提案标记为无需检定")
-        if not configured and p.rule_topic_id != "coc7.skill_check":
+        if not configured and p.rule_topic_id not in {
+            "coc7.skill_check",
+            "coc7.opposed_check",
+            "coc7.combined_check",
+        }:
             return decision(False, "missing_rule", "检定需要已实现的规则依据")
         if not p.uncertainty.strip() or p.uncertainty.strip() in {"无", "没有", "无不确定性"}:
             return decision(False, "no_uncertainty", "没有真实不确定因素")

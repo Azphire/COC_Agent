@@ -9,6 +9,7 @@ from pydantic import Field, model_validator
 
 from app.agents.schemas import Difficulty, Text
 from app.domain.character import DomainModel
+from app.rules.compound import NPCCheckStats
 
 
 class Scene(DomainModel):
@@ -19,6 +20,7 @@ class Scene(DomainModel):
 
 
 class NPC(DomainModel):
+    check_stats: NPCCheckStats | None = None
     id: str
     name: str
     public_description: Text
@@ -122,7 +124,7 @@ def public_module(record) -> dict:
         "content_hash": record.content_hash,
         "public_introduction": module.public_introduction,
         "scene": scene.model_dump(exclude={"keeper_notes"}),
-        "npcs": [n.model_dump(exclude={"keeper_notes"}) for n in module.npcs],
+        "npcs": [n.model_dump(exclude={"keeper_notes", "check_stats"}) for n in module.npcs],
         "clues": [
             {"id": c.id, "title": c.title, "content": c.content}
             for c in module.clues

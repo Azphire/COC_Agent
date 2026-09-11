@@ -10,6 +10,7 @@ from app.rooms.sanity_service import runtime_character
 from app.rooms.service import require
 from app.rules.check_options import can_push, luck_options
 from app.rules.checks import roll_check
+from app.rules.compound import check_result, result_signature
 
 
 class CheckSettlementService:
@@ -44,6 +45,8 @@ class CheckSettlementService:
         dice, result = legacy or roll_check(
             self.rooms.dice, check.value, check.difficulty, check.bonus_dice, check.penalty_dice
         )
+        if check.combined:
+            result = check_result(check.model_dump(mode="json"), result["total"])
         self.rooms.append(
             session,
             room,
@@ -106,7 +109,7 @@ class CheckSettlementService:
         record.document = check.model_dump(mode="json")
         options = await self.options(session, room, record.document)
         meaningful_luck = any(
-            o["result"]["level"] != raw["level"] or o["result"]["passed"] != raw["passed"]
+            result_signature(o["result"]) != result_signature(raw)
             for o in options["luck"]
         )
         if automatic or not (meaningful_luck or options["push"]):

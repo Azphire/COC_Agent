@@ -183,6 +183,7 @@ class ActionAdjudicationService:
             facts.visible_entity_ids.add(facts.scene_id)
             for npc in definition.npcs:
                 facts.approved_entities[npc.id] = {
+                    "check_stats": npc.check_stats.model_dump() if npc.check_stats else None,
                     "id": npc.id,
                     "type": "npc",
                     "title": npc.name,

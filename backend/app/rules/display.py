@@ -45,6 +45,27 @@ def resolve_check_name(name, kind="skill", ruleset_id="coc7-character-creation")
 
 
 def check_display(document):
+    if document.get("opposed") and document.get("compound"):
+        sides = document["compound"]["participants"]
+        label = " / ".join(s["label"] + "·" + s["display_name"] for s in sides)
+        result = document.get("result")
+        text = "非战斗对抗：" + label + "。"
+        if result:
+            text += (
+                "完全平局，形成僵局。"
+                if result["winner"] is None
+                else sides[result["winner"]]["label"] + "在对抗中获胜。"
+            )
+            if result.get("both_failed"):
+                text += "双方单项检定均未成功；非战斗对抗仍按等级、数值比较。"
+        else:
+            text += "等待双方掷骰与结果选择；尚未裁决胜负。"
+        return {
+            "display_name": label,
+            "difficulty_display": "比较成功等级",
+            "display_text": text,
+            "result": {**result, "display_text": text} if result else None,
+        }
     label = (
         document.get("display_name")
         or resolve_check_name(
@@ -54,6 +75,9 @@ def check_display(document):
         )["display_name"]
     )
     difficulty = DIFFICULTIES[document["difficulty"]]
+    if document.get("combined") and document.get("compound"):
+        label = " + ".join(c["display_name"] for c in document["compound"]["components"])
+        difficulty = "任一成功" if document["combined"]["requirement"] == "any" else "全部成功"
     result = document.get("result")
     text = f"{label}检定（{difficulty}）"
     if result:

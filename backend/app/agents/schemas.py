@@ -4,11 +4,12 @@ from datetime import datetime
 from typing import Annotated, Literal, TypedDict
 from uuid import UUID, uuid4
 
-from pydantic import Field, StrictInt, StringConstraints
+from pydantic import Field, StrictInt, StringConstraints, model_validator
 
 from app.domain.character import DomainModel, utc_now
 from app.knowledge.schemas import GroundedClaim
 from app.rooms.schemas import Name, Visibility
+from app.rules.compound import CombinedCheck, OpposedCheck, noncombat_name
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 Role = Literal["keeper", "investigator"]
@@ -69,7 +70,18 @@ class Empty(DomainModel):
     pass
 
 
+class CheckRoll(DomainModel):
+    participant_id: UUID | None = None
+
+
 class CheckRequest(DomainModel):
+    opposed: OpposedCheck | None = Field(
+        default=None, json_schema_extra={"x-explicit-output": True}
+    )
+    combined: CombinedCheck | None = Field(
+        default=None, json_schema_extra={"x-explicit-output": True}
+    )
+    combat: bool = False
     target_member_id: UUID
     kind: Literal["attribute", "skill"] = "skill"
     name: str = Field(min_length=1, max_length=80)
@@ -80,8 +92,28 @@ class CheckRequest(DomainModel):
     reason: Text
     clue_id: str | None = Field(default=None, max_length=80)
 
+    @model_validator(mode="after")
+    def compound_scope(self):
+        if self.opposed and self.combined:
+            raise ValueError("一次检定只能使用一种复合方式")
+        if self.opposed or self.combined:
+            other = self.opposed or self.combined
+            if self.combat or not all(noncombat_name(n) for n in (self.name, other.name)):
+                raise ValueError("本批复合检定只支持非战斗技能与属性")
+        if self.opposed:
+            if self.visibility != "public":
+                raise ValueError("首版双方对抗使用公开检定卡")
+            if self.difficulty != "regular":
+                raise ValueError("对抗只比较成功等级，不设置难度")
+            if self.opposed.opponent_member_id == str(self.target_member_id):
+                raise ValueError("不能与自己对抗")
+        if self.combined and (self.kind != "skill" or self.name == self.combined.name):
+            raise ValueError("组合检定需要同一角色的两个不同技能")
+        return self
+
 
 class PendingCheck(CheckRequest):
+    compound: dict | None = None
     attempt_purpose: str = ""
     attempt_method: str = ""
     alternative_basis: str = ""

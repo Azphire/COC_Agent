@@ -22,6 +22,7 @@ from app.persistence.agent_models import (
 from app.persistence.knowledge_models import AgentModelCall
 from app.persistence.room_models import RoomEvent, RoomMember
 from app.rooms.service import event_view, iso_utc, require
+from app.rules.compound import preserves_ordinary_condition
 
 ACTIVE = ("running", "waiting_for_roll", "waiting_for_review", "failed")
 
@@ -58,6 +59,9 @@ class AgentService:
         from app.agents.settlement import CheckSettlementService
 
         self.settlement = CheckSettlementService(self)
+        from app.agents.compound import CompoundCheckService
+
+        self.compound = CompoundCheckService(self)
 
     async def sanitize(self, session, room, value):
         members = await self.rooms.members(session, room)
@@ -132,6 +136,21 @@ class AgentService:
         ]
 
         for view in views:
+            if view.get("opposed"):
+                progress = view["compound"]
+                record = await session.get(CheckRecord, view["id"])
+                for i, side in enumerate(progress["participants"]):
+                    if identity.is_host or side["member_id"] == identity.member_id:
+                        side["options"] = (
+                            await self.compound.side_options(
+                                session, room, record.document["compound"]["participants"][i]
+                            )
+                            if record.status == "pending"
+                            and progress["stage"] == "choice"
+                            and progress["choice_index"] == i
+                            else {"luck": [], "push": False}
+                        )
+                continue
             if view.get("settlement") and (
                 identity.is_host or view["target_member_id"] == identity.member_id
             ):
@@ -143,6 +162,12 @@ class AgentService:
 
     @staticmethod
     def check_public(document):
+        from copy import deepcopy
+
+        document = deepcopy(document)
+        for side in (document.get("compound") or {}).get("participants", []):
+            side.pop("source", None)
+            side.pop("source_page", None)
         if document.get("sanity"):
             from app.rooms.sanity_service import sanity_public
 
@@ -349,6 +374,23 @@ class AgentService:
             return {}
         if action in {"check.choice", "check.push_review", "check.push_roll", "check.handled"}:
             record = await session.get(CheckRecord, target)
+            if record and record.document.get("opposed"):
+                require(action == "check.choice", "对抗不能孤注一掷", 422)
+                participant = await self.compound.authorize(
+                    session,
+                    room,
+                    identity,
+                    record,
+                    str(body.participant_id) if body.participant_id else None,
+                )
+                await self.compound.choice(session, room, record, participant, body)
+                return {"check": self.check_public(record.document)}
+            if action == "check.choice" and body.participant_id:
+                require(
+                    record and str(body.participant_id) == record.target_member_id,
+                    "不能选择其他参与者的结果",
+                    403,
+                )
             await self.settlement.authorize(
                 session, room, identity, record, action in {"check.push_review", "check.handled"}
             )
@@ -648,6 +690,19 @@ class AgentService:
         elif action in {"check.roll", "sanity.roll"}:
             check = await session.get(CheckRecord, target)
             require(check and check.room_id == room.id, "检定不存在", 404)
+            if check.document.get("opposed"):
+                require(action == "check.roll", "对抗不能走 SAN 接口", 422)
+                participant = await self.compound.authorize(
+                    session,
+                    room,
+                    identity,
+                    check,
+                    str(body.participant_id) if body.participant_id else None,
+                )
+                await self.compound.advance(session, room, check, participant)
+                return {"check": self.check_public(check.document)}
+            if check.document.get("combined"):
+                await self.settlement.authorize(session, room, identity, check)
             require(
                 identity.is_host or check.target_member_id == identity.member_id,
                 "只能掷自己角色的检定",
@@ -697,8 +752,19 @@ class AgentService:
             ):
                 progress = pending.document.get("sanity")
                 settlement = pending.document.get("settlement") or {}
+                if pending.document.get("compound"):
+                    from app.agents.conversation import can_withdraw
+
+                    require(
+                        await can_withdraw(session, room, pending),
+                        "复合检定已经固定骰点，须完成结算或读档",
+                    )
                 require(
-                    not settlement,
+                    not settlement
+                    and not any(
+                        s.get("dice")
+                        for s in (pending.document.get("compound") or {}).get("participants", [])
+                    ),
                     "已掷出的普通检定须选择接受或完成结算；回退请读档",
                 )
                 require(
@@ -864,7 +930,8 @@ class AgentService:
             require(
                 expected
                 and (
-                    (args.kind, args.name, args.difficulty)
+                    preserves_ordinary_condition(args)
+                    and (args.kind, args.name, args.difficulty)
                     == (expected["kind"], expected["name"], expected["difficulty"])
                     or bool(proposal.alternative_basis.strip())
                 ),
@@ -889,7 +956,8 @@ class AgentService:
             require(
                 expected
                 and (
-                    (args.kind, args.name, args.difficulty)
+                    preserves_ordinary_condition(args)
+                    and (args.kind, args.name, args.difficulty)
                     == (expected.kind, expected.name, expected.difficulty)
                     or bool(proposal.alternative_basis.strip())
                 ),
@@ -913,8 +981,24 @@ class AgentService:
             requester=run.actor_member_id,
             agent_run_id=run.id,
         )
+        if check.opposed or check.combined:
+            await self.compound.freeze(session, room, check, facts)
         # The private KP model must not publish arbitrary text through a check reason.
         check.reason = f"过一次{check.display_name}，看看能否完成这次尝试：{facts.raw_text[:100]}"
+        if check.opposed:
+            left, right = check.compound["participants"]
+            check.reason = (
+                f"双方目标互斥，进行非战斗对抗：{left['label']}的{left['display_name']}"
+                f"对{right['label']}的{right['display_name']}。双方原骰完成后依此顺序选择幸运，"
+                "选择结束才裁决；完全平局为僵局，不能孤注。"
+            )
+        elif check.combined:
+            first, second = check.compound["components"]
+            requirement = "任一成功" if check.combined.requirement == "any" else "全部成功"
+            check.reason = (
+                f"这次尝试涉及{first['display_name']}与{second['display_name']}，"
+                f"共用一次百分骰，条件为{requirement}。"
+            )
         record = CheckRecord(
             id=str(check.id),
             room_id=room.id,
@@ -950,6 +1034,9 @@ class AgentService:
         return record
 
     async def resolve_check(self, session, room, record, automatic):
+        if record.document.get("opposed"):
+            await self.compound.advance(session, room, record)
+            return
         if record.document.get("sanity"):
             await self.sanity.roll(
                 session, room, record, record.document["sanity"]["stage"], automatic
@@ -977,8 +1064,8 @@ class AgentService:
         # Snapshot plus confirmed mythos growth; model output never sets values.
         from app.rooms.sanity_service import current_check_value
 
-        value = current_check_value(room, slot, check.kind, check.name)
-        check.value = value
+        if not check.combined:
+            check.value = current_check_value(room, slot, check.kind, check.name)
         await self.settlement.rolled(session, room, record, check, automatic)
 
     async def save(self, session, room, snapshot):
@@ -1171,6 +1258,10 @@ class AgentService:
                     "sanity_restore": True,
                     "wait_reason": "sanity_symptom"
                     if (saved_pending["document"].get("sanity") or {}).get("stage") == "symptom"
+                    else "opposed_choice"
+                    if (saved_pending["document"].get("compound") or {}).get("stage") == "choice"
+                    else "opposed_roll"
+                    if saved_pending["document"].get("opposed")
                     else {
                         "choice": "check_choice",
                         "push_review": "push_review",

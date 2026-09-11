@@ -1,6 +1,8 @@
 import type { Room, RoomEvent } from '../api/rooms'
 import type { Citation } from '../api/knowledge'
 import { nodeLabels, resultLabels } from '../api/agents'
+import type { Check } from '../api/agents'
+import CompoundCheckPanel from './CompoundCheckPanel'
 
 export default function RoomTimelineEvent({ event, room, debug = false }: { event: RoomEvent; room: Room; debug?: boolean }) {
   const p = event.payload
@@ -20,7 +22,7 @@ export default function RoomTimelineEvent({ event, room, debug = false }: { even
     {textTypes.includes(event.type) ? <p className="preserve-lines">{event.type === 'agent.spoke' ? '发言：' : event.type === 'agent.action_proposed' ? '行动：' : ''}{String(p.text)}</p>
       : event.type === 'action.clarification_requested' ? <p>需要澄清：{String(p.question)}</p>
       : event.type === 'check.requested' ? <p>{(p.sanity as { origin?: string } | undefined)?.origin === 'automatic' ? '遭遇自动触发' : p.sanity ? '主机确认' : 'KP 请求'}“{String(p.display_name || p.name)}”检定 · {room.members.find(m => m.id === p.target_member_id)?.display_name}</p>
-      : ['check.rolled', 'check.luck_spent', 'check.push_requested', 'check.push_reviewed', 'check.consequence_pending', 'check.consequence_applied'].includes(event.type) ? <p>{String(p.display_text)}</p>
+      : ['check.rolled', 'check.choice_made', 'check.luck_spent', 'check.push_requested', 'check.push_reviewed', 'check.consequence_pending', 'check.consequence_applied'].includes(event.type) ? <p>{String(p.display_text)}</p>
       : event.type === 'check.resolved' ? <p>{p.display_text ? String(p.display_text) : <>1D100={result?.total}，结果：{resultLabels[result?.level || '']} · {result?.passed ? '通过' : '未通过'}</>}</p>
       : event.type === 'clue.revealed' ? <p>公开线索：{String(p.title)} · {String(p.content)}</p>
       : event.type === 'entity.revealed' || event.type === 'entity.corrected' ? <p>{event.type === 'entity.corrected' ? '公开修正' : '公开发现'}：{String(p.title)} · {String(p.public_summary)}</p>
@@ -30,6 +32,7 @@ export default function RoomTimelineEvent({ event, room, debug = false }: { even
       : event.type === 'dice.rolled' ? <p>{String(p.reason)} · {String(p.expression)} → [{(p.dice as number[]).join(', ')}] {Number(p.modifier) >= 0 ? '+' : ''}{String(p.modifier)} = <strong>{String(p.total)}</strong></p>
       : <details><summary>{event.type}</summary><pre>{JSON.stringify(p, null, 2)}</pre></details>}
     {p.check_notice ? <p>{String(p.check_notice)}</p> : null}
+    {event.type === 'check.resolved' && p.compound ? <CompoundCheckPanel check={p as Check} room={room} /> : null}
     {(p.citations as Citation[] | undefined)?.map(c => <details className="rule-citation" key={c.evidence_id}><summary>《{c.source_title}》{c.page_kind === 'pdf' ? 'PDF' : c.page_kind === 'word' ? 'Word' : '文本'} {c.physical_page ? `p.${c.physical_page}` : ''}</summary><p>{c.edition} {c.source_version} {c.section} {c.page_label && `· 页标签 ${c.page_label}`}</p><p className="preserve-lines">{c.excerpt}</p></details>)}
   </li>
 }
