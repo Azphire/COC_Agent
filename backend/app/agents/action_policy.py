@@ -92,6 +92,8 @@ class ActionFacts:
     revealed_entity_ids: set = field(default_factory=set)
     completed_checks: list = field(default_factory=list)
     check_state: dict = field(default_factory=dict)
+    member_ids: set = field(default_factory=set)
+    can_move_party: bool = True
 
 
 class ActionPolicyValidator:
@@ -148,9 +150,11 @@ class ActionPolicyValidator:
             if len(matching) != 1:
                 return "clarification_required", "移动目标不能唯一匹配当前批准出口"
         elif intent.target_id:
-            if intent.target_id not in facts.visible_entity_ids | {facts.scene_id}:
+            if intent.target_id not in facts.visible_entity_ids | facts.member_ids | {
+                facts.scene_id
+            }:
                 return "clarification_required", "目标不存在或不在当前可见范围"
-        if intent.type == "converse":
+        if intent.type == "converse" and intent.target_id not in facts.member_ids | {None}:
             entity = facts.approved_entities.get(intent.target_id)
             if (
                 not entity
@@ -182,7 +186,7 @@ class ActionPolicyValidator:
             result.validation_reasons.append(reason)
             if result.status == "clarification_required":
                 result.clarification_question = (
-                    "请说明你要对哪个当前可见目标做什么；如果要移动，请明确指出目的地。"
+                    intent.clarification_question or "你指的是哪一个人或物件？"
                 )
             result.rejected_actions = [
                 ActionRejection(
@@ -198,6 +202,22 @@ class ActionPolicyValidator:
             return result
         if intent.type in {"out_of_character", "recall"}:
             result.validation_reasons.append("场外讨论或回顾不执行角色行动或检定")
+            return result
+        if not facts.can_move_party and (
+            plan.proposed_transition_id
+            or any(t.name in {"transition_scene", "update_scene"} for t in actions)
+        ):
+            result.status = "rejected"
+            result.validation_reasons.append("队友不能替全队移动，需要玩家决定")
+            result.rejected_actions = [
+                ActionRejection(
+                    index=i,
+                    tool=t.name,
+                    code="permission_denied",
+                    reason=result.validation_reasons[-1],
+                )
+                for i, t in enumerate(actions)
+            ]
             return result
         if plan.current_scene_id != facts.scene_id:
             result.status = "rejected"

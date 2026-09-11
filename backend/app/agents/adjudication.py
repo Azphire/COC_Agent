@@ -124,10 +124,12 @@ class ActionAdjudicationService:
                 actor
                 and actor.active
                 and actor.role == "player"
-                and actor.controller_type == "human"
+                and (actor.controller_type == "human" or cycle.state.get("origin") == "teammate")
                 and slot
             ),
             scene_id=module.state["scene_id"],
+            member_ids={m.id for m in members if m.active},
+            can_move_party=cycle.state.get("origin") != "teammate",
             characters={
                 s.member_id: s.character_snapshot
                 for s in slots
@@ -310,6 +312,7 @@ class ActionAdjudicationService:
             target = proposal.target_entity_id
             if (
                 target
+                and target not in facts.revealed_entity_ids
                 and proposal.basis_entity_id == target
                 and entity_access(facts.approved_entities.get(target, {})) == "requires_check"
             ):

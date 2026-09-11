@@ -109,7 +109,7 @@ def test_checkpoint_restart_pending_save_load(client, game, character_settings):
         assert wait_cycle(second, game)["status"] == "completed"
 
 
-def test_agent_target_uses_same_check_service(client, game):  # noqa: F811
+def test_player_plan_cannot_roll_for_teammate_without_teammate_action(client, game):  # noqa: F811
     game["adapter"].responses.append(
         {
             "tools": [
@@ -127,13 +127,8 @@ def test_agent_target_uses_same_check_service(client, game):  # noqa: F811
     )
     ok(submit(client, game, "我请同伴冒着失去平衡的风险保持稳定。"))
     assert wait_cycle(client, game)["status"] == "completed"
-    check = ok(client.get(game["prefix"] + "/checks"))[0]
-    assert (
-        check["target_member_id"] == game["agent"]
-        and check["status"] == "resolved"
-        and check["value"] == 60
-    )
-    assert check["dice"]["roll_record"]["source"] == "system"
+    assert ok(client.get(game["prefix"] + "/checks")) == []
+    # The teammate must decide and enter its own KP cycle (batch-12 integration).
 
 
 def test_tool_rejections_are_structured_and_do_not_corrupt_room(client, game):  # noqa: F811

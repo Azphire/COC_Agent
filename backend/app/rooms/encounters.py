@@ -41,7 +41,7 @@ class EncounterService:
             "pending_check_id": None,
         }
         record = await session.get(ActionPlanRecord, cycle.id)
-        if not record or cycle.state.get("request_category") != "investigation":
+        if not record or cycle.state.get("request_category") not in {"investigation", "dialogue"}:
             return
         doc = AdjudicationRecord.model_validate(record.document)
         run = await session.get(AgentRun, record.run_id)
@@ -53,7 +53,7 @@ class EncounterService:
             doc.validation
             and doc.validation.check_decisions
             and all(
-                d.code in {"routine_action", "unnecessary", "already_public"}
+                d.code in {"routine_action", "unnecessary", "already_public", "missing_rule"}
                 for d in doc.validation.check_decisions
             )
             and all(a.tool == "request_skill_check" for a in doc.validation.rejected_actions)
@@ -78,8 +78,10 @@ class EncounterService:
             if facts.approved_entities[eid].get("title")
             and facts.approved_entities[eid]["title"] in facts.raw_text
         ]
-        target = facts.trusted_target_id or (matches[0] if len(matches) == 1 else None)
-        ambiguous_target = not facts.trusted_target_id and len(matches) > 1
+        target = facts.trusted_target_id or (
+            intent.target_id if intent.target_id in visible else None
+        )
+        ambiguous_target = not target and len(matches) > 1
         sources = []
         for candidate in [target] if target else matches if ambiguous_target else []:
             if not (
@@ -217,7 +219,7 @@ class EncounterService:
 
         cycle = await session.get(AgentCycle, run.cycle_id)
         require(
-            cycle.state.get("request_category") == "investigation"
+            cycle.state.get("request_category") in {"investigation", "dialogue"}
             and str(args.target_member_id) == cycle.state["triggering_member_id"]
             and args.source_event_seq == cycle.state["triggering_event_seq"],
             "模型 SAN 提案不属于本次行动者的遭遇",

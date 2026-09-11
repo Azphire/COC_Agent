@@ -16,6 +16,21 @@ from app.rules.check_options import can_push, luck_options
 from app.rules.checks import judge
 
 
+@pytest.fixture(autouse=True)
+def explicit_host_override_windows(monkeypatch):
+    """These legacy tests exercise host overrides and exact save windows.
+
+    Normal automatic KP approval is covered by batch 12; keep the generation
+    pending here so the host override and each pre-approval save remain testable.
+    """
+    from app.agents.settlement import CheckSettlementService
+
+    async def wait_for_test_override(self, runtime, state, check_id):
+        return None
+
+    monkeypatch.setattr(CheckSettlementService, "keeper_review", wait_for_test_override)
+
+
 def wait_cycle(client, game, expected=("completed", "failed", "waiting_for_roll")):  # noqa: F811
     # Extra serial settlement stages need headroom under the full SQLite suite.
     # Wait for the same terminal/interrupt states; no result assertions are relaxed.
@@ -519,7 +534,7 @@ def test_redundant_model_roll_does_not_suppress_actual_encounter(client, encount
         ("规则问题：SAN 如何扣减？", False),
     ],
 )
-def test_selected_target_and_ambiguous_language_are_not_encounters(
+def test_readonly_inputs_and_compound_first_target_encounter(
     client, encounter_game, text, explicit
 ):
     g = encounter_game
@@ -531,10 +546,14 @@ def test_selected_target_and_ambiguous_language_are_not_encounters(
     ok(player(client, g, "/actions", body))
     cycle = wait_cycle(client, g)
     if "及候车厅" in text:
-        assert cycle["state"]["wait_reason"] == "sanity_encounter_review"
+        # The KP selected the first executable object; two named objects do not
+        # by themselves make that selection ambiguous or require host approval.
+        assert cycle["status"] == "waiting_for_roll"
+        checks = ok(client.get(g["prefix"] + "/checks"))
+        assert len(checks) == 1 and checks[0]["sanity"]["origin"] == "automatic"
     else:
         assert cycle["status"] == "completed"
-    assert not ok(client.get(g["prefix"] + "/checks"))
+        assert not ok(client.get(g["prefix"] + "/checks"))
 
 
 def test_push_cannot_be_replaced_by_new_fingerprint():

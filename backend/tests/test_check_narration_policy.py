@@ -95,7 +95,8 @@ def test_routine_actions_do_not_roll(kind, text):
     facts, intent, proposal = policy_case()
     facts.raw_text, intent.type = text, kind
     facts.approved_entities["door"]["reveal_conditions"] = {}
-    assert CheckPolicyEvaluator().evaluate(proposal, intent, facts).code == "routine_action"
+    proposal.necessity = "unnecessary"
+    assert CheckPolicyEvaluator().evaluate(proposal, intent, facts).code == "unnecessary"
 
 
 def test_published_information_does_not_roll():
@@ -104,13 +105,13 @@ def test_published_information_does_not_roll():
     assert CheckPolicyEvaluator().evaluate(p, intent, facts).code == "already_public"
 
 
-def test_visible_check_target_does_not_turn_general_observation_into_check():
+def test_kp_can_resolve_pronouns_without_exact_entity_title():
     facts, intent, p = policy_case()
     intent.type = "observe"
-    facts.raw_text = "我环顾明显环境"
-    assert CheckPolicyEvaluator().evaluate(p, intent, facts).code == "routine_action"
+    facts.raw_text = "我凑近看看上面的痕迹"
+    assert CheckPolicyEvaluator().evaluate(p, intent, facts).allowed
     intent.type = "investigate"
-    assert CheckPolicyEvaluator().evaluate(p, intent, facts).code == "unrequested_target"
+    assert CheckPolicyEvaluator().evaluate(p, intent, facts).allowed
 
 
 def test_hidden_configured_clue_requires_check():
@@ -143,9 +144,11 @@ def test_explicit_risk_with_rule_basis_can_roll():
     facts, intent, p = policy_case()
     facts.approved_entities["door"]["reveal_conditions"] = {}
     p.clue_id, p.rule_topic_id, p.risk_quote = None, "coc7.skill_check", facts.raw_text
-    assert CheckPolicyEvaluator().evaluate(p, intent, facts).code == "explicit_risk"
+    assert CheckPolicyEvaluator().evaluate(p, intent, facts).code == "keeper_judgement"
     p.risk_quote = "模型虚构的危险"
-    assert not CheckPolicyEvaluator().evaluate(p, intent, facts).allowed
+    # Risk quote is no longer an authorization source; KP purpose/consequences
+    # and the implemented rule matter. State tools remain separately guarded.
+    assert CheckPolicyEvaluator().evaluate(p, intent, facts).allowed
 
 
 @pytest.mark.parametrize("field", ["uncertainty", "success_effect", "failure_consequence"])

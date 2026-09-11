@@ -28,7 +28,13 @@ def action_lead(intent, results):
 
 class NarrationValidator:
     def validate(self, output, *, documents, public_ids, scene_id, results):
-        text = output.public_narration
+        text = "\n".join(
+            [
+                output.public_narration,
+                output.npc_speech.text if output.npc_speech else "",
+                *output.incidental_details,
+            ]
+        )
         require(
             not re.search(r"[a-z][a-z0-9]*_[a-z0-9_]+", text, re.I), "公开叙事包含内部标识", 422
         )
@@ -70,18 +76,22 @@ class NarrationValidator:
             contradictory = r"检定失败|未通过|没有成功" if passed else r"检定成功|检定通过|成功地"
             require(not re.search(contradictory, text), "叙事与真实检定结果冲突", 422)
         require(
-            not text or text == "\n".join(d["statement"] for d in documents),
-            "叙事超出验证过的公开依据",
+            not re.search(
+                r"(?:受到|扣除|损失|恢复|获得).{0,6}[一二三四五六七八九十百\d]+点?(?:伤害|生命|HP|MP|幸运)",
+                text,
+            ),
+            "资源变化必须使用实际结算记录",
             422,
         )
-        # Exact public claims prevent invented clues, damage and tool effects;
-        # server-authored result text is appended only after this check.
-        require(
-            bool(documents) or bool(checks) or output.needs_host_ruling,
-            "叙事没有回应行动的公开依据",
-            422,
-        )
-        return {"valid": True, "checks": len(checks), "scene_id": scene_id}
+        # These are structural and literal checks, not proof of semantic truth.
+        # The public narrator never receives private KP material. Its prose and
+        # incidental details do not create entities, resources, exits or results.
+        return {
+            "valid": True,
+            "checks": len(checks),
+            "scene_id": scene_id,
+            "scope": "visibility_and_result_references; semantic correctness not proven",
+        }
 
 
 def fallback_narration(intent_type, results, public_scene, *, rejected=False):

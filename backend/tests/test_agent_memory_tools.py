@@ -217,7 +217,7 @@ def test_concurrent_human_actions_one_cycle(client, game):  # noqa: F811
                 lambda _: submit(client, game, "我冒着失去平衡的风险调查并请求侦查检定"), range(2)
             )
         )
-    assert sorted(r.status_code for r in responses) == [200, 409]
+    assert sorted(r.status_code for r in responses) == [200, 200]
     assert wait_cycle(client, game)["status"] == "waiting_for_roll"
     check = ok(client.get(game["prefix"] + "/checks"))[0]
     path = game["prefix"] + f"/checks/{check['id']}/roll"
@@ -226,7 +226,16 @@ def test_concurrent_human_actions_one_cycle(client, game):  # noqa: F811
     assert results[0]["check"]["dice"] == results[1]["check"]["dice"]
     accept_original(client, game, check["id"])
     assert wait_cycle(client, game)["status"] == "completed"
-    assert len(game["adapter"].prompts) == 2
+    # The second accepted action is replanned after the first result, with no new die.
+    checks = ok(client.get(game["prefix"] + "/checks"))
+    assert len(checks) == 1
+    assert (
+        sum(
+            e["type"] == "check.resolved"
+            for e in ok(client.get(game["prefix"] + "/events"))["events"]
+        )
+        == 1
+    )
 
 
 def test_profile_draft_is_not_persisted_until_confirmation(client, game):  # noqa: F811

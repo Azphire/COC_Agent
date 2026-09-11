@@ -51,6 +51,8 @@ class AgentModelClient:
                 if on_call:
                     await on_call()
                 call_started = time.monotonic()
+                usage = None
+                issues = []
                 try:
                     async with asyncio.timeout(self.settings.model_timeout_seconds):
                         result = await self.adapter.generate(
@@ -62,6 +64,7 @@ class AgentModelClient:
                         )
                     if not isinstance(result, ModelResponse):
                         raise ModelFormatError("模型输出格式无效")
+                    usage = result.token_usage
                     if response_schema:
                         value = result.structured
                         if isinstance(value, BaseModel):
@@ -87,6 +90,11 @@ class AgentModelClient:
                         await validate_output(result.structured)
                     return result, int((time.monotonic() - started) * 1000)
                 except (ValidationError, ValueError, ModelFormatError) as error:
+                    issues = (
+                        schema_issues(error, response_schema)
+                        if isinstance(error, ValidationError)
+                        else getattr(error, "issues", [])
+                    )
                     if attempt + 1 >= max_attempts:
                         raise ModelFormatError("模型结构化输出在一次修复后仍无效") from None
                     prompt = list(messages) + [
@@ -110,6 +118,8 @@ class AgentModelClient:
                         "model": self.settings.model_name,
                         "latency_ms": int((time.monotonic() - call_started) * 1000),
                         "attempt": attempt + 1,
+                        "token_usage": usage,
+                        "validation_issues": issues,
                     }
                     self.calls.append(call)
                     if on_result:

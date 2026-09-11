@@ -316,8 +316,10 @@ def test_check_wait_precedes_narration_and_duplicate_roll(client, game):  # noqa
     )
     assert first["check"]["dice"] == second["check"]["dice"]
     events = ok(client.get(game["prefix"] + "/events"))["events"]
-    narration = next(e["payload"]["text"] for e in events if e["type"] == "keeper.narration")
-    assert f"骰点 {first['check']['result']['total']}" in narration
+    invitation = next(e for e in events if e["payload"].get("check_invitation"))
+    requested = next(e for e in events if e["type"] == "check.requested")
+    assert invitation["seq"] < requested["seq"]
+    assert any(e["type"] == "keeper.narration" and e["seq"] > requested["seq"] for e in events)
 
 
 def test_navigation_non_move_then_explicit_move(client, running_navigation):  # noqa: F811

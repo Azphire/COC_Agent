@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, requestId } from '../api/session'
 import type { Result, Room } from '../api/rooms'
 import type { AgentProfile } from '../api/agents'
-import { difficultyLabels, nodeLabels, resultLabels } from '../api/agents'
+import { difficultyLabels, resultLabels } from '../api/agents'
 import KnowledgeBindingPanel from './KnowledgeBindingPanel'
 import HostEntityPanel from './HostEntityPanel'
 import InvestigationBoard from './InvestigationBoard'
@@ -25,7 +25,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
   const [retrievals, setRetrievals] = useState<Record<string, unknown[]>>({})
   const [debugOpen, setDebugOpen] = useState(false)
   const [target, setTarget] = useState('')
-  const [category, setCategory] = useState<'investigation' | 'rule_question'>('investigation')
+  const [category, setCategory] = useState<'dialogue' | 'rule_question'>('dialogue')
   const [adjudication, setAdjudication] = useState<unknown>(null)
   const [behaviors, setBehaviors] = useState<Record<string, unknown>[]>([])
   const [summaries, setSummaries] = useState<Record<string, unknown>[]>([])
@@ -65,6 +65,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
   }
   const seats = room.members.filter(m => m.active && (m.id === room.host_member_id || m.controller_type === 'agent'))
   return <>
+    {room.is_host && <details open={room.status === 'lobby'}><summary>主机模组与 AI 设置</summary>
     {room.is_host && <ModuleNavigationPanel room={room} token={token} acceptRoom={acceptRoom} />}
     {room.is_host && <HostEntityPanel room={room} token={token} acceptRoom={acceptRoom} />}
     {room.is_host && <KnowledgeBindingPanel room={room} token={token} acceptRoom={acceptRoom} />}
@@ -87,31 +88,36 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
       })}
       {(!game?.module || seats.some(m => !game.bindings.some(b => b.member_id === m.id))) && <p>开始 Agent 回合前，请选择模组、绑定 AI KP，并给每个 AI 队友分配角色和档案。</p>}
     </section>}
+    </details>}
     {error && <p role="alert">{error}</p>}
-    {game?.preparation && <InvestigationBoard entities={game.public_entities || []} />}
+    {game?.preparation && <InvestigationBoard entities={game.public_entities || []} onSelect={entity => { setTarget(entity.id); setAction(text => text || `关于${entity.title}，`); setCategory('dialogue') }} />}
     {game?.module && <section className="agent-game"><h2>{game.module.title}</h2><p>开场介绍：{game.module.public_introduction}</p>
-      <p role="status" data-testid="agent-cycle-status">{game.module.completed ? '调查已结束' : !cycle || cycle.status === 'completed' ? '等待真人行动' : cycle.status === 'cancelled' ? '回合已取消，可提交新行动' : cycle.status === 'failed' ? 'Agent 回合失败' : nodeLabels[cycle.current_node] || cycle.status}</p>
+      <p role="status" data-testid="agent-cycle-status">{game.module.completed ? '调查已结束' : !cycle || cycle.status === 'completed' ? '你想说什么，或做什么？' : cycle.status === 'cancelled' ? '可以继续交谈或行动' : cycle.status === 'failed' ? '主持暂时中断，请查看主机详情' : cycle.status === 'waiting_for_roll' ? '等待你的选择；仍可交谈、问规则或补充方法' : cycle.status === 'waiting_for_review' ? '这个问题需要主机处理，仍可继续交谈' : 'KP 正在回应；可以继续输入'}</p>
       {cycle?.safe_error && <p role="alert">{cycle.safe_error}</p>}
       {cycle?.requires_clarification && <p role="status" data-testid="action-clarification">需要澄清：{cycle.clarification_question}</p>}
-      {room.is_host && active && <div className="action-row">
+      {room.is_host && active && <details><summary>主机回合控制</summary><div className="action-row">
         <button disabled={busy} onClick={() => void command('/agent-cycle/cancel')}>取消 Agent 回合</button>
         {cycle?.status === 'failed' && <button disabled={busy || room.status !== 'running'} onClick={() => void command('/agent-cycle/retry')}>重试 Agent 回合</button>}
-      </div>}
+      </div></details>}
       {room.status !== 'ended' && !game.module.completed && <form onSubmit={async e => {
         e.preventDefault()
-        const clarify = category === 'investigation' && cycle?.requires_clarification
-        const body = { text: action, category, ...(category === 'investigation' && target ? { target_entity_id: target } : {}), ...(clarify ? { clarification_event_seq: cycle.clarification_event_seq } : {}), ...(room.is_host ? { actor_member_id: actor } : {}) }
+        const clarify = category === 'dialogue' && cycle?.requires_clarification
+        const body = { text: action, category, ...(category === 'dialogue' && target ? { target_entity_id: target } : {}), ...(clarify ? { clarification_event_seq: cycle.clarification_event_seq } : {}), ...(room.is_host ? { actor_member_id: actor } : {}) }
         const content = JSON.stringify(body)
         if (!pending.current || pending.current.content !== content) pending.current = { content, id: requestId() }
         if (await command(clarify ? '/clarifications' : '/actions', { ...body, client_request_id: pending.current.id })) { setAction(''); setTarget(''); pending.current = null }
       }}>
         {room.is_host && <label>真人行动席位<select id="agent-action-actor" value={actor} onChange={e => setActor(e.target.value)}><option value="">选择本地真人调查员</option>{room.members.filter(m => m.active && m.role === 'player' && m.controller_type === 'human' && m.access_type === 'host_managed').map(m => <option key={m.id} value={m.id}>{m.display_name}</option>)}</select></label>}
-        <label>输入类别<select id="agent-request-category" value={category} onChange={e => { setCategory(e.target.value as typeof category); setTarget(''); pending.current = null }}><option value="investigation">调查行动</option><option value="rule_question">规则提问</option></select></label>
-        <label>{category === 'rule_question' ? '规则问题' : '调查行动'}<textarea id="agent-action" value={action} maxLength={2000} onChange={e => setAction(e.target.value)} placeholder={category === 'rule_question' ? '例如：奖励骰和惩罚骰怎么使用？' : '描述调查员想做什么，例如走进维修间检查工作台。'} required /></label>
-        {category === 'investigation' && !!game.conversation_targets?.length && <label>交谈目标<select id="agent-conversation-target" value={target} onChange={e => { setTarget(e.target.value); pending.current = null }}><option value="">不指定人物</option>{game.conversation_targets.map(npc => <option key={npc.id} value={npc.id}>{npc.title}</option>)}</select></label>}
-        <button disabled={busy || active || room.status !== 'running' || !game.enabled || !action.trim() || (room.is_host && !actor)}>{category === 'rule_question' ? '提交规则问题' : '提交行动'}</button>
+        <label>{category === 'rule_question' ? '规则问题' : '对话与行动'}<textarea id="agent-action" value={action} maxLength={2000} onChange={e => setAction(e.target.value)} placeholder="直接说话、问 KP，或描述你想做什么……" required /></label>
+        <details><summary>人物、线索与规则快捷输入</summary>
+          <button type="button" onClick={() => { setCategory(category === 'rule_question' ? 'dialogue' : 'rule_question'); setTarget('') }}>{category === 'rule_question' ? '返回对话' : '查规则'}</button>
+          {game.conversation_targets?.map(npc => <button key={npc.id} type="button" onClick={() => { setTarget(npc.id); setAction(text => text || `${npc.title}，`); setCategory('dialogue') }}>{npc.title}</button>)}
+          {room.members.filter(m => m.active && m.role === 'player').map(m => <button key={m.id} type="button" onClick={() => { setTarget(''); setAction(text => text || `${m.display_name}，`); setCategory('dialogue') }}>{m.display_name}</button>)}
+          {target && <button type="button" onClick={() => setTarget('')}>清除选定目标</button>}
+        </details>
+        <button disabled={busy || room.status !== 'running' || !game.enabled || !action.trim() || (room.is_host && !actor)}>发送</button>
       </form>}
-      <div className="check-list">{game.checks.map(check => <article key={check.id} className="check-card" data-check-id={check.id}>
+      <div className="check-list">{game.checks.filter(check => check.status === 'pending').map(check => <article key={check.id} className="check-card" data-check-id={check.id}>
         <h3>{check.display_name || check.name}检定</h3>
         <p>{check.display_text}</p><p>{room.members.find(m => m.id === check.target_member_id)?.display_name} · 数值 {check.value}{check.sanity ? ' · SAN 二元判定' : ` · ${difficultyLabels[check.difficulty]} · 奖励骰 ${check.bonus_dice} / 惩罚骰 ${check.penalty_dice}`}</p><p>{check.reason}</p>
         <CheckSettlementPanel check={check} room={room} busy={busy} command={command} />
@@ -120,7 +126,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
           {!check.sanity && <p><strong>{check.result?.total} · {resultLabels[check.result?.level || '']}</strong> · 本次目标 {check.result?.threshold} · {check.result?.passed ? '通过' : '未通过'}</p>}
         </>}
       </article>)}</div>
-      <h3>已公开线索</h3>{game.module.clues.length === 0 ? <p>尚未发现线索。</p> : game.module.clues.map(clue => <article key={clue.id}><h4>{clue.title}</h4><p>{clue.content}</p></article>)}
+      <h3>已公开线索</h3>{game.module.clues.length === 0 ? <p>尚未发现线索。</p> : game.module.clues.map(clue => <article key={clue.id}><h4><button type="button" onClick={() => { setAction(text => text || `关于${clue.title}，`); setTarget(clue.id); setCategory('dialogue') }}>{clue.title}</button></h4><p>{clue.content}</p></article>)}
     </section>}
     {room.is_host && game?.module && <section data-testid="host-agent-debug"><details onToggle={e => setDebugOpen(e.currentTarget.open)}><summary>主机 Agent 调试面板 · HOST_DEBUG</summary>
       <button disabled={busy} onClick={async () => {

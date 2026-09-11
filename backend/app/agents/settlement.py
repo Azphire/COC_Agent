@@ -105,7 +105,11 @@ class CheckSettlementService:
         }
         record.document = check.model_dump(mode="json")
         options = await self.options(session, room, record.document)
-        if automatic or not (options["luck"] or options["push"]):
+        meaningful_luck = any(
+            o["result"]["level"] != raw["level"] or o["result"]["passed"] != raw["passed"]
+            for o in options["luck"]
+        )
+        if automatic or not (meaningful_luck or options["push"]):
             self.finish(session, room, record, check, raw)
         else:
             self.event(session, room, record, "check.rolled")
@@ -115,6 +119,8 @@ class CheckSettlementService:
         check = PendingCheck.model_validate(record.document)
         progress = check.settlement
         require(progress and not check.sanity, "此检定没有普通结果选择", 422)
+        if progress.get("choice") == body.model_dump() and progress.get("stage") != "choice":
+            return
         if record.status == "resolved":
             # Same decision is an idempotent receipt; a different decision cannot edit it.
             require(progress.get("choice") == body.model_dump(), "检定已最终结算")
@@ -162,6 +168,38 @@ class CheckSettlementService:
             await self.wait(session, room, record, "push_roll")
         else:
             self.finish(session, room, record, check, progress["original_result"])
+
+    async def keeper_review(self, runtime, state, check_id):
+        from app.agents.settlement_schemas import PushReview
+        from app.persistence.agent_models import AgentRun, CheckRecord
+
+        async with self.rooms.database.sessions() as session:
+            check = await session.get(CheckRecord, check_id)
+            context = {"push_attempt": self.agents.check_public(check.document)}
+        run_id = await runtime.generate_action_run(
+            state,
+            await runtime.keeper_binding(state),
+            "review_push",
+            PushReview,
+            "你是CoC KP。只返回PushReview，判断玩家额外努力是否实质改变方法或增加投入。"
+            "不是简单重复才approve=true，并在掷骰前说明具体更严重的失败后果。"
+            "只依据公开情境。已实现后果kind=time（明确minutes）或condition（明确condition）；"
+            "伤害、丢失物品等未实现效果用host_manual，不可假装已经结算。"
+            "原检定资格由服务端核验；不要掷骰或改变原结果。",
+            context,
+        )
+
+        async def apply(session, room):
+            record = await session.get(CheckRecord, check_id)
+            run = await session.get(AgentRun, run_id)
+            if (record.document.get("settlement") or {}).get("stage") != "push_review":
+                return
+            await self.review(
+                session, room, record, PushReview.model_validate(run.structured_output)
+            )
+            run.status, run.finished_at = "completed", utc_now()
+
+        await self.agents.mutate(state["room_id"], apply)
 
     async def push_roll(self, session, room, record):
         check = PendingCheck.model_validate(record.document)
@@ -240,6 +278,9 @@ class CheckSettlementService:
         )
         require(room.status == "running", "请先恢复游戏")
         if record.status != "resolved":
+            from app.agents.conversation import ensure_no_earlier_message
+
+            await ensure_no_earlier_message(session, room, None)
             cycle = await self.agents.cycle(session, room.id, active=True)
             require(
                 cycle

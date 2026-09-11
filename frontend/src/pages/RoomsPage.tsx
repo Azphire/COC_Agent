@@ -203,7 +203,7 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
           {['running', 'paused'].includes(room.status) && <button disabled={busy} onClick={() => { if (window.confirm('结束后房间将永久只读。确认结束游戏？')) void command('/end') }}>结束游戏</button>}
         </div>}
       </section>
-      <section><h2>玩家与席位</h2><ul className="character-list">{room.members.map(member => <li key={member.id} data-member-id={member.id}>
+      <details open={lobby}><summary>人物与席位</summary><section><h2>玩家与席位</h2><ul className="character-list">{room.members.map(member => <li key={member.id} data-member-id={member.id}>
         <strong>{member.display_name}</strong> · {member.role === 'host' ? '主机' : member.controller_type === 'agent' ? (room.game?.bindings.some(b => b.member_id === member.id) ? 'AI 调查员' : 'Agent · 待绑定档案') : member.access_type === 'remote' ? '远程真人' : '本地真人'}
         <p>{!member.active ? '已离开' : online.includes(member.id) ? '在线' : member.access_type === 'host_managed' && member.role === 'player' ? '主机管理' : '离线'} · {member.ready ? '已准备' : '未准备'}</p>
         {member.active && member.role === 'player' && writable && <div className="action-row">
@@ -231,6 +231,17 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
           {slot.character_snapshot && <details><summary>完整角色卡 · {slot.public_summary.name}</summary><pre>{JSON.stringify(slot.character_snapshot, null, 2)}</pre></details>}
         </article>)}
       </section>
+      </details>
+      <section><h2>对话时间线</h2>{writable && !room.game?.enabled && <>
+        <div className="field-grid"><label>可见性<select id="event-visibility" value={visibility} onChange={e => setVisibility(e.target.value)}><option value="public">公开</option><option value="actor_and_host">仅自己与主机</option>{isHost && <option value="host_only">仅主机</option>}</select></label>
+        {isHost && <label>操作身份<select value={actor} onChange={e => setActor(e.target.value)}><option value="">主机</option>{room.members.filter(m => m.active && m.role === 'player' && m.controller_type === 'human' && m.access_type === 'host_managed').map(m => <option key={m.id} value={m.id}>{m.display_name}</option>)}</select></label>}</div>
+        <form onSubmit={e => { e.preventDefault(); void send('messages') }}><label>消息<textarea id="chat-message" value={text} onChange={e => setText(e.target.value)} maxLength={4000} required /></label><button disabled={busy || !text.trim()}>发送消息</button></form>
+        <form onSubmit={e => { e.preventDefault(); void send('rolls') }}><div className="field-grid"><label>骰子表达式<input id="dice-expression" value={expression} maxLength={32} onChange={e => setExpression(e.target.value)} required /></label><label>原因<input id="dice-reason" value={reason} maxLength={2000} onChange={e => setReason(e.target.value)} /></label></div><button disabled={busy}>服务端掷骰</button></form>
+      </>}
+      <ol className="timeline" data-testid="timeline">{events.filter(event => event.visibility !== 'host_only' && !event.type.startsWith('agent.cycle') && !event.type.startsWith('review.')).map(event => <RoomTimelineEvent key={event.seq} event={event} room={room} />)}</ol>
+      {isHost && <details data-testid="host-event-debug"><summary>主机私密事件 · HOST_DEBUG</summary><ol>{events.filter(event => event.visibility === 'host_only' || event.type.startsWith('agent.cycle') || event.type.startsWith('review.')).map(event => <RoomTimelineEvent key={event.seq} event={event} room={room} debug />)}</ol></details>}
+      <div className="action-row"><button onClick={() => void exportLog('jsonl')}>导出 JSONL</button><button onClick={() => void exportLog('markdown')}>导出 Markdown</button></div>
+      </section>
       <AgentGamePanel room={room} token={token} acceptRoom={acceptRoom} />
       <SanityPanel room={room} busy={busy} command={command} />
       <section><h2>当前场景</h2><h3 data-testid="scene-title">{room.session_state.scene_title || '尚未设置场景'}</h3><p className="preserve-lines">{room.session_state.scene_summary}</p>
@@ -253,16 +264,7 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
           }
         }}>载入 · {save.name}</button></p>)}
       </section>}
-      <section><h2>聊天与掷骰</h2>{writable && <>
-        <div className="field-grid"><label>可见性<select id="event-visibility" value={visibility} onChange={e => setVisibility(e.target.value)}><option value="public">公开</option><option value="actor_and_host">仅自己与主机</option>{isHost && <option value="host_only">仅主机</option>}</select></label>
-        {isHost && <label>操作身份<select value={actor} onChange={e => setActor(e.target.value)}><option value="">主机</option>{room.members.filter(m => m.active && m.role === 'player' && m.controller_type === 'human' && m.access_type === 'host_managed').map(m => <option key={m.id} value={m.id}>{m.display_name}</option>)}</select></label>}</div>
-        <form onSubmit={e => { e.preventDefault(); void send('messages') }}><label>消息<textarea id="chat-message" value={text} onChange={e => setText(e.target.value)} maxLength={4000} required /></label><button disabled={busy || !text.trim()}>发送消息</button></form>
-        <form onSubmit={e => { e.preventDefault(); void send('rolls') }}><div className="field-grid"><label>骰子表达式<input id="dice-expression" value={expression} maxLength={32} onChange={e => setExpression(e.target.value)} required /></label><label>原因<input id="dice-reason" value={reason} maxLength={2000} onChange={e => setReason(e.target.value)} /></label></div><button disabled={busy}>服务端掷骰</button></form>
-      </>}
-      <ol className="timeline" data-testid="timeline">{events.filter(event => event.visibility !== 'host_only').map(event => <RoomTimelineEvent key={event.seq} event={event} room={room} />)}</ol>
-      {isHost && <details data-testid="host-event-debug"><summary>主机私密事件 · HOST_DEBUG</summary><ol>{events.filter(event => event.visibility === 'host_only').map(event => <RoomTimelineEvent key={event.seq} event={event} room={room} />)}</ol></details>}
-      <div className="action-row"><button onClick={() => void exportLog('jsonl')}>导出 JSONL</button><button onClick={() => void exportLog('markdown')}>导出 Markdown</button></div>
-      </section>
+
     </>}
   </div>
 }

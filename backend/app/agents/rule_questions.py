@@ -147,5 +147,9 @@ async def answer_rule_question(runtime, state):
             "rule_answer_run_id": run.id,
         }
         service.cycle_event(session, room, cycle)
+        from app.agents.conversation import activate_next
+
+        await session.flush()
+        await activate_next(service, session, room)
 
     await service.mutate(state["room_id"], answer)

@@ -187,8 +187,21 @@ def relevant_evidence(concept, excerpt):
     return bool(wanted) and len(wanted & set(tokens(text))) / len(wanted) >= 0.6
 
 
+def explicit_rules_discussion(text):
+    """Honor an explicit out-of-character instruction, independent of model labels."""
+    import re
+
+    return bool(
+        re.search(
+            r"^(?:KP|kp|场外|规则问题)[，,：:\s].*(?:规则|检定|掷骰|幸运|孤注)|我问的是规则", text
+        )
+    )
+
+
 def rule_question_text(text):
     """Conservative compatibility detection; explicit request category is authoritative."""
     import re
 
-    return "规则" in text and not re.search(r"我(?:向|问|询问)|交谈|NPC|npc|回顾|回想", text)
+    return explicit_rules_discussion(text) or (
+        "规则" in text and not re.search(r"我(?:向|问|询问)|交谈|NPC|npc|回顾|回想", text)
+    )

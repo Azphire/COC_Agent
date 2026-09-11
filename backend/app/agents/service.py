@@ -84,6 +84,11 @@ class AgentService:
         query = select(AgentCycle).where(AgentCycle.room_id == room_id)
         if active:
             query = query.where(AgentCycle.status.in_(ACTIVE))
+        else:
+            current = await self.cycle(session, room_id, active=True)
+            if current:
+                return current
+            query = query.where(AgentCycle.status.not_in(["queued", "queued_action", "suspended"]))
         return await session.scalar(query.order_by(AgentCycle.created_at.desc()).limit(1))
 
     async def mutate(self, room_id, callback):
@@ -149,7 +154,15 @@ class AgentService:
             **{
                 key: value
                 for key, value in document.items()
-                if key not in {"clue_id", "policy_fingerprint", "policy_target_id"}
+                if key
+                not in {
+                    "clue_id",
+                    "policy_fingerprint",
+                    "policy_target_id",
+                    "attempt_purpose",
+                    "attempt_method",
+                    "alternative_basis",
+                }
             },
             **display,
             "name": display["display_name"],
@@ -536,10 +549,12 @@ class AgentService:
                 )
             if body.target_entity_id:
                 visible = await self.entities.public(session, room.id)
-                require(
-                    any(e["id"] == body.target_entity_id for e in visible), "行动目标不可见", 403
-                )
-            require(cycle is None, "此房间已有活动回合，请等待、重试或取消")
+                visible_ids = {e["id"] for e in visible}
+                if not await self.entities.binding(session, room.id):
+                    module = await self.module(session, room.id)
+                    visible_ids |= set(module.state["revealed_clues"])
+                    visible_ids |= {n["id"] for n in module.document["npcs"]}
+                require(body.target_entity_id in visible_ids, "行动目标不可见", 403)
             bindings = await self.ensure_config(session, room)
             if not rule_question:
                 from uuid import UUID
@@ -604,9 +619,15 @@ class AgentService:
                 status="running",
                 safe_error=None,
             )
-            cycle = AgentCycle(id=cycle_id, room_id=room.id, status="running", state=state)
+            parent = cycle
+            state["parent_cycle_id"] = parent.id if parent else None
+            state["origin"] = "human"
+            cycle = AgentCycle(
+                id=cycle_id, room_id=room.id, status="queued" if parent else "running", state=state
+            )
             session.add(cycle)
-            self.cycle_event(session, room, cycle)
+            if not parent:
+                self.cycle_event(session, room, cycle)
             return {"event": event_view(event)}
         elif action == "behavior.reset":
             require(cycle is None, "请在回合结束后重置队友状态")
@@ -633,6 +654,10 @@ class AgentService:
                 403,
             )
             require(room.status == "running", "请先恢复游戏")
+            from app.agents.conversation import ensure_no_earlier_message
+
+            if check.status == "pending":
+                await ensure_no_earlier_message(session, room, cycle)
             if check.document.get("sanity"):
                 require(action == "sanity.roll", "SAN 检定须明确确认当前阶段", 422)
                 require(
@@ -838,8 +863,11 @@ class AgentService:
             expected = entity.snapshot["reveal_conditions"]["successful_check"]
             require(
                 expected
-                and (args.kind, args.name, args.difficulty)
-                == (expected["kind"], expected["name"], expected["difficulty"]),
+                and (
+                    (args.kind, args.name, args.difficulty)
+                    == (expected["kind"], expected["name"], expected["difficulty"])
+                    or bool(proposal.alternative_basis.strip())
+                ),
                 "检定与实体批准条件不匹配",
                 422,
             )
@@ -860,8 +888,11 @@ class AgentService:
             )
             require(
                 expected
-                and (args.kind, args.name, args.difficulty)
-                == (expected.kind, expected.name, expected.difficulty),
+                and (
+                    (args.kind, args.name, args.difficulty)
+                    == (expected.kind, expected.name, expected.difficulty)
+                    or bool(proposal.alternative_basis.strip())
+                ),
                 "检定与线索要求不匹配",
                 422,
             )
@@ -873,6 +904,9 @@ class AgentService:
             ruleset_id=slot.character_snapshot["ruleset_id"],
             policy_fingerprint=policy.state_fingerprint,
             policy_target_id=policy.target_entity_id,
+            attempt_purpose=proposal.purpose,
+            attempt_method=proposal.method,
+            alternative_basis=proposal.alternative_basis,
             room_id=room.id,
             slot_id=slot.id,
             value=value,
@@ -880,7 +914,7 @@ class AgentService:
             agent_run_id=run.id,
         )
         # The private KP model must not publish arbitrary text through a check reason.
-        check.reason = "调查行动需要一次" + ("技能" if check.kind == "skill" else "属性") + "检定"
+        check.reason = f"过一次{check.display_name}，看看能否完成这次尝试：{facts.raw_text[:100]}"
         record = CheckRecord(
             id=str(check.id),
             room_id=room.id,
@@ -892,6 +926,19 @@ class AgentService:
         )
         session.add(record)
         cycle.state = {**cycle.state, "pending_check_id": record.id}
+        self.rooms.append(
+            session,
+            room,
+            "keeper.narration",
+            target.id,
+            {
+                "text": check.reason,
+                "cycle_id": cycle.id,
+                "check_invitation": True,
+            },
+            visibility=check.visibility,
+            request_id=cycle.id + ":invitation",
+        )
         self.rooms.append(
             session,
             room,
@@ -958,6 +1005,15 @@ class AgentService:
             "module": row(module),
             "bindings": [row(b) for b in await self.bindings(session, room.id)],
             "cycle": row(cycle) if cycle else None,
+            "conversation_cycles": [
+                row(c)
+                for c in await session.scalars(
+                    select(AgentCycle).where(
+                        AgentCycle.room_id == room.id,
+                        AgentCycle.status.in_(["queued", "queued_action", "suspended"]),
+                    )
+                )
+            ],
             "checks": [
                 row(c)
                 for c in await session.scalars(
@@ -1012,6 +1068,18 @@ class AgentService:
             require(module is None, "该旧存档没有模组状态，请使用绑定模组之后的存档")
             return
         data = saved.document
+        conversation_cycles = {c["id"]: c for c in data.get("conversation_cycles", [])}
+        for row in await session.scalars(
+            select(AgentCycle).where(
+                AgentCycle.room_id == room.id,
+                AgentCycle.status.in_(["queued", "queued_action", "suspended"]),
+            )
+        ):
+            if row.id not in conversation_cycles:
+                row.status = "cancelled"
+        for cid, document in conversation_cycles.items():
+            row = await session.get(AgentCycle, cid)
+            row.status, row.state = document["status"], document["state"]
         # Old ordinary saves have no settlement key. They still restore their
         # pending stage; fixed dice remain available from append-only events.
         saved_checks = {c["id"]: c for c in data["checks"]}

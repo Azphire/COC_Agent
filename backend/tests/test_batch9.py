@@ -109,10 +109,12 @@ def test_exact_version_topics_and_other_version_fallback(client, rag_game, monke
     assert payload["answers"][0]["status"] == "related_excerpt"
 
 
-def test_rule_question_waits_for_active_round_and_paused_room(client, game):  # noqa: F811
+def test_rule_question_answers_while_waiting_but_not_paused(client, game):  # noqa: F811
     ok(submit(client, game, "对工作台进行侦查检定；我冒着失去平衡的风险尝试。"))
     assert wait_cycle(client, game)["status"] == "waiting_for_roll"
-    assert ask(client, game, "奖励骰怎么使用？").status_code == 409
+    ok(ask(client, game, "奖励骰怎么使用？"))
+    assert wait_cycle(client, game)["status"] == "waiting_for_roll"
+    assert any(e["type"] == "rules.answered" for e in public_events(client, game["prefix"]))
     ok(client.post(game["prefix"] + "/agent-cycle/cancel"))
     ok(client.post(game["prefix"] + "/pause"))
     assert ask(client, game, "奖励骰怎么使用？").status_code == 409

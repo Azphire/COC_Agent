@@ -104,6 +104,7 @@ def test_scene_bound_test_npc_converse_and_private_summary_never_public(client, 
     d, svc = running_navigation, client.app.state.agent_service
     npc_id = str(uuid4())
     public_text = "我只知道这里是候车厅。"
+    spoken_text = "这里是候车厅，别的我就说不准了。"
     private_text = "UNREVEALED_NPC_PRIVATE_SENTINEL"
 
     async def seed_npc():
@@ -167,9 +168,9 @@ def test_scene_bound_test_npc_converse_and_private_summary_never_public(client, 
                 "entity_ids": [npc_id],
             }
             result.update(
-                public_narration=public_text,
+                public_narration="乘客迟疑了一下。",
                 grounded_claims=[claim],
-                npc_speech={"entity_id": npc_id, "text": private_text} if leak else None,
+                npc_speech={"entity_id": npc_id, "text": private_text if leak else spoken_text},
             )
         elif schema == "TeammateDecision":
             assert private_text not in json.dumps(messages)
@@ -187,7 +188,7 @@ def test_scene_bound_test_npc_converse_and_private_summary_never_public(client, 
     )["events"]
     assert private_text not in json.dumps(events)
     speech = [e for e in events if e["type"] == "npc.spoke"]
-    assert len(speech) == 1 and speech[0]["payload"]["text"] == public_text
+    assert len(speech) == 1 and speech[0]["payload"]["text"] == spoken_text
 
 
 @pytest.mark.parametrize(

@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import re
 import unicodedata
 
 from app.agents.adjudication_schemas import BehaviorRejection, BehaviorState, Cooldown
@@ -32,9 +31,10 @@ def bigram_jaccard(left, right):
 
 
 def output_text(decision):
-    return "\n".join(
-        t.strip() for t in (decision.action_text, decision.speech_text) if t and t.strip()
-    )
+    if decision.mode == "speak":
+        return (decision.speech_text or decision.action_text or "").strip()
+    parts = [t.strip() for t in (decision.action_text, decision.speech_text) if t and t.strip()]
+    return "\n".join(t for i, t in enumerate(parts) if not any(t in old for old in parts[:i]))
 
 
 def public_fingerprint(context):
@@ -92,19 +92,7 @@ class TeammateBehaviorPolicy:
             return BehaviorRejection(
                 accepted=False, reason="repeated_output", repetition_score=score
             )
-        if (
-            decision.mode in {"act", "assist"}
-            and player_intent
-            and (
-                decision.target_id == player_intent.target_id
-                and decision.action_type == player_intent.type
-                and decision.target_id is not None
-            )
-        ):
-            return BehaviorRejection(
-                accepted=False, reason="repeats_player_action", repetition_score=score
-            )
-        if any(
+        if decision.mode == "act" and any(
             c.remaining_cycles > 0
             and c.action_type == decision.action_type
             and c.target_id == decision.target_id
@@ -113,10 +101,6 @@ class TeammateBehaviorPolicy:
         ):
             return BehaviorRejection(
                 accepted=False, reason="target_action_cooldown", repetition_score=score
-            )
-        if not refs and not re.search(r"我|我们|同伴|现场|当前|这里|此处", text):
-            return BehaviorRejection(
-                accepted=False, reason="no_scene_or_action_relation", repetition_score=score
             )
         return BehaviorRejection(accepted=True, repetition_score=score)
 

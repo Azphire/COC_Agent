@@ -36,6 +36,7 @@ from app.rooms.service import RoomError, require
 NODES = [
     "collect_context",
     "plan_keeper_action",
+    "route_conversation",
     "validate_player_intent",
     "validate_keeper_plan",
     "supplement_context",
@@ -62,6 +63,7 @@ class AgentRuntime(ActionRuntimeMixin):
         self.stack = AsyncExitStack()
         self.tasks = {}
         self.wakeups = set()
+        self.preserved_cancellations = set()
         self.graph = None
         self.closing = False
 
@@ -93,8 +95,19 @@ class AgentRuntime(ActionRuntimeMixin):
         for name in NODES:
             builder.add_node(name, getattr(self, name))
         for left, right in zip([START, *NODES], [*NODES, END]):
-            if left not in {"prepare_encounter", "wait_for_encounter_review", "wait_for_sanity"}:
+            if left not in {
+                "prepare_encounter",
+                "wait_for_encounter_review",
+                "wait_for_sanity",
+                "route_conversation",
+            }:
                 builder.add_edge(left, right)
+        builder.add_conditional_edges(
+            "route_conversation",
+            lambda state: (
+                END if state.get("status") == "queued_action" else "validate_player_intent"
+            ),
+        )
         builder.add_conditional_edges(
             "prepare_encounter",
             lambda state: (
@@ -141,6 +154,7 @@ class AgentRuntime(ActionRuntimeMixin):
         self.tasks[room_id] = task
 
         def finished(completed):
+            self.preserved_cancellations.discard(completed)
             if self.tasks.get(room_id) is completed:
                 self.tasks.pop(room_id, None)
                 if room_id in self.wakeups:
@@ -149,10 +163,15 @@ class AgentRuntime(ActionRuntimeMixin):
 
         task.add_done_callback(finished)
 
-    def cancel_task(self, room_id):
+    def cancel_task(self, room_id, *, preserve_cycle=False):
         task = self.tasks.get(str(room_id))
         if task and not task.done():
+            if preserve_cycle:
+                self.preserved_cancellations.add(task)
+                self.wakeups.discard(str(room_id))
             task.cancel()
+            return task
+        return None
 
     async def close(self):
         self.closing = True
@@ -166,6 +185,11 @@ class AgentRuntime(ActionRuntimeMixin):
     async def drive(self, room_id):
         cycle_id = None
         try:
+            from app.agents.conversation import activate_next
+
+            await self.service.mutate(
+                room_id, lambda session, room: activate_next(self.service, session, room)
+            )
             async with self.rooms.database.sessions() as session:
                 cycle = await self.service.cycle(session, room_id, active=True)
                 if not cycle or cycle.status not in {
@@ -189,10 +213,53 @@ class AgentRuntime(ActionRuntimeMixin):
                 from app.agents.rule_questions import answer_rule_question
 
                 await answer_rule_question(self, state)
+                self.schedule(room_id)
+                return
+            if (
+                pending
+                and (pending.document.get("settlement") or {}).get("stage") == "push_review"
+                and not state.get("push_review_attempted")
+            ):
+
+                async def mark_review(session, room):
+                    row = await session.get(AgentCycle, cycle_id)
+                    row.state = {**row.state, "push_review_attempted": True}
+
+                await self.service.mutate(room_id, mark_review)
+                try:
+                    await self.service.settlement.keeper_review(self, state, pending.id)
+                except (ModelError, RoomError):
+
+                    async def review_failed(session, room):
+                        row = await session.get(AgentCycle, cycle_id)
+                        row.state = {
+                            **row.state,
+                            "push_review_error": "孤注裁决生成失败，可由主机处理此异常",
+                        }
+                        self.rooms.append(
+                            session,
+                            room,
+                            "agent.push_review_failed",
+                            room.host_member_id,
+                            {"cycle_id": cycle_id},
+                            "host_only",
+                        )
+
+                    await self.service.mutate(room_id, review_failed)
+                self.schedule(room_id)
                 return
             # Sequential approved encounters can include several AI seats, which
             # settle without a human interrupt. This does not change tool limits.
             config = {"configurable": {"thread_id": cycle_id}, "recursion_limit": 512}
+            if state.get("restart_plan"):
+                state = {**state, "restart_plan": False, "conversation_routed": False}
+
+                async def restarted(session, room):
+                    row = await session.get(AgentCycle, cycle_id)
+                    row.state = state
+
+                await self.service.mutate(room_id, restarted)
+                await self.graph.aupdate_state(config, state, as_node="collect_context")
             if state.get("request_category") == "san_encounter":
                 if pending and pending.status == "pending":
                     async with self.rooms.database.sessions() as session:
@@ -255,8 +322,22 @@ class AgentRuntime(ActionRuntimeMixin):
             else:
                 value = state
             await self.graph.ainvoke(value, config)
+            async with self.rooms.database.sessions() as session:
+                latest = await self.service.cycle(session, room_id, active=True)
+                queued = await session.scalar(
+                    select(AgentCycle).where(
+                        AgentCycle.room_id == room_id,
+                        AgentCycle.status.in_(["queued", "queued_action", "suspended"]),
+                    )
+                )
+            if queued or latest and latest.id != cycle_id:
+                self.schedule(room_id)
         except asyncio.CancelledError:
-            if cycle_id and not self.closing:
+            if (
+                cycle_id
+                and not self.closing
+                and asyncio.current_task() not in self.preserved_cancellations
+            ):
                 await self.fail(room_id, cycle_id, "cancelled", "模型请求已取消")
         except Exception as error:
             if cycle_id:
@@ -357,6 +438,11 @@ class AgentRuntime(ActionRuntimeMixin):
             return cycle.state
 
         return await self.service.mutate(state["room_id"], select_scene)
+
+    async def route_conversation(self, state):
+        from app.agents.conversation import route
+
+        return await route(self, state)
 
     async def prepare_run(self, state, binding_id, node, summary=False):
         async def operation(session, room):
@@ -1421,6 +1507,10 @@ class AgentRuntime(ActionRuntimeMixin):
             ):
                 run.status, run.finished_at = "completed", utc_now()
             self.service.cycle_event(session, room, cycle)
+            from app.agents.conversation import activate_next
+
+            await session.flush()
+            await activate_next(self.service, session, room)
             return cycle.state
 
         return await self.service.mutate(state["room_id"], operation)

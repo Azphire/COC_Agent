@@ -362,6 +362,7 @@ class RoomService:
             await self.hub.broadcast(str(room_id), events)
 
     async def command(self, room_id, token, action, body=None, target=None):
+        stopped_task = None
         async with self.lock(room_id):
             async with self.transaction() as session:
                 room = await self.room(session, room_id)
@@ -400,7 +401,14 @@ class RoomService:
                     runtime.schedule(room_id)
                 elif action in {"agent.cancel", "agent.check.cancel"}:
                     runtime.cancel_task(room_id)
-            return {"room": view, **(result or {})}
+                elif action in {"pause", "end", "snapshot.load"}:
+                    stopped_task = runtime.cancel_task(room_id, preserve_cycle=True)
+            response = {"room": view, **(result or {})}
+        if stopped_task:
+            # Let SQLite/checkpoint cancellation finish outside the room lock.
+            # A subsequent load/resume cannot inherit the old task's failure.
+            await asyncio.gather(stopped_task, return_exceptions=True)
+        return response
 
     async def apply(self, session, room, identity, action, body, target):
         if self.agent_service and action.startswith("agent."):

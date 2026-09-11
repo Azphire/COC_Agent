@@ -54,7 +54,7 @@ class ModuleInput(DomainModel):
 
 class ActionInput(DomainModel):
     text: Text
-    category: Literal["investigation", "rule_question"] = "investigation"
+    category: Literal["dialogue", "investigation", "rule_question"] = "dialogue"
     client_request_id: UUID
     actor_member_id: UUID | None = None
     target_entity_id: str | None = Field(default=None, max_length=100)
@@ -82,6 +82,10 @@ class CheckRequest(DomainModel):
 
 
 class PendingCheck(CheckRequest):
+    attempt_purpose: str = ""
+    attempt_method: str = ""
+    alternative_basis: str = ""
+    superseded_by: str | None = None
     settlement: dict | None = None
     settlement_rewound: bool = False
     sanity_rewound: bool = False
@@ -165,6 +169,17 @@ class CycleStage(DomainModel):
 
 
 class AgentCycleState(TypedDict):
+    push_review_attempted: bool
+    push_review_error: str | None
+    conversation_reply: str | None
+    restart_plan: bool
+    related_player_cycle_id: str | None
+    parent_cycle_id: str | None
+    suspended_status: str | None
+    conversation_parent: dict | None
+    conversation_routed: bool
+    origin: str
+    addressed_member_id: str | None
     settlement_phase: str
     encounter_queue: list[dict]
     encounters_scanned: bool

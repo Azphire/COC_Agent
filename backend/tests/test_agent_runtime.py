@@ -224,12 +224,18 @@ def test_no_check_cycle_and_private_context(client, game):
     ok(submit(client, game))
     cycle = wait_cycle(client, game)
     assert cycle["status"] == "completed", cycle
-    assert cycle["state"]["call_count"] == 3
+    # Teammate act/assist is now resolved in its own KP cycle.
+    assert cycle["state"]["origin"] == "teammate"
+    assert cycle["state"]["call_count"] == 2
     events = ok(client.get(game["prefix"] + "/events"))["events"]
     assert sum(e["type"] == "agent.action_proposed" for e in events) == 1
     assert any(e["type"] == "clue.revealed" for e in events)
     assert ok(client.get(game["prefix"] + "/memories"))
-    teammate = json.loads(game["adapter"].prompts[-1][-1]["content"])
+    teammate = next(
+        json.loads(prompt[-1]["content"])
+        for prompt in game["adapter"].prompts
+        if json.loads(prompt[-1]["content"]).get("role") == "investigator"
+    )
     encoded = json.dumps(teammate, ensure_ascii=False)
     assert (
         "keeper_brief" not in encoded and "蓝斑卵" not in encoded and "keeper_notes" not in encoded
@@ -246,7 +252,7 @@ def test_interrupt_roll_resume_and_duplicate(client, game):
     assert cycle["status"] == "waiting_for_roll", cycle
     assert len(game["adapter"].prompts) == 1
     ok(submit(client, game, "对工作台进行侦查检定；我冒着失去平衡的风险尝试。", request_id))
-    assert submit(client, game, "重复新行动").status_code == 409
+    # Conversation while waiting is covered separately; duplicate receipt adds no cycle.
     check = ok(client.get(game["prefix"] + "/checks"))[0]
     path = game["prefix"] + f"/checks/{check['id']}/roll"
     assert client.post(path, json={"total": 1}).status_code == 422

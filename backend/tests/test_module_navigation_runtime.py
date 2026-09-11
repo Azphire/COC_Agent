@@ -34,11 +34,13 @@ def responder(messages, kwargs):
         return {
             "tools": [
                 {"name": "get_public_scene", "arguments": {}},
-                {"name": "propose_action", "arguments": {"text": "我观察当前场景。"}},
+                # These cases isolate navigation; actual teammate actions are
+                # adjudicated (and exercised) by the conversation regressions.
+                {"name": "speak", "arguments": {"text": "我跟上，先看看现场。"}},
             ]
         }
-    definitions, _ = json.JSONDecoder().raw_decode(messages[0]["content"].split("可用工具：", 1)[1])
-    assert all(t["function"]["name"] != "transition_scene" for t in definitions)
+    # The compact prompt delegates movement through the validated plan field.
+    assert "proposed_transition_id" in messages[0]["content"]
     transition_schema = next(
         t["function"]["parameters"]
         for t in registered_tools("keeper", structure_navigation=True)

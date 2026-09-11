@@ -58,6 +58,13 @@ class PlayerIntent(DomainModel):
 
 
 class KeeperPlan(DomainModel):
+    pending_action: Literal["independent", "defer", "replace", "withdraw"] = Field(
+        default="independent", json_schema_extra={"x-explicit-output": True}
+    )
+    addressed_member_id: str | None = Field(
+        default=None, json_schema_extra={"x-explicit-output": True}
+    )
+    next_decision: str = Field(default="", max_length=300)
     schema_version: Literal[1] = 1
     plan_id: str = Field(min_length=1, max_length=100)
     cycle_id: str
@@ -119,19 +126,30 @@ class ValidatedActionPlan(DomainModel):
 
 class NPCSpeech(DomainModel):
     entity_id: str
-    text: str = Field(min_length=1, max_length=700)
+    text: str = Field(
+        min_length=1,
+        max_length=700,
+        description="NPC对当前问题的第一人称答话，不是角色介绍或资料摘要",
+    )
 
 
 class KeeperNarration(DomainModel):
     schema_version: Literal[1] = 1
-    public_narration: str = Field(default="", max_length=2000)
-    npc_speech: NPCSpeech | None = None
+    public_narration: str = Field(
+        default="",
+        max_length=2000,
+        description="公开环境、动作与回应。NPC台词仅放npc_speech，不在此复述。不得新增模组事实或未结算效果。",
+    )
+    npc_speech: NPCSpeech | None = Field(
+        default=None, json_schema_extra={"x-explicit-output": True}
+    )
     grounded_claims: list[GroundedClaim] = Field(default_factory=list, max_length=5)
     public_entity_references: list[str] = Field(default_factory=list, max_length=8)
     check_result_reference: str | None = None
     transition_result_reference: str | None = None
     needs_host_ruling: bool = False
     current_scene_reference: str | None = None
+    incidental_details: list[str] = Field(default_factory=list, max_length=3)
 
 
 class ContextGap(DomainModel):

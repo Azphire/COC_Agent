@@ -43,7 +43,9 @@ def scenario(messages, kwargs):
         return {
             "tools": [
                 {"name": "inspect_public_entities", "arguments": {}},
-                {"name": "propose_action", "arguments": {"text": "我留意公告附近的动静。"}},
+                # Keep this fixture focused on the original host exception.
+                # Batch 12 tests the extra adjudication for actual AI actions.
+                {"name": "speak", "arguments": {"text": "我留意公告附近的动静。"}},
             ]
         }
     if context["phase"] == "execute_state_tools":

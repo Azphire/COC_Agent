@@ -119,7 +119,7 @@ async def build_context(
     from app.rooms.sanity_service import runtime_context
 
     phase = phase or cycle.state["current_node"]
-    narrator = phase in {"narrate_publicly", "generate_keeper_narration"}
+    narrator = phase in {"narrate_publicly", "generate_keeper_narration", "review_push"}
     keeper = profile.role == "keeper" and not narrator
     identity = Identity(binding.member_id, keeper)
     all_events = await service.rooms.events(session, room, identity)
@@ -188,6 +188,26 @@ async def build_context(
         "phase": phase,
         **(additions or {}),
     }
+    # Reserve a small conversation window before ordinary event budget trimming.
+    # Speech remains attributed testimony, never an authoritative world fact.
+    recent_dialogue = [
+        {
+            "seq": e["seq"],
+            "speaker": e["payload"].get("actor_name", e.get("actor_member_id")),
+            "type": e["type"],
+            "text": e["payload"].get("text", "")[:180],
+        }
+        for e in all_events
+        if e["visibility"] == "public"
+        and e["type"]
+        in {
+            "action.submitted",
+            "keeper.narration",
+            "npc.spoke",
+            "agent.spoke",
+            "agent.action_proposed",
+        }
+    ][-6:]
     prepared = await service.entities.binding(session, room.id)
     if prepared:
         public_entities = await service.entities.public(session, room.id)
@@ -521,4 +541,14 @@ async def build_context(
         {k: v for k, v in context.items() if k not in ordered and k != "triggering_action"}
     )
     ordered["triggering_action"] = context["triggering_action"]
+    ordered["recent_dialogue"] = (
+        [] if context.get("summary_status", {}).get("stale") else recent_dialogue
+    )
+    while ordered.get("events") and len(json.dumps(ordered, ensure_ascii=False)) > budget:
+        ordered["events"] = ordered["events"][1:]
+    while (
+        len(ordered["recent_dialogue"]) > 2
+        and len(json.dumps(ordered, ensure_ascii=False)) > budget
+    ):
+        ordered["recent_dialogue"] = ordered["recent_dialogue"][1:]
     return await service.sanitize(session, room, ordered), all_events, selected
