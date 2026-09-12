@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import Field, SecretStr, StrictBool, StrictInt, StringConstraints
 
 from app.domain.character import DomainModel
+from app.rooms.combat_schemas import CombatState, Injury, Weapon
 from app.rooms.sanity_schemas import SanityState
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
@@ -15,6 +16,10 @@ Visibility = Literal["public", "actor_and_host", "host_only"]
 class CharacterRuntimeV1(DomainModel):
     # None means that the published ruleset does not define this resource.
     hp: Resource = None
+    hp_max: Resource = None
+    armor: Annotated[StrictInt, Field(ge=0, le=100_000)] = 0
+    injury: Injury = Field(default_factory=Injury)
+    weapons: list[Weapon] = Field(default_factory=list, max_length=20)
     mp: Resource = None
     san: Resource = None
     luck: Resource = None
@@ -26,6 +31,7 @@ class CharacterRuntimeV1(DomainModel):
 
 
 class SessionStateV1(DomainModel):
+    combat: CombatState = Field(default_factory=CombatState)
     luck_spending: StrictBool = False
     game_minute: Annotated[StrictInt, Field(ge=0, le=1_000_000)] = 0
     game_round: Annotated[StrictInt, Field(ge=0, le=1_000_000)] = 0

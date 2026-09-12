@@ -13,10 +13,16 @@ from app.auth import require_host
 from app.domain.character import utc_now
 from app.models.base import ModelError
 from app.persistence.agent_models import ProfileRecord, RoomAgentBinding
+from app.rooms.combat_schemas import (
+    CombatCommand,
+    CombatControl,
+    CombatSetup,
+    CombatStep,
+    DamageCommand,
+)
 from app.rooms.service import RoomError, require
 
 router = APIRouter(prefix="/api")
-
 
 def service(request: Request):
     return request.app.state.agent_service
@@ -31,6 +37,31 @@ def credential(request: Request):
 Service = Annotated[object, Depends(service)]
 Token = Annotated[str, Depends(credential)]
 host = [Depends(require_host)]
+
+
+@router.post("/rooms/{room_id}/combat/setup")
+async def combat_setup(room_id: UUID, body: CombatSetup, svc: Service, token: Token):
+    return await svc.rooms.command(room_id, token, "combat.setup", body)
+
+
+@router.post("/rooms/{room_id}/combat/action")
+async def combat_action(room_id: UUID, body: CombatCommand, svc: Service, token: Token):
+    return await svc.rooms.command(room_id, token, "combat.action", body)
+
+
+@router.post("/rooms/{room_id}/combat/step")
+async def combat_step(room_id: UUID, body: CombatStep, svc: Service, token: Token):
+    return await svc.rooms.command(room_id, token, "combat.step", body)
+
+
+@router.post("/rooms/{room_id}/combat/damage")
+async def combat_damage(room_id: UUID, body: DamageCommand, svc: Service, token: Token):
+    return await svc.rooms.command(room_id, token, "combat.damage", body)
+
+
+@router.post("/rooms/{room_id}/combat/control")
+async def combat_control(room_id: UUID, body: CombatControl, svc: Service, token: Token):
+    return await svc.rooms.command(room_id, token, "combat.control", body)
 
 
 @router.get("/agent-profiles", dependencies=host)

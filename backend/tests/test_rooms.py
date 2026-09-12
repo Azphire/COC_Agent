@@ -225,7 +225,7 @@ def test_publish_only_finalized_and_immutable(client, character_settings):
     assert {
         k: v
         for k, v in room["session_state"]["characters"][slot["id"]].items()
-        if k not in {"san_max", "sanity"}
+        if k not in {"san_max", "sanity", "hp_max", "armor", "injury", "weapons"}
     } == {
         "hp": 12,
         "mp": 10,

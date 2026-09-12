@@ -388,7 +388,7 @@ class ActionRuntimeMixin:
         self, state, binding_id, node, schema, instruction, additions=None
     ):
         run_id, _, context, cached = await self.prepare_run(state, binding_id, node)
-        if cached:
+        if cached and (schema is not KeeperNarration or context.get("response_brief")):
             return run_id
         context = {**context, **(additions or {})}
 
@@ -426,6 +426,13 @@ class ActionRuntimeMixin:
                     for c in facts.completed_checks[-6:]
                     if c.get("target_member_id") == facts.actor_member_id and not c.get("sanity")
                 ]
+                for attempt in context["previous_attempts"]:
+                    if isinstance(attempt.get("result"), dict):
+                        attempt["result"] = {
+                            k: v
+                            for k, v in attempt["result"].items()
+                            if k in {"passed", "outcome", "winner_id", "display_text"}
+                        }
                 # Small identifiers allow selection without exposing omitted entity descriptions.
                 context["current_targets"] = [
                     {"id": facts.scene_id, "title": "当前所在场景（含自身动作）", "type": "scene"}
@@ -571,6 +578,7 @@ class ActionRuntimeMixin:
                     "characters",
                     "public_state",
                     "checks",
+                    "current_check",
                     "current_participants",
                     "profile",
                 ):
@@ -610,6 +618,25 @@ class ActionRuntimeMixin:
                 self.service.settings.agent_context_chars,
                 max(2500, self.service.settings.model_context_limit - 2100),
             )
+
+            def context_size():
+                measured = run.context
+                if schema is KeeperNarration:
+                    # These are the actual prompt fields below. The rest is verification data.
+                    measured = {
+                        k: measured[k]
+                        for k in (
+                            "response_brief",
+                            "triggering_action",
+                            "PUBLIC_CLAIM_OPTIONS",
+                            "RULE_EVIDENCE",
+                            "RULE_TOPICS",
+                            "public_tool_results",
+                        )
+                        if k in measured
+                    }
+                return len(json.dumps(measured, ensure_ascii=False))
+
             if schema is KeeperPlan:
                 # Speaking style belongs to the public reply, not adjudication.
                 run.context = {k: v for k, v in run.context.items() if k != "profile"}
@@ -643,10 +670,7 @@ class ActionRuntimeMixin:
                     ],
                 }
             for key in ("events", "memories", "recent_output_summary"):
-                while (
-                    run.context.get(key)
-                    and len(json.dumps(run.context, ensure_ascii=False)) > budget
-                ):
+                while run.context.get(key) and context_size() > budget:
                     items = list(run.context[key])
                     index = (
                         next(
@@ -670,10 +694,7 @@ class ActionRuntimeMixin:
                     run.context = {**run.context, key: items}
             # Plan identifiers and real results need reserved space. Drop the tail
             # of already bounded scene blocks before removing authoritative facts.
-            while (
-                run.context.get("module", {}).get("blocks")
-                and len(json.dumps(run.context, ensure_ascii=False)) > budget
-            ):
+            while run.context.get("module", {}).get("blocks") and context_size() > budget:
                 module_context = dict(run.context["module"])
                 module_context["blocks"] = module_context["blocks"][:-1]
                 audit = dict(run.context.get("module_context_audit", {}))
@@ -686,15 +707,12 @@ class ActionRuntimeMixin:
             # Keep an actual source available for exceptional fact proposals.
             # Remove duplicate scene blocks before evidence, and shorten excerpts
             # without dropping their identity. Full sources remain in the ledger.
-            while (
-                len(run.context.get("MODULE_EVIDENCE", [])) > 1
-                and len(json.dumps(run.context, ensure_ascii=False)) > budget
-            ):
+            while len(run.context.get("MODULE_EVIDENCE", [])) > 1 and context_size() > budget:
                 run.context = {
                     **run.context,
                     "MODULE_EVIDENCE": run.context["MODULE_EVIDENCE"][:-1],
                 }
-            if len(json.dumps(run.context, ensure_ascii=False)) > budget:
+            if context_size() > budget:
                 run.context = {
                     **run.context,
                     "MODULE_EVIDENCE": [
@@ -702,13 +720,15 @@ class ActionRuntimeMixin:
                         for e in run.context.get("MODULE_EVIDENCE", [])
                     ],
                 }
-            while (
-                len(run.context.get("recent_dialogue", [])) > 2
-                and len(json.dumps(run.context, ensure_ascii=False)) > budget
-            ):
+            while len(run.context.get("recent_dialogue", [])) > 2 and context_size() > budget:
                 run.context = {**run.context, "recent_dialogue": run.context["recent_dialogue"][1:]}
+            while len(run.context.get("incidental_memories", [])) > 2 and context_size() > budget:
+                run.context = {
+                    **run.context,
+                    "incidental_memories": run.context["incidental_memories"][:-1],
+                }
             require(
-                len(json.dumps(run.context, ensure_ascii=False)) <= budget,
+                context_size() <= budget,
                 "当前行动资料超过上下文预算，请主机缩小场景资料",
                 422,
             )
@@ -854,6 +874,10 @@ class ActionRuntimeMixin:
             "inspect_approved_entities({})、inspect_character({member_id})、search_rules({query})。"
             "普通资料留白交给公开回应适度即兴；核心事实变更仍按原审阅机制。无需重复输出检定、揭示和转场工具。",
         )
+
+        from app.agents.extended_runtime import clarify_extended
+
+        await clarify_extended(self, state, run_id)
 
         async def persist(session, room):
             cycle = await session.get(AgentCycle, state["cycle_id"])
@@ -1576,6 +1600,7 @@ class ActionRuntimeMixin:
             record = await session.get(ActionPlanRecord, cycle.id)
             doc = AdjudicationRecord.model_validate(record.document)
             output = KeeperNarration.model_validate(run.structured_output)
+            scene_id = (await self.service.module(session, room.id)).state["scene_id"]
             from app.rules.topics import rule_question_text
 
             rule_question = rule_question_text(
@@ -1676,6 +1701,15 @@ class ActionRuntimeMixin:
                     422,
                 )
                 content = output.public_narration
+                compound_receipts = [
+                    e["payload"]["display_text"]
+                    for e in checks.values()
+                    if (e["payload"].get("opposed") or e["payload"].get("combined"))
+                    and e["payload"].get("display_text")
+                ]
+                for receipt in reversed(compound_receipts):
+                    if receipt not in content:
+                        content = receipt + ("\n" + content if content else "")
                 if not content.strip() and documents and not output.npc_speech:
                     content = "\n".join(d["statement"] for d in documents)
                 if results["failed_tools"]:
@@ -1750,7 +1784,7 @@ class ActionRuntimeMixin:
                         "check_notice": None,
                         "incidental_details": narration_details,
                         "incidental_source": "kp_improvisation",
-                        "scene_id": run.context["current_scene_reference"],
+                        "scene_id": scene_id,
                     },
                     request_id=run.id,
                 )
@@ -1770,7 +1804,7 @@ class ActionRuntimeMixin:
                         "text": output.npc_speech.text,
                         "incidental_details": speech_details,
                         "incidental_source": "kp_improvisation",
-                        "scene_id": run.context["current_scene_reference"],
+                        "scene_id": scene_id,
                     },
                     request_id=run.id + ":npc",
                 )

@@ -9,6 +9,7 @@ import InvestigationBoard from './InvestigationBoard'
 import ModuleNavigationPanel from './ModuleNavigationPanel'
 import CheckSettlementPanel from './CheckSettlementPanel'
 import CompoundCheckPanel from './CompoundCheckPanel'
+import CombatPanel from './CombatPanel'
 
 type Props = { room: Room; token: string; acceptRoom: (room: Room) => void }
 
@@ -91,6 +92,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
     </section>}
     </details>}
     {error && <p role="alert">{error}</p>}
+    <CombatPanel room={room} busy={busy} command={command} />
     {game?.preparation && <InvestigationBoard entities={game.public_entities || []} onSelect={entity => { setTarget(entity.id); setAction(text => text || `关于${entity.title}，`); setCategory('dialogue') }} />}
     {game?.module && <section className="agent-game"><h2>{game.module.title}</h2><p>开场介绍：{game.module.public_introduction}</p>
       <p role="status" data-testid="agent-cycle-status">{game.module.completed ? '调查已结束' : !cycle || cycle.status === 'completed' ? '你想说什么，或做什么？' : cycle.status === 'cancelled' ? '可以继续交谈或行动' : cycle.status === 'failed' ? '主持暂时中断，请查看主机详情' : cycle.status === 'waiting_for_roll' ? '等待你的选择；仍可交谈、问规则或补充方法' : cycle.status === 'waiting_for_review' ? '这个问题需要主机处理，仍可继续交谈' : 'KP 正在回应；可以继续输入'}</p>

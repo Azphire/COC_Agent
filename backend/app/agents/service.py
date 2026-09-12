@@ -62,6 +62,9 @@ class AgentService:
         from app.agents.compound import CompoundCheckService
 
         self.compound = CompoundCheckService(self)
+        from app.rooms.combat_service import CombatService
+
+        self.combat = CombatService(self)
 
     async def sanitize(self, session, room, value):
         members = await self.rooms.members(session, room)
@@ -664,6 +667,8 @@ class AgentService:
             parent = cycle
             state["parent_cycle_id"] = parent.id if parent else None
             state["origin"] = "human"
+            if not rule_question and self.combat.route(room, body.text):
+                state.update(combat_flow=True, combat_actor_id=actor)
             cycle = AgentCycle(
                 id=cycle_id, room_id=room.id, status="queued" if parent else "running", state=state
             )
@@ -836,7 +841,20 @@ class AgentService:
             },
         )
 
-    async def cancel_cycle(self, session, room, cycle):
+    async def cancel_cycle(self, session, room, cycle, *, restoring=False):
+        if cycle.state.get("combat_action_id") and not restoring:
+            from app.rooms.combat_service import load_state, store_state
+
+            data = load_state(room)
+            action = data.combat.actions.get(cycle.state["combat_action_id"])
+            if action and action["stage"] not in {"done", "cancelled"}:
+                require(
+                    not action["rolls"] and not action.get("damage"),
+                    "战斗已有固定骰或伤害，请完成当前结算后取消",
+                )
+                action["stage"] = "cancelled"
+                data.combat.pending_id = None
+                store_state(room, data)
         from app.persistence.preparation_models import HostReviewRequest
 
         review = await session.scalar(
@@ -1148,7 +1166,7 @@ class AgentService:
             saved.document["cycle"]["id"] if saved and saved.document["cycle"] else None
         )
         if current and current.id != saved_cycle_id:
-            await self.cancel_cycle(session, room, current)
+            await self.cancel_cycle(session, room, current, restoring=True)
             await session.flush()
         if not saved:
             module = await self.module(session, room.id)
@@ -1243,7 +1261,15 @@ class AgentService:
         if data["cycle"]:
             restored = await session.get(AgentCycle, data["cycle"]["id"])
             saved_pending = saved_checks.get(data["cycle"]["state"].get("pending_check_id"))
-            if saved_pending and (
+            if data["cycle"]["state"].get("combat_flow"):
+                restored.status = "waiting_for_roll"
+                restored.state = {
+                    **data["cycle"]["state"],
+                    "status": "waiting_for_roll",
+                    "safe_error": None,
+                }
+                self.cycle_event(session, room, restored)
+            elif saved_pending and (
                 saved_pending["status"] == "pending"
                 or data["cycle"]["status"] == "waiting_for_roll"
                 and saved_pending["status"] == "resolved"

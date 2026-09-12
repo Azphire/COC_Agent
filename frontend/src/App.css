@@ -152,3 +152,8 @@ pre {
 .structure-children { padding-left: 1rem; border-left: 1px solid #46505c; }
 .structure-workspace summary { overflow-wrap: anywhere; }
 @media (max-width: 800px) { .structure-workspace { grid-template-columns: 1fr; } }
+.combat-panel { border: 1px solid #8c6353; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+.combat-panel li { padding: .4rem 0; }
+.combat-panel li[aria-current="step"] { border-left: 3px solid #b88043; padding-left: .6rem; }
+.combat-condition { display: inline-block; margin-left: .5rem; padding: .1rem .4rem; border: 1px solid #b66a59; border-radius: 4px; }
+.combat-pending { padding: .6rem; border-top: 1px solid #8c6353; }

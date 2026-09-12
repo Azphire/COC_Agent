@@ -18,6 +18,8 @@ from app.rules.sanity import insanity_trigger, judge_sanity, loss_bounds
 def runtime_character(room, slot):
     state = SessionStateV1.model_validate(room.session_state)
     character = state.characters[UUID(slot.id)]
+    if character.hp_max is None:
+        character.hp_max = slot.character_snapshot.get("derived_values", {}).get("hp")
     mythos = slot.character_snapshot.get("skill_values", {}).get("cthulhu_mythos", 0)
     character.san_max = max(0, 99 - mythos - character.sanity.mythos_gain)
     return state, character
@@ -517,6 +519,11 @@ class SanityService:
             self.agents.cycle_event(session, room, cycle)
 
     async def manage(self, session, room, body):
+        require(
+            body.damage is None or body.operation == "symptom",
+            "伤害仅用于已确认疯狂发作的后果",
+            422,
+        )
         require(body.reason.strip(), "请填写裁定依据", 422)
         require(body.expected_revision == room.revision, "房间已更新，请刷新")
         require(room.status in {"paused", "running"}, "请先开始游戏")
@@ -527,6 +534,17 @@ class SanityService:
         )
         state = SessionStateV1.model_validate(room.session_state)
         if body.operation in {"advance", "new_day"}:
+            require(
+                not state.combat.active
+                and not any(
+                    c.injury.dying or c.injury.con_pending for c in state.characters.values()
+                )
+                and not any(
+                    p.injury.dying or p.injury.con_pending
+                    for p in state.combat.participants.values()
+                ),
+                "存在待处理伤势，请使用战斗伤势时间推进以保留必要体质检定",
+            )
             if body.minute is not None:
                 require(body.minute >= state.game_minute, "游戏时间不能倒退")
                 state.game_minute = body.minute
@@ -630,6 +648,16 @@ class SanityService:
             "host_only",
         )
 
+        if body.damage is not None:
+            await self.agents.combat.consequence_damage(
+                session,
+                room,
+                record,
+                str(body.damage),
+                body.armor_applies,
+                body.reason,
+            )
+
     async def correct(self, session, room, body):
         require(body.reason.strip(), "请填写更正依据", 422)
         require(not await self.agents.cycle(session, room.id, active=True), "请先完成或取消回合")
@@ -640,6 +668,14 @@ class SanityService:
         require(slot is not None, "角色席位不存在", 404)
         state = SessionStateV1.model_validate(room.session_state)
         character = state.characters[body.slot_id]
+        if body.resource == "hp" and any(
+            p.slot_id == str(body.slot_id) for p in state.combat.participants.values()
+        ):
+            require(
+                body.value is not None and body.value <= (character.hp_max or 0),
+                "战斗HP须在0与最大HP之间",
+                422,
+            )
         if body.resource == "san":
             require(
                 slot.character_snapshot.get("ruleset_id") == "coc7-character-creation",

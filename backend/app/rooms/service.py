@@ -146,6 +146,8 @@ class RoomService:
         state["characters"] = {
             key: value for key, value in state["characters"].items() if key in full_slots
         }
+        if not identity.is_host:
+            state["combat"] = {}
         return {
             "id": room.id,
             "name": room.name,
@@ -159,6 +161,8 @@ class RoomService:
             "self_member_id": identity.member_id,
             "is_host": identity.is_host,
             "session_state": state,
+            "combat": await self.agent_service.combat.view(session, room, identity)
+            if self.agent_service else None,
             "members": [
                 {
                     "id": m.id,
@@ -384,7 +388,7 @@ class RoomService:
             await self.broadcast(room_id, events)
             if self.agent_service:
                 runtime = self.agent_service.runtime
-                if action in {
+                if action.startswith("combat.") or action in {
                     "agent.action",
                     "agent.check.roll",
                     "agent.check.choice",
@@ -411,6 +415,10 @@ class RoomService:
         return response
 
     async def apply(self, session, room, identity, action, body, target):
+        if self.agent_service and action.startswith("combat."):
+            return await self.agent_service.combat.command(
+                session, room, identity, action.removeprefix("combat."), body
+            )
         if self.agent_service and action.startswith("agent."):
             return await self.agent_service.apply(session, room, identity, action, body, target)
         if self.agent_service and action in {
@@ -565,6 +573,7 @@ class RoomService:
             session.add(slot)
             state = SessionStateV1.model_validate(room.session_state)
             state.characters[UUID(slot.id)] = CharacterRuntimeV1(
+                hp_max=character.derived_values.get("hp"),
                 san_max=max(0, 99 - character.skill_values.get("cthulhu_mythos", 0))
                 if character.ruleset_id == "coc7-character-creation"
                 else None,
@@ -642,6 +651,7 @@ class RoomService:
             require(room.status in ("running", "paused"), "游戏开始后才能修改会话状态")
             require(body.expected_revision == room.revision, "房间已更新，请重新加载状态后编辑")
             previous_state = SessionStateV1.model_validate(room.session_state)
+            require(body.state.combat == previous_state.combat, "战斗状态请使用战斗结算接口", 422)
             require(
                 body.state.luck_spending == previous_state.luck_spending,
                 "幸运可选规则请使用检定规则配置接口",

@@ -76,6 +76,13 @@ def relevant_incidental_memories(visible_events, query, scene_id, *, limit=6, bu
 
 
 STORY_TYPES = {
+    "combat.started",
+    "combat.ended",
+    "combat.action_created",
+    "combat.action_submitted",
+    "combat.resolved",
+    "combat.receipt",
+    "combat.damage_confirmed",
     "check.choice_made",
     "check.rolled",
     "check.luck_spent",

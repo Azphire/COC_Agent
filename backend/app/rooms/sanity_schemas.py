@@ -80,6 +80,8 @@ class SanityRoll(DomainModel):
 
 
 class SanityManagement(DomainModel):
+    damage: Annotated[StrictInt, Field(ge=0, le=1000)] | None = None
+    armor_applies: bool = True
     expected_revision: Annotated[StrictInt, Field(ge=1)]
     operation: Literal["advance", "new_day", "symptom", "end_bout", "recover"]
     reason: str = Field(min_length=1, max_length=500)

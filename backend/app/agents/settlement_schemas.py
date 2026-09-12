@@ -19,10 +19,12 @@ class CheckChoice(DomainModel):
 
 
 class PushConsequence(DomainModel):
-    kind: Literal["condition", "time", "host_manual"]
+    kind: Literal["condition", "time", "damage", "host_manual"]
     description: Explanation
     condition: str = Field(default="", max_length=120)
     minutes: Annotated[StrictInt, Field(ge=1, le=1440)] | None = None
+    damage_formula: str | None = None
+    armor_applies: StrictBool = True
 
     @model_validator(mode="after")
     def complete(self):
@@ -31,6 +33,13 @@ class PushConsequence(DomainModel):
             raise ValueError("请选择明确的角色状态")
         if self.kind == "time" and self.minutes is None:
             raise ValueError("请指定流逝的游戏分钟")
+        if self.kind == "damage":
+            from app.rules.combat import damage_bounds
+            if self.damage_formula is None:
+                raise ValueError("伤害后果须在孤注前确认公式")
+            low, high = damage_bounds(self.damage_formula)
+            if low < 0 or high > 1000:
+                raise ValueError("伤害公式超出基础范围")
         return self
 
 
@@ -42,6 +51,8 @@ class PushReview(DomainModel):
 
 class ConsequenceHandled(DomainModel):
     reason: Explanation
+    damage: Annotated[StrictInt, Field(ge=0, le=1000)] | None = None
+    armor_applies: StrictBool = True
 
 
 class CheckRules(DomainModel):

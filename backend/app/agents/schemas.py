@@ -201,6 +201,15 @@ class CycleStage(DomainModel):
 
 
 class AgentCycleState(TypedDict):
+    combat_flow: bool
+    combat_actor_id: str
+    combat_action_id: str | None
+    combat_automatic: bool
+    combat_other_action: bool
+    combat_decision: dict | None
+    combat_started_only: bool
+    combat_rejection: str | None
+    combat_return: bool
     push_review_attempted: bool
     push_review_error: str | None
     conversation_reply: str | None

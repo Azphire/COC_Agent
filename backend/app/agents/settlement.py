@@ -187,7 +187,7 @@ class CheckSettlementService:
             "你是CoC KP。只返回PushReview，判断玩家额外努力是否实质改变方法或增加投入。"
             "不是简单重复才approve=true，并在掷骰前说明具体更严重的失败后果。"
             "只依据公开情境。已实现后果kind=time（明确minutes）或condition（明确condition）；"
-            "伤害、丢失物品等未实现效果用host_manual，不可假装已经结算。"
+            "伤害用damage并明确damage_formula和armor_applies；丢失物品等用host_manual。"
             "原检定资格由服务端核验；不要掷骰或改变原结果。",
             context,
         )
@@ -237,6 +237,15 @@ class CheckSettlementService:
                 character.conditions.append(consequence["condition"])
         elif consequence["kind"] == "time":
             state.game_minute += consequence["minutes"]
+        elif consequence["kind"] == "damage":
+            room.session_state = state.model_dump(mode="json")
+            await self.agents.combat.consequence_damage(
+                session, room, record, consequence["damage_formula"],
+                consequence["armor_applies"], consequence["description"],
+            )
+            progress["consequence_status"] = "applied"
+            self.finish(session, room, record, check, result)
+            return
         else:
             progress.update(stage="consequence", consequence_status="awaiting_host")
             record.document = check.model_dump(mode="json")
@@ -259,6 +268,10 @@ class CheckSettlementService:
             "没有待处理的孤注后果",
         )
         progress.update(consequence_status="host_handled", handled_reason=body.reason)
+        if body.damage is not None:
+            await self.agents.combat.consequence_damage(
+                session, room, record, str(body.damage), body.armor_applies, body.reason,
+            )
         record.document = check.model_dump(mode="json")
         self.event(session, room, record, "check.consequence_applied")
         self.finish(session, room, record, check, progress["push_result"])

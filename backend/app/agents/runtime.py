@@ -190,6 +190,7 @@ class AgentRuntime(ActionRuntimeMixin):
             await self.service.mutate(
                 room_id, lambda session, room: activate_next(self.service, session, room)
             )
+            await self.service.mutate(room_id, self.service.combat.queue_automatic)
             async with self.rooms.database.sessions() as session:
                 cycle = await self.service.cycle(session, room_id, active=True)
                 if not cycle or cycle.status not in {
@@ -215,6 +216,13 @@ class AgentRuntime(ActionRuntimeMixin):
                 await answer_rule_question(self, state)
                 self.schedule(room_id)
                 return
+            if state.get("combat_flow"):
+                from app.agents.combat_runtime import drive_combat
+
+                if await drive_combat(self, state):
+                    return
+                async with self.rooms.database.sessions() as session:
+                    state = (await session.get(AgentCycle, cycle_id)).state
             if (
                 pending
                 and (pending.document.get("settlement") or {}).get("stage") == "push_review"
@@ -1533,7 +1541,21 @@ class AgentRuntime(ActionRuntimeMixin):
             from app.agents.conversation import activate_next
 
             await session.flush()
+            if cycle.state.get("combat_other_action"):
+                from app.rooms.combat_service import current_actor, load_state, store_state
+
+                data = load_state(room)
+                if (
+                    current_actor(data.combat) == cycle.state["triggering_member_id"]
+                    and not data.combat.pending_id
+                ):
+                    self.service.combat.next_turn(data.combat, data)
+                    store_state(room, data)
+                    await self.service.combat.queue_health(
+                        session, room, "其他行动结束后的伤势检查"
+                    )
             await activate_next(self.service, session, room)
+            await self.service.combat.queue_automatic(session, room)
             return cycle.state
 
         return await self.service.mutate(state["room_id"], operation)
