@@ -171,7 +171,9 @@ class ModuleNavigationService:
             return False
         if not all(runtime.flags.get(k, False) == v for k, v in transition.required_flags.items()):
             return False
-        if not set(transition.required_item_ids) <= set(runtime.inventory):
+        if not set(transition.required_item_ids) <= {
+            runtime.item_instances.get(key, key) for key in runtime.inventory
+        }:
             return False
         if not set(transition.required_revealed_entity_ids) <= set(state.revealed_entity_ids):
             return False

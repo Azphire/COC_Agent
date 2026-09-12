@@ -1044,7 +1044,10 @@ class AgentRuntime(ActionRuntimeMixin):
             await self.service.sanity.encounters.discover(session, room, cycle)
             return cycle.state
 
-        return await self.service.mutate(state["room_id"], operation)
+        state = await self.service.mutate(state["room_id"], operation)
+        from app.preparation.sanity_adjudication import resolve_sanity_conditions
+
+        return await resolve_sanity_conditions(self, state)
 
     async def prepare_encounter(self, state):
         from app.rooms.sanity_schemas import SanityRequest

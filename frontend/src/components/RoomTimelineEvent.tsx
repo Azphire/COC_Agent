@@ -21,7 +21,7 @@ export default function RoomTimelineEvent({ event, room, debug = false }: { even
     <small>{debug && `#${event.seq} `}[{new Date(event.occurred_at).toLocaleTimeString()}] [{role}{!system && actor !== '系统' ? `：${actor}` : ''}] {debug && cycle && `[${cycle}]`} {event.visibility !== 'public' && '私密'}</small>
     {textTypes.includes(event.type) ? <p className="preserve-lines">{event.type === 'agent.spoke' ? '发言：' : event.type === 'agent.action_proposed' ? '行动：' : ''}{String(p.text)}</p>
       : event.type === 'action.clarification_requested' ? <p>需要澄清：{String(p.question)}</p>
-      : event.type === 'check.requested' ? <p>{(p.sanity as { origin?: string } | undefined)?.origin === 'automatic' ? '遭遇自动触发' : p.sanity ? '主机确认' : 'KP 请求'}“{String(p.display_name || p.name)}”检定 · {room.members.find(m => m.id === p.target_member_id)?.display_name}</p>
+      : event.type === 'check.requested' ? <p>{(p.sanity as { origin?: string } | undefined)?.origin === 'automatic' ? '遭遇自动触发' : (p.sanity as { origin?: string } | undefined)?.origin === 'kp_ruling' ? 'KP 情境裁定' : p.sanity ? '主机确认' : 'KP 请求'}“{String(p.display_name || p.name)}”检定 · {room.members.find(m => m.id === p.target_member_id)?.display_name}</p>
       : ['check.rolled', 'check.choice_made', 'check.luck_spent', 'check.push_requested', 'check.push_reviewed', 'check.consequence_pending', 'check.consequence_applied'].includes(event.type) ? <p>{String(p.display_text)}</p>
       : event.type === 'check.resolved' ? <p>{p.display_text ? String(p.display_text) : <>1D100={result?.total}，结果：{resultLabels[result?.level || '']} · {result?.passed ? '通过' : '未通过'}</>}</p>
       : event.type === 'clue.revealed' ? <p>公开线索：{String(p.title)} · {String(p.content)}</p>

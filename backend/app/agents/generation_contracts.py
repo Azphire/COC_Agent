@@ -149,8 +149,10 @@ def generation_contract(schema, context):
             },
             parsed_intent=(intent, ...),
             focus=(
-                focus | None,
+                focus,
                 Field(
+                    # Generation requires an object via x-explicit-output;
+                    # legacy providers that omit the field retain their default.
                     default=None,
                     json_schema_extra={"x-explicit-output": True},
                 ),
@@ -211,6 +213,62 @@ def generation_contract(schema, context):
 
 def restore_output(output, schema, context):
     value = output.model_dump(mode="json")
+    if schema is KeeperPlan:
+        from app.agents.action_policy import READ_TOOLS, explicit_movement, named_move_exits
+
+        raw = context["triggering_action"]["payload"]["text"]
+        named = named_move_exits(raw, context.get("approved_exits", []))
+        local = named_move_exits(
+            raw,
+            [
+                {**t, "target_public_title": t["title"]}
+                for t in context.get("current_targets", [])
+                if t.get("type") != "scene"
+            ],
+        )
+        if (
+            value["parsed_intent"]["type"] in {"move", "unknown"}
+            and value.get("proposed_transition_id")
+            and not named
+            and len(local) == 1
+            and explicit_movement(raw)
+        ):
+            value["focus"] = TurnFocus(action=raw, action_target_id=local[0]["id"]).model_dump(
+                mode="json"
+            )
+            value["parsed_intent"].update(
+                type="interact", evidence_quote=raw, requires_clarification=False
+            )
+            value["proposed_transition_id"] = None
+            value["proposed_check"] = None
+            value["needs_clarification"] = False
+            value["proposed_tool_calls"] = [
+                t for t in value["proposed_tool_calls"] if t["name"] in READ_TOOLS
+            ]
+            if local[0]["type"] == "npc" and not any(
+                r["entity_id"] == local[0]["id"] for r in context.get("check_requirements", [])
+            ):
+                value["proposed_reveal_entity_ids"] = [local[0]["id"]]
+        if (
+            value["parsed_intent"]["type"] in {"move", "unknown"}
+            and (not value.get("focus") or value["parsed_intent"]["type"] == "unknown")
+            and len(named) == 1
+            and value.get("proposed_transition_id") == named[0]["transition_id"]
+            and explicit_movement(raw)
+        ):
+            # Repair an incomplete representation of the model's selected move,
+            # corroborated by the existing verb/destination guards. No inferred exit.
+            value["focus"] = TurnFocus(
+                action=raw, action_target_id=named[0]["target_scene_node_id"]
+            ).model_dump(mode="json")
+            value["parsed_intent"].update(
+                type="move", evidence_quote=raw, requires_clarification=False
+            )
+            value["needs_clarification"] = False
+            value["proposed_check"] = None
+            value["proposed_tool_calls"] = [
+                tool for tool in value["proposed_tool_calls"] if tool["name"] in READ_TOOLS
+            ]
     if schema is KeeperPlan and value.get("focus"):
         focus = value["focus"]
         if focus.get("answer_basis") in {"improvise", "unrecorded"}:
@@ -227,7 +285,7 @@ def restore_output(output, schema, context):
         for name in ("action", "question", "suggestion", "hypothesis"):
             key = name + "_clause_ids"
             chosen = focus.pop(key, [])
-            if key in output.focus.model_fields_set:
+            if output.focus is not None and key in output.focus.model_fields_set:
                 positions = [i for i, c in enumerate(clauses) if c["id"] in chosen]
                 focus[name] = (
                     "".join(c["text"] for c in clauses[min(positions) : max(positions) + 1])
@@ -260,6 +318,21 @@ def restore_output(output, schema, context):
             # A selected move has one destination. Restore it from the approved
             # candidate; the ordinary intent/exit/ownership guards still apply.
             focus["action_target_id"] = transition["target_scene_node_id"]
+            # Preserve the actual movement clause when the model selected only
+            # its preceding door-opening clause. The destination still comes
+            # from the approved exit and the complete utterance must authorize it.
+            if len(named) == 1 and explicit_movement(raw):
+                movement_positions = [
+                    i
+                    for i, clause in enumerate(clauses)
+                    if explicit_movement(clause["text"])
+                    and named_move_exits(clause["text"], [transition])
+                ]
+                if movement_positions and not explicit_movement(focus.get("action", "")):
+                    focus["action"] = "".join(
+                        c["text"]
+                        for c in clauses[min(movement_positions) : max(movement_positions) + 1]
+                    )
         proposal = value.get("proposed_check")
         named_requirements = [
             r
@@ -282,7 +355,6 @@ def restore_output(output, schema, context):
                 if r["entity_id"] == focus.get("action_target_id")
                 and r.get("access_policy") == "requires_check"
                 and r.get("successful_check")
-                and r["title"] in focus.get("action", "")
             ),
             None,
         )

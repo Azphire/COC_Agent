@@ -162,6 +162,16 @@ class ActionPolicyValidator:
                 return "clarification_required", "玩家尚未明确表示移动"
             transitions = [t for t in facts.transitions.values() if t.get("approved")]
             named = named_move_exits(facts.raw_text, transitions)
+            local_destinations = named_move_exits(
+                facts.raw_text,
+                [
+                    {"target_public_title": e["title"]}
+                    for eid, e in facts.approved_entities.items()
+                    if eid in facts.local_entity_ids and e.get("type") != "scene" and e.get("title")
+                ],
+            )
+            if local_destinations and not named:
+                return "clarification_required", "走向当前场景中的人物或物件不构成跨场景移动"
             matching = [
                 t
                 for t in transitions

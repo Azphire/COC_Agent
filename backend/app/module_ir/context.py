@@ -46,6 +46,9 @@ class ModuleContextResolver:
 
         public_entities = relevant_public_facts(public_entities, recent_action)
         shell = await self.agents.module(session, room.id)
+        from app.preparation.inventory import public_inventory
+
+        holdings = await public_inventory(self.agents, session, room)
         if role != "keeper":
             return {
                 "module": {
@@ -56,6 +59,7 @@ class ModuleContextResolver:
                 "public_entities": public_entities,
                 "public_state": {"scene_id": shell.state["scene_id"]},
                 "structure_navigation": True,
+                "item_holders": holdings,
             }
         snapshot, ir = await nav.snapshot(session, state)
         await nav.refresh(session, room, state, snapshot)
@@ -140,7 +144,7 @@ class ModuleContextResolver:
         if runtime.get("flags") or runtime.get("inventory"):
             module["interaction_state"] = {
                 "flags": runtime.get("flags", {}),
-                "held_items": list(runtime.get("inventory", {})),
+                "held_items": holdings,
             }
         raw_size = sum(len(b.text) + 130 for b in candidate_blocks)
         long_scene = (

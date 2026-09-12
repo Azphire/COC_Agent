@@ -65,9 +65,22 @@ class RoomEntityService:
         entities = await public_fact_scopes(self.agents, session, room_id, entities)
         room = await self.rooms.room(session, room_id)
         inventory = room.session_state.get("module_runtime", {}).get("inventory", {})
+        members = {m.id: m.display_name for m in await self.rooms.members(session, room)}
         for entity in entities:
             if entity["type"] == "item":
-                entity["held_by_member_id"] = inventory.get(entity["id"])
+                instances = room.session_state.get("module_runtime", {}).get("item_instances", {})
+                holders = list(
+                    dict.fromkeys(
+                        holder
+                        for key, holder in inventory.items()
+                        if instances.get(key, key) == entity["id"]
+                    )
+                )
+                entity["held_by_member_id"] = holders[0] if len(holders) == 1 else None
+                entity["holder_name"] = (
+                    "、".join(members.get(h, "未知持有者") for h in holders) or None
+                )
+                entity["holders"] = [{"member_id": h, "name": members.get(h)} for h in holders]
         return entities
 
     async def host(self, session, room_id):

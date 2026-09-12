@@ -28,6 +28,9 @@ def load_state(room):
 
 
 def store_state(room, state):
+    from app.preparation.encounters import clear_inactive_grips
+
+    clear_inactive_grips(state)
     for p in state.combat.participants.values():
         if p.slot_id and UUID(p.slot_id) in state.characters:
             c = state.characters[UUID(p.slot_id)]
@@ -170,7 +173,20 @@ class CombatService:
         state = load_state(room)
         module = await self.agents.module(session, room.id)
         scene = module.state["scene_id"]
+        old_nodes = {
+            p.scene_node_id
+            for p in state.combat.participants.values()
+            if p.member_id and p.scene_node_id and p.scene_node_id != nav.current_scene_node_id
+        }
+        from app.preparation.encounters import end_transient_sound
+
+        for old_node in old_nodes:
+            end_transient_sound(state, old_node)
         await self.ensure_members(session, room, state, scene, navigation=nav)
+        for sound_id, sound in state.module_runtime.sounds.items():
+            holder = state.module_runtime.inventory.get(sound_id)
+            if holder in state.combat.participants:
+                sound["scene_node_id"] = state.combat.participants[holder].scene_node_id
         bound = {
             b.entity_id for b in snapshot.entity_bindings if b.node_id == nav.current_scene_node_id
         }
@@ -192,7 +208,7 @@ class CombatService:
             location = state.module_runtime.npc_locations.get(eid)
             for index in range(state.module_runtime.npc_counts.get(eid, 0)):
                 pid = f"module:{eid}:{index + 1}"
-                if pid not in state.combat.participants and not template.missing():
+                if pid not in state.combat.participants and not template.missing("treatment"):
                     state.combat.participants[pid] = Combatant(
                         id=pid,
                         npc_id=eid,
@@ -202,7 +218,7 @@ class CombatService:
                         scene_node_id=location,
                         scene_entity_id=scene,
                         public=False,
-                        **template.model_dump(exclude={"count", "traits", "limitations"}),
+                        **template.model_dump(exclude={"count", "limitations"}),
                     )
                 p = state.combat.participants.get(pid)
                 if p:
@@ -221,6 +237,16 @@ class CombatService:
             "请先完成攻击、防御和伤势结算，再移动",
         )
         require(not state.combat.active, "请先合理脱离或结束当前战斗，再移动")
+        require(not any(state.module_runtime.grapples.values()), "仍有调查员被抓住，须先实际挣脱")
+        for npc_id, carrier_id in state.module_runtime.carriers.items():
+            carrier = state.combat.participants.get(carrier_id)
+            if carrier and carrier.attributes.get("con", 0) < 70:
+                last = state.module_runtime.carry_checks.get(npc_id, {})
+                require(
+                    last.get("scene_node_id") == carrier.scene_node_id
+                    and state.game_minute - last.get("minute", 0) < 5,
+                    "背负伤员已跨一节车厢或五分钟，须先完成本次体质检定",
+                )
 
     def order(self, combat, remaining=False):
         priority = []
@@ -247,7 +273,7 @@ class CombatService:
         combat.order = [
             p.id
             for p in combat.participants.values()
-            if p.scene_id == scene and p.public and capable(p)
+            if p.scene_id == scene and p.public and capable(p) and "dex" in p.attributes
         ]
         require(len(combat.order) >= 2, "至少需要两名有来源的战斗参与者", 422)
         combat.defenses, combat.skip_turn = {}, []
@@ -337,6 +363,20 @@ class CombatService:
                 422,
             )
         if op == "attack" and not combat.active:
+            from app.preparation.encounters import record_combat_sound
+
+            if actor.member_id:
+                record_combat_sound(state, actor)
+            require(
+                not actor.missing("attack"),
+                "攻击者缺少数值：" + ", ".join(actor.missing("attack")),
+                422,
+            )
+            require(
+                not target.missing("damage"),
+                "受击者缺少数值：" + ", ".join(target.missing("damage")),
+                422,
+            )
             require(turn_key is None or turn_key == combat.turn_key, "行动顺序已变化，请刷新")
             self.start(session, room, state, scene, decision.reason)
             turn_key = None
@@ -382,6 +422,15 @@ class CombatService:
         }
         if op == "attack":
             require(
+                not actor.missing("attack") and not target.missing("damage"),
+                "攻击或伤害数值缺项",
+                422,
+            )
+            from app.preparation.encounters import can_locate, record_combat_sound
+
+            require(can_locate(state, actor, target), "循声者尚无可定位的声音或接触目标", 422)
+            record_combat_sound(state, actor)
+            require(
                 target.id != actor_id and capable(target) and target.id in combat.order,
                 "基础攻击需要仍在战斗中的可行动目标；处决由主机裁定",
                 422,
@@ -411,7 +460,9 @@ class CombatService:
                 bonus=int(weapon.kind == "melee" and combat.defenses.get(target.id, 0) >= 1)
                 + int(weapon.kind == "firearm" and decision.range_band == "point_blank"),
             )
+            await self.module_basis(session, room, state, actor, action["bases"]["attack"])
         elif op in {"first_aid", "medicine"}:
+            require(not target.missing("treatment"), "治疗目标缺少HP、最大HP或CON", 422)
             require(target.hp < target.hp_max or target.injury.stabilized, "目标不需要治疗", 422)
             if op == "medicine":
                 require(not combat.active, "医学治疗至少一小时，请先结束战斗", 422)
@@ -467,6 +518,7 @@ class CombatService:
             weapon.ready = True
             action["summary"] = f"{actor.label}装填{count}发弹药。"
         elif op == "end":
+            require(not state.module_runtime.grapples.get(actor_id), "仍被抓住，须先实际挣脱")
             require(combat.active, "当前没有战斗")
             combat.order.remove(actor_id)
             # Removal shifts the next actor into this index. Let the normal turn
@@ -507,6 +559,7 @@ class CombatService:
             422,
         )
         if operation == "fight_back":
+            require(not target.missing("attack"), "反击缺少已确认的攻击数值", 422)
             weapon = weapon_for(target, weapon_id or "unarmed")
             require(weapon.kind == "melee", "反击只能使用近战武器", 422)
             action["counter_weapon"], action["counter_bonus"] = (
@@ -518,12 +571,18 @@ class CombatService:
             basis = self.roll_basis(target, "dodge") if operation != "take" else None
         action["defense"] = operation
         if basis:
+            await self.module_basis(session, room, state, target, basis)
             action["bases"]["defense"] = basis
         if not ranged:
             combat.defenses[target.id] = combat.defenses.get(target.id, 0) + 1
         if operation == "cover" and target.id not in combat.skip_turn:
             combat.skip_turn.append(target.id)
         action["stage"] = "defense_roll" if operation == "cover" else "attack_roll"
+
+    async def module_basis(self, session, room, state, participant, basis):
+        from app.preparation.encounters import freeze_combat_basis
+
+        await freeze_combat_basis(self.agents, session, room, state, participant, basis)
 
     def options(self, state, action, role):
         basis, roll = action["bases"][role], action["rolls"][role]
@@ -1001,6 +1060,7 @@ class CombatService:
         state, key = load_state(room), str(body.client_request_id)
         p = state.combat.participants.get(body.target_id)
         require(p, "参与者不存在", 404)
+        require(not p.missing("damage"), "伤害结算缺少HP、护甲或体质", 422)
         existing = next(
             (other for other in state.combat.participants.values() if key in other.injury.receipts),
             None,
@@ -1139,6 +1199,10 @@ class CombatService:
                                 "entity_id": entity.source_entity_id,
                                 "title": entity.snapshot["title"],
                                 "missing": missing,
+                                "missing_by_operation": {
+                                    op: CombatTemplate.model_validate(template).missing(op)
+                                    for op in ("attack", "damage", "treatment")
+                                },
                                 "source": template["source"],
                             }
                         )

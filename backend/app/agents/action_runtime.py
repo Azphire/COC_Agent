@@ -1065,6 +1065,9 @@ class ActionRuntimeMixin:
         )
 
         from app.agents.extended_runtime import clarify_extended
+        from app.preparation.adjudication import adjudicate_prepared
+
+        await adjudicate_prepared(self, state, run_id)
 
         await clarify_extended(self, state, run_id)
 
@@ -1409,9 +1412,11 @@ class ActionRuntimeMixin:
 
                 check_id = cycle.state.get("pending_check_id")
                 check = await session.get(CheckRecord, check_id) if check_id else None
-                if check and (check.status != "resolved" or not check.document["result"]["passed"]):
+                if check and check.status != "resolved":
                     return state
             approved = list(doc.validation.approved_actions)
+            if "state" in phases and check and not check.document["result"]["passed"]:
+                approved = [a for a in approved if a.tool.name == "apply_module_action"]
             run_id = record.run_id
         for action in approved:
             if (

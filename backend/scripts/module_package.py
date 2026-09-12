@@ -80,7 +80,14 @@ def audit(package):
                 *r.reveal_entity_ids,
                 *r.following_npc_ids,
                 *(s.entity_id for s in r.required_sanity),
+                *([r.item_id] if r.item_id else []),
+                *([r.sound_item_id] if r.sound_item_id else []),
+                *([r.npc_id] if r.npc_id else []),
+                *([r.door_id] if r.door_id else []),
             } <= entities.keys()
+            assert set(r.scene_node_ids) <= scene_nodes
+            if r.failure_interaction_id:
+                assert r.failure_interaction_id in {other.id for other in fields.interactions}
             for s in r.required_sanity:
                 assert s.effect_id in {effect.id for effect in entities[s.entity_id].sanity_effects}
     covered = set()
@@ -150,6 +157,15 @@ def audit(package):
         for key, e in entities.items()
         if e.combat_template and e.combat_template.missing()
     }
+    operations = {
+        key: {operation: entities[key].combat_template.missing(operation) for operation in required}
+        for key, required in package.get("required_npc_operations", {}).items()
+    }
+    operation_gaps = {
+        key: {op: fields for op, fields in checks.items() if fields}
+        for key, checks in operations.items()
+        if any(checks.values())
+    }
     return {
         "source_hash": source.source_hash,
         "file_hashes": [f["sha256"] for f in source.files],
@@ -164,6 +180,8 @@ def audit(package):
         "coverage_entries": len(package["coverage"]),
         "coverage_status": dict(Counter(e["status"] for e in package["coverage"])),
         "missing_combat_values": missing,
+        "required_npc_operations": operations,
+        "operation_gaps": operation_gaps,
         "reviewer": package["reviewer"],
         "human_review": False,
         "source_accounting_complete": True,
@@ -190,12 +208,25 @@ def settings_for(directory):
     )
 
 
-def load(package, directory):
+def load(package, directory, *, allow_unapproved_test_values=False):
     from fastapi.testclient import TestClient
 
     from app.main import create_app
     from app.persistence.preparation_models import ModulePreparation
 
+    supplement = package.get("numeric_supplement", {})
+    if supplement and not supplement.get("user_approved"):
+        if not allow_unapproved_test_values:
+            raise ValueError(
+                "Unapproved NPC supplement: pass --allow-unapproved-test-values "
+                "only for an isolated test"
+            )
+        target = Path(directory).resolve()
+        isolated_root = (ROOT / "data/prepared/changan/batch-17").resolve()
+        if not target.is_relative_to(isolated_root):
+            raise ValueError(
+                "Unapproved test values are restricted to data/prepared/changan/batch-17/"
+            )
     summary = audit(package)
     digest = hashlib.sha256(
         json.dumps(package, sort_keys=True, ensure_ascii=False).encode()
@@ -438,6 +469,7 @@ def main():
     parser.add_argument("--directory", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--allow-unapproved-test-values", action="store_true")
     args = parser.parse_args()
     if args.operation == "serve":
         import uvicorn
@@ -455,7 +487,11 @@ def main():
         if args.output:
             write(args.output, result)
     elif args.operation == "load":
-        result = load(package, args.directory.resolve())
+        result = load(
+            package,
+            args.directory.resolve(),
+            allow_unapproved_test_values=args.allow_unapproved_test_values,
+        )
     else:
         result = export(package, args.directory, args.output)
     print(json.dumps(result, ensure_ascii=False, indent=2))

@@ -15,6 +15,7 @@ type Props = { room: Room; busy: boolean; command: (path: string, body?: unknown
 
 export default function CombatPanel({ room, busy, command }: Props) {
   const [target, setTarget] = useState('')
+  const [healer, setHealer] = useState('')
   const [weapon, setWeapon] = useState('unarmed')
   const [spend, setSpend] = useState(1)
   const [name, setName] = useState('')
@@ -38,11 +39,14 @@ export default function CombatPanel({ room, busy, command }: Props) {
     return id === room.self_member_id || room.is_host && (m?.access_type === 'host_managed' || m?.controller_type === 'agent')
   }
   const canChoose = !!pending && controls(chooser?.member_id) && room.status === 'running'
+  const healers = participants.filter(p => p.member_id && controls(p.member_id))
+  const healerId = healer || healers.find(p => p.member_id === room.self_member_id)?.id || ''
+  const treat = (operation: string) => command('/combat/action', { actor_id: healerId, target_id: target, operation, reason: operation === 'first_aid' ? '实际为所选伤员急救' : '实际为所选伤员进行医学治疗', client_request_id: requestId(), turn_key: combat.turn_key })
   const sendStep = (operation: string, extra = {}) => pending && command('/combat/step', { action_id: pending.id, stage: pending.stage, operation, ...extra })
   const act = (operation: string) => actor && command('/combat/action', { actor_id: actor.id, target_id: target || null, weapon_id: weapon, operation, reason: operation === 'attack' ? '按面板选择发动攻击' : '按面板选择行动', client_request_id: requestId(), turn_key: combat.turn_key })
   return <section className="combat-panel" aria-label="基础战斗">
     <h2>{combat.active ? `战斗 · 第 ${combat.round} 轮` : '战斗与伤势'}</h2>
-    {room.is_host && combat.unavailable_templates?.map(npc => <p key={npc.entity_id}>当前场景 {npc.title} 缺少战斗资料：{npc.missing.join('、')}。请按原文已支持的遭遇方法处理；来源：{npc.source}</p>)}
+    {room.is_host && combat.unavailable_templates?.map(npc => <p key={npc.entity_id}>当前场景 {npc.title} 缺少战斗资料：{npc.missing.join('、')}。{npc.missing_by_operation?.treatment.length === 0 ? '治疗所需数值齐全，可使用治疗入口。' : '治疗仍缺少已确认的HP或体质。'}来源：{npc.source}</p>)}
     {combat.active && <p role="status">当前行动者：<strong>{actor?.label || '等待处理'}</strong>。你仍可在下方自由交谈或描述其他尝试。</p>}
     {room.is_host && combat.active && !pending && <button disabled={busy} onClick={() => void command('/combat/control', { operation: 'end', expected_revision: room.revision, reason: '主机确认双方停止冲突' })}>确认战斗结束</button>}
     <ol>{(combat.active ? combat.order : participants.map(p => p.id)).map(id => {
@@ -68,6 +72,12 @@ export default function CombatPanel({ room, busy, command }: Props) {
       <select aria-label="行动武器" value={weapon} onChange={e => setWeapon(e.target.value)}>{actor.weapons?.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}</select>
       <button disabled={busy || !target || !combat.order.includes(target) || combat.participants[target]?.incapacitated} onClick={() => void act('attack')}>攻击</button><button disabled={busy || !target} onClick={() => void act('first_aid')}>急救</button><button disabled={busy} onClick={() => void act('reload')}>装填</button><button disabled={busy} onClick={() => void act('pass')}>结束行动</button><button disabled={busy} onClick={() => void act('end')}>脱离战斗</button>
     </div>}
+    {!combat.active && !pending && healers.length > 0 && <details><summary>治疗伤势</summary><div className="action-row">
+      <select aria-label="治疗行动者" value={healerId} onChange={e => setHealer(e.target.value)}><option value="">选择行动者</option>{healers.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
+      <select aria-label="治疗对象" value={target} onChange={e => setTarget(e.target.value)}><option value="">选择伤员</option>{participants.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
+      <button disabled={busy || room.status !== 'running' || !healerId || !target} onClick={() => void treat('first_aid')}>急救</button>
+      <button disabled={busy || room.status !== 'running' || !healerId || !target} onClick={() => void treat('medicine')}>医学治疗</button>
+    </div></details>}
     {room.is_host && !combat.active && <details><summary>主机：准备基础战斗数据</summary><form onSubmit={e => {
       e.preventDefault()
       const selected = loadouts[loadout]

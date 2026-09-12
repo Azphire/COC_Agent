@@ -1,0 +1,2215 @@
+{
+  "batch": 17,
+  "baseline_head": "aa77dda5cf3aeb1c0219afff2f685f252471b29f",
+  "code_sha256": "6697003916e7523ee73404f64a289c8cee29a48a5daedddee532cbfd53ef6e43",
+  "source_accounting_complete": true,
+  "runtime_complete": false,
+  "summary": {
+    "source_hash": "a72e88d5a4cb08831bb4ab6719094447b6c995932b4760945a1abb871cad57c8",
+    "file_hashes": [
+      "af1033fc931f85b53109856e7bbb9695313a3adb90008e6615cc2c091c85c1d8"
+    ],
+    "pages": 17,
+    "blocks_accounted": 243,
+    "playable_scenes": 7,
+    "entities": 44,
+    "transitions": 12,
+    "outcomes": [
+      "A",
+      "B",
+      "C"
+    ],
+    "coverage_entries": 58,
+    "coverage_status": {
+      "prepared": 46,
+      "context": 6,
+      "host_ruling": 4,
+      "blocked": 2
+    },
+    "source_accounting_complete": true,
+    "runtime_complete": false
+  },
+  "numeric_approval": {
+    "status": "approved",
+    "user_approved": true,
+    "proposal": "docs/batch-17-npc-supplement.md",
+    "configuration": "data/prepared/changan/batch-17/approved-v1/npc-supplement.json",
+    "record": "data/prepared/changan/batch-17/approved-v1/approval.json",
+    "evidence": {
+      "id": "batch17-npc-values-v1-user-approval",
+      "status": "approved",
+      "user_approved": true,
+      "recorded_at_utc": "2026-09-12T16:14:29.968722+00:00",
+      "authority": "explicit_user_message_in_this_conversation",
+      "user_message": "批准",
+      "approved_proposal_id": "batch17-npc-values-v1",
+      "approved_proposal_sha256": "8960244f32db91551efd83710677db38d2121bdb4ee950d2bb65bd0bdc2a3cc1",
+      "basis": "用户对上一轮正式启用确认的明确回复；不是由测试结果推定批准。",
+      "scope": "方案v1逐字段列出的新增值、由新增值派生的值及伤势初始化选择。",
+      "runtime_complete": false,
+      "runtime_acceptance": "final-v14自然复演未通过，批准数值不改变其历史结论。"
+    }
+  },
+  "packages": {
+    "directory": "data/prepared/changan/batch-17/final-v14",
+    "byte_hashes": {
+      "package-original.json": "11dbe8ca1dfae5220693df9c327dd8f1dedd3bad88d405d2b5184b9001b556ef",
+      "package-supplement-test.json": "950046bb6b9cd2b82d07572b0b8455138a4422b2a7deb0051bc8dc6f8bc518ad",
+      "npc-supplement-proposal.json": "8960244f32db91551efd83710677db38d2121bdb4ee950d2bb65bd0bdc2a3cc1"
+    },
+    "original": {
+      "operation_gaps": {
+        "staff": {
+          "treatment": [
+            "hp",
+            "hp_max",
+            "con"
+          ]
+        },
+        "clicker": {
+          "combat": [
+            "hp",
+            "hp_max",
+            "armor",
+            "damage_bonus",
+            "con",
+            "weapons"
+          ]
+        }
+      },
+      "full_combat_gaps": {
+        "staff": [
+          "hp",
+          "hp_max",
+          "armor",
+          "damage_bonus",
+          "dex",
+          "con",
+          "weapons"
+        ],
+        "clicker": [
+          "hp",
+          "hp_max",
+          "armor",
+          "damage_bonus",
+          "con",
+          "weapons"
+        ]
+      }
+    },
+    "supplement_test": {
+      "preparation_id": "24bf5422-f1d7-4f92-97b1-650a2590af8d",
+      "operation_gaps": {},
+      "full_combat_gaps": {
+        "staff": [
+          "damage_bonus",
+          "dex",
+          "weapons"
+        ]
+      },
+      "user_approved": false
+    },
+    "approved": {
+      "directory": "data/prepared/changan/batch-17/approved-v1",
+      "bundle": "package-supplement-approved.json",
+      "runtime_complete": false,
+      "numeric_fields_unchanged": true,
+      "manifest": "data/prepared/changan/batch-17/approved-v1/manifest.json"
+    }
+  },
+  "verification": {
+    "final_model": {
+      "status": "failed",
+      "runtime_complete": false,
+      "room_id": "dc6724d1-085f-4d5d-83f4-41f787733344",
+      "code_sha256": "6697003916e7523ee73404f64a289c8cee29a48a5daedddee532cbfd53ef6e43",
+      "directory": "data/prepared/changan/batch-17/final-v14",
+      "stitched_from_debug": false,
+      "model": "qwen3:8b",
+      "model_calls": 83,
+      "host_debug_events": 638,
+      "public_dto_events": 457,
+      "supplement_user_approved": false,
+      "used_supplement_for": "staff HP treatment; clicker instances initialized with proposal values",
+      "host_repairs": false,
+      "dice_reset": false,
+      "last_scene": "2号车厢",
+      "outcome": null,
+      "tainted_state_start_event": 599,
+      "final_snapshot_id": "2a35d775-e416-4b9a-9aaa-dfd8a40ab57b",
+      "midpoint_snapshot_id": "315cb537-2781-449a-9805-9a13c47169e4",
+      "restore_comparison": {
+        "module_runtime": true,
+        "characters": true,
+        "combat": true,
+        "game_minute": true,
+        "checks": true
+      },
+      "passed_partial_flows": {
+        "initial_phone": {
+          "action_seq": 19,
+          "receipt_seq": 45,
+          "die": 25,
+          "target": 50
+        },
+        "note_back": {
+          "action_seq": 80,
+          "receipt_seq": 99
+        },
+        "phone_light": {
+          "action_seq": 136,
+          "receipt_seq": 154
+        },
+        "scene_moves": [
+          183,
+          216,
+          318,
+          531
+        ],
+        "staff_treatment": {
+          "action_seq": 256,
+          "audit_seq": 265,
+          "die": 23,
+          "target": 70,
+          "hp_before": 3,
+          "hp_after": 4
+        },
+        "phone_transfer": {
+          "action_seq": 420,
+          "receipt_seq": 439,
+          "from": "周岚",
+          "to": "沈砚",
+          "extra_check": false
+        },
+        "teammate_phone_use": {
+          "action_seq": 476,
+          "receipt_seq": 500,
+          "actor": "沈砚",
+          "continuous_sound": true
+        },
+        "clicker_count": {
+          "event_seq": 530,
+          "formula": "1d3",
+          "total": 2,
+          "actual_grippers": 0
+        }
+      },
+      "failed_flows": {
+        "key_investigation": {
+          "action_seqs": [
+            362,
+            391
+          ],
+          "check_created": false,
+          "reason": "scene focus plus malformed apply_module_action(spot_hidden); rejected without a real search check"
+        },
+        "key_transfer_and_use": {
+          "status": "not_reached"
+        },
+        "sound_lure": {
+          "action_seq": 576,
+          "receipt_seq": 600,
+          "reason": "observation incorrectly approved as distant_sound_lure; phone dropped; continuous sound replaced with impact; safe_passage falsely true"
+        },
+        "sanity": {
+          "observation_receipt_seq": 564,
+          "question_seq": 568,
+          "ruling_seqs": [
+            569,
+            570
+          ],
+          "answer_seq": 613,
+          "answer_rejected_seq": 618,
+          "actual_san_checks": 0,
+          "reason": "observation receipt and SAN decision disagree; subsequent fact answer intercepted by item method"
+        },
+        "actual_ending": {
+          "status": "not_reached",
+          "outcome": null
+        }
+      },
+      "fixture_only": [
+        "ordinary combat attack/damage",
+        "actual grapplers and STR release",
+        "door closing",
+        "carrying and CON obligations",
+        "drop/pickup/consume permissions",
+        "A/B/C terminal rules and reward idempotency",
+        "SAN resource settlement",
+        "unseen random branches"
+      ],
+      "server_stopped": true
+    },
+    "backend": {
+      "status": "passed",
+      "passed": 221,
+      "seconds": 283.57,
+      "log": "data/prepared/changan/batch-17/final-v14/backend-tests.txt"
+    },
+    "frontend": {
+      "lint": "passed",
+      "build": "passed"
+    },
+    "fixtures_are_not_model_gameplay": true,
+    "supplement_user_approved": false,
+    "browser": {
+      "status": "passed",
+      "checks": [
+        "source coverage and pending numeric supplement visible",
+        "live room navigation",
+        "investigation board",
+        "combat and treatment panel"
+      ],
+      "supplement_user_approved": false,
+      "holder_display": true,
+      "treatment_entry_opened": true,
+      "room_id": "dc6724d1-085f-4d5d-83f4-41f787733344",
+      "preparation_id": "e5a7221a-cfa8-456c-b1a4-ec372dbd58fa",
+      "browser_errors": []
+    },
+    "package_roundtrip": {
+      "original": {
+        "entities": 44,
+        "normalized_fields_equal": true,
+        "package_byte_sha256": "11dbe8ca1dfae5220693df9c327dd8f1dedd3bad88d405d2b5184b9001b556ef",
+        "export_byte_sha256": "662efd5de76a66092c6fe22983f95c03915fc4eeba55faf051039f88d34bce3f"
+      },
+      "supplement-test": {
+        "entities": 44,
+        "normalized_fields_equal": true,
+        "package_byte_sha256": "950046bb6b9cd2b82d07572b0b8455138a4422b2a7deb0051bc8dc6f8bc518ad",
+        "export_byte_sha256": "fe0f88bbcae3e728d20e2c36e3e3937d99fc2ed26f937a43ce319062a4449209"
+      },
+      "missing_test_flag": {
+        "rejected": true,
+        "reason": "Unapproved NPC supplement: pass --allow-unapproved-test-values only for an isolated test",
+        "created": false
+      },
+      "outside_isolation": {
+        "rejected": true,
+        "reason": "Unapproved test values are restricted to data/prepared/changan/batch-17/",
+        "created": false
+      },
+      "supplement_user_approved": false,
+      "audit_used_separate_database_from_running_game": true
+    },
+    "actual_package_endings": "A/B/C rules loaded from final package, explicit terminal-state fixtures; B real SAN service separately regressed",
+    "browser_after_gift": {
+      "status": "passed",
+      "checks": [
+        "source coverage and pending numeric supplement visible",
+        "live room navigation",
+        "investigation board",
+        "combat and treatment panel"
+      ],
+      "supplement_user_approved": false,
+      "holder_display": true,
+      "treatment_entry_opened": true,
+      "room_id": "dc6724d1-085f-4d5d-83f4-41f787733344",
+      "preparation_id": "e5a7221a-cfa8-456c-b1a4-ec372dbd58fa",
+      "browser_errors": []
+    },
+    "freeze": {
+      "code_sha256": "6697003916e7523ee73404f64a289c8cee29a48a5daedddee532cbfd53ef6e43",
+      "code_files": 218,
+      "changed_code": [],
+      "changed_packages": []
+    },
+    "protected_files": {
+      "checked": 643,
+      "unchanged": 643,
+      "changed": []
+    },
+    "numeric_approval_load": {
+      "status": "passed",
+      "user_approved": true,
+      "approval_scope": "NPC numeric proposal v1 only",
+      "loaded_without_unapproved_test_flag": true,
+      "entities": 44,
+      "normalized_export_fields_equal": true,
+      "mechanical_fields_identical_to_frozen_test_package": true,
+      "export_loaded_again": true,
+      "existing_user_database_modified": false,
+      "historical_test_approval_preserved": true,
+      "runtime_complete": false,
+      "code_changed_by_approval": false,
+      "initial_export_invocation": "missing --bundle; corrected invocation stored separately",
+      "package_sha256": "f885a9313c80dd67141ea1bacf049e0e8ed8d37109349af4f8b6a2f7c58315b8"
+    }
+  },
+  "entries": [
+    {
+      "id": "s6",
+      "category": "scene",
+      "source_orders": [
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45
+      ],
+      "entity_keys": [
+        "s6"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "f4e91f89-787e-4b70-95f4-47966f4a4bff"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "partial_natural_flow_passed",
+      "final_event_seqs": [
+        19,
+        39,
+        45
+      ]
+    },
+    {
+      "id": "s7",
+      "category": "scene",
+      "source_orders": [
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55
+      ],
+      "entity_keys": [
+        "s7"
+      ],
+      "node_ids": [
+        "node_7457aed4bc9192589c7bb737927da8ad"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "3c4dfbde-f352-495c-9a27-299330f5a363"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "s5",
+      "category": "scene",
+      "source_orders": [
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76
+      ],
+      "entity_keys": [
+        "s5"
+      ],
+      "node_ids": [
+        "node_611a06c91238f4c5338aa82007dcd0f4"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "16059da2-6c42-4911-be1f-094c6b9afca5"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "partial_natural_flow_passed",
+      "final_event_seqs": [
+        183
+      ]
+    },
+    {
+      "id": "s4",
+      "category": "scene",
+      "source_orders": [
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96
+      ],
+      "entity_keys": [
+        "s4"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "bac756e1-3171-47d0-a34b-4a3426fb136d"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "partial_natural_flow_passed",
+      "final_event_seqs": [
+        216
+      ]
+    },
+    {
+      "id": "s3",
+      "category": "scene",
+      "source_orders": [
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113
+      ],
+      "entity_keys": [
+        "s3"
+      ],
+      "node_ids": [
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "7138c3b2-d5a2-45cd-85a7-929c512ae4d2"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "partial_natural_flow_passed",
+      "final_event_seqs": [
+        318
+      ]
+    },
+    {
+      "id": "s2",
+      "category": "scene",
+      "source_orders": [
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147
+      ],
+      "entity_keys": [
+        "s2"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "95d56b45-cdec-48b2-9986-0147f9630987"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "natural_encounter_failed_incorrect_sound_and_missing_san",
+      "final_event_seqs": [
+        530,
+        531,
+        564,
+        568,
+        569,
+        570,
+        576,
+        600
+      ]
+    },
+    {
+      "id": "s1",
+      "category": "scene",
+      "source_orders": [
+        148,
+        149,
+        150,
+        151,
+        152,
+        153,
+        154,
+        155,
+        156,
+        157,
+        158
+      ],
+      "entity_keys": [
+        "s1"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "70250043-cef4-49f4-a67a-42fe619f79ef"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "note_front",
+      "category": "clue",
+      "source_orders": [
+        38,
+        39,
+        40,
+        41,
+        42,
+        43
+      ],
+      "entity_keys": [
+        "note_front"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "508de501-c02e-49bd-bd62-ce537bea923f"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "partial_natural_flow_passed",
+      "final_event_seqs": [
+        80,
+        99
+      ]
+    },
+    {
+      "id": "note_back",
+      "category": "clue",
+      "source_orders": [
+        40,
+        41,
+        42,
+        43
+      ],
+      "entity_keys": [
+        "note_back"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "61c2fae7-dff9-44ad-b88d-ef956113b6e9"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "partial_natural_flow_passed",
+      "final_event_seqs": [
+        99
+      ]
+    },
+    {
+      "id": "train_map",
+      "category": "clue",
+      "source_orders": [
+        44,
+        45
+      ],
+      "entity_keys": [
+        "train_map"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "f7bac390-9438-42a3-9a2c-da3df0ad8bb1"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "map_erased",
+      "category": "clue",
+      "source_orders": [
+        44,
+        45
+      ],
+      "entity_keys": [
+        "map_erased"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "e3b6db0f-5a77-4800-884a-034f88af18f4"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "s7_warning",
+      "category": "clue",
+      "source_orders": [
+        47,
+        48,
+        49
+      ],
+      "entity_keys": [
+        "s7_warning"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "0e76cc04-b257-4f4d-84fe-c6ee63fbf997"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "remains7",
+      "category": "clue",
+      "source_orders": [
+        50,
+        51
+      ],
+      "entity_keys": [
+        "remains7"
+      ],
+      "node_ids": [
+        "node_7457aed4bc9192589c7bb737927da8ad"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "d7df6489-7638-4466-8ae2-86489b7fb85a"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "recent_deaths",
+      "category": "clue",
+      "source_orders": [
+        52
+      ],
+      "entity_keys": [
+        "recent_deaths"
+      ],
+      "node_ids": [
+        "node_7457aed4bc9192589c7bb737927da8ad"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "427f8d91-aad1-4a8e-8232-de36434ffc46"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "mouth",
+      "category": "npc",
+      "source_orders": [
+        54,
+        55,
+        220,
+        234,
+        236,
+        238
+      ],
+      "entity_keys": [
+        "mouth"
+      ],
+      "node_ids": [
+        "node_7457aed4bc9192589c7bb737927da8ad",
+        "node_611a06c91238f4c5338aa82007dcd0f4",
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "97504f6e-1946-4395-a62d-bba957e33a1a"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "newspaper",
+      "category": "item",
+      "source_orders": [
+        57,
+        58,
+        59,
+        60
+      ],
+      "entity_keys": [
+        "newspaper"
+      ],
+      "node_ids": [
+        "node_611a06c91238f4c5338aa82007dcd0f4"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "9b468cda-7dfa-4ee1-bda7-438505a2cc0e"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "newspaper_date",
+      "category": "clue",
+      "source_orders": [
+        59,
+        60,
+        61
+      ],
+      "entity_keys": [
+        "newspaper_date"
+      ],
+      "node_ids": [
+        "node_611a06c91238f4c5338aa82007dcd0f4"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "e39a8760-b53e-4b5c-a360-6c54045edc12"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "car_disappearing",
+      "category": "clue",
+      "source_orders": [
+        62,
+        63,
+        64
+      ],
+      "entity_keys": [
+        "car_disappearing"
+      ],
+      "node_ids": [
+        "node_611a06c91238f4c5338aa82007dcd0f4"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "7a06e955-13a6-43c0-a9e9-a40b9419e4a1"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "devouring",
+      "category": "clue",
+      "source_orders": [
+        26,
+        27,
+        28,
+        65,
+        66,
+        68,
+        69,
+        70,
+        75,
+        76,
+        228,
+        231,
+        232,
+        239,
+        240
+      ],
+      "entity_keys": [
+        "devouring"
+      ],
+      "node_ids": [
+        "node_611a06c91238f4c5338aa82007dcd0f4",
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "05b13c00-a797-4b77-b930-7ceb745b7aaa"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "staff",
+      "category": "npc",
+      "source_orders": [
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        205,
+        206,
+        207,
+        208,
+        209,
+        210,
+        211,
+        212
+      ],
+      "entity_keys": [
+        "staff"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "ad0fb37f-31a1-4aed-a83a-57ce5c16741e"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "supplement_treatment_passed_original_values_missing",
+      "final_event_seqs": [
+        256,
+        262,
+        265
+      ]
+    },
+    {
+      "id": "staff_story",
+      "category": "clue",
+      "source_orders": [
+        80,
+        81,
+        82
+      ],
+      "entity_keys": [
+        "staff_story"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "f47b038c-4617-4776-9a1c-f9f83d3e88bd"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "natural_investigation_or_dialogue_failed",
+      "final_event_seqs": [
+        270,
+        291,
+        362,
+        373,
+        391,
+        413
+      ]
+    },
+    {
+      "id": "sound_hint",
+      "category": "clue",
+      "source_orders": [
+        83,
+        84,
+        85
+      ],
+      "entity_keys": [
+        "sound_hint"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "09c7f6ed-72fa-4de6-a594-329b857019c4"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "key_hint",
+      "category": "clue",
+      "source_orders": [
+        89,
+        90,
+        91
+      ],
+      "entity_keys": [
+        "key_hint"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "52cd58dc-f45e-4c26-b697-1d3607152640"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "natural_investigation_or_dialogue_failed",
+      "final_event_seqs": [
+        270,
+        291,
+        362,
+        373,
+        391,
+        413
+      ]
+    },
+    {
+      "id": "aid",
+      "category": "clue",
+      "source_orders": [
+        78,
+        79,
+        94,
+        206
+      ],
+      "entity_keys": [
+        "aid"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "e7bedfc1-b3e9-4f6e-8103-55c6b7c1bf78"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "supplement_treatment_passed_original_values_missing",
+      "final_event_seqs": [
+        256,
+        262,
+        265
+      ]
+    },
+    {
+      "id": "staff_lost",
+      "category": "clue",
+      "source_orders": [
+        95
+      ],
+      "entity_keys": [
+        "staff_lost"
+      ],
+      "node_ids": [
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "45eb8719-2f01-49ba-94d7-63d9865192e4"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "s3_safe",
+      "category": "clue",
+      "source_orders": [
+        96
+      ],
+      "entity_keys": [
+        "s3_safe"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "0d06c5ad-5447-40e7-b679-7231b6a666b9"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "luggage",
+      "category": "location",
+      "source_orders": [
+        98,
+        99,
+        100,
+        106,
+        107,
+        108
+      ],
+      "entity_keys": [
+        "luggage"
+      ],
+      "node_ids": [
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "772b0e10-fe7b-4932-8823-8551ebd69a4f"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "natural_investigation_or_dialogue_failed",
+      "final_event_seqs": [
+        270,
+        291,
+        362,
+        373,
+        391,
+        413
+      ]
+    },
+    {
+      "id": "keys",
+      "category": "item",
+      "source_orders": [
+        89,
+        90,
+        91,
+        101,
+        102,
+        103,
+        104,
+        105
+      ],
+      "entity_keys": [
+        "keys"
+      ],
+      "node_ids": [
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "29444762-faf3-4a70-8a01-42a6eca2569e"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "natural_investigation_or_dialogue_failed",
+      "final_event_seqs": [
+        270,
+        291,
+        362,
+        373,
+        391,
+        413
+      ]
+    },
+    {
+      "id": "silhouettes",
+      "category": "clue",
+      "source_orders": [
+        109,
+        110,
+        111,
+        112,
+        113
+      ],
+      "entity_keys": [
+        "silhouettes"
+      ],
+      "node_ids": [
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "38bf3679-5be6-45c9-8ff0-5b41a83543e2"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "clicker",
+      "category": "npc",
+      "source_orders": [
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        213,
+        214,
+        215,
+        216,
+        217,
+        218
+      ],
+      "entity_keys": [
+        "clicker"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "4c37cf6a-c587-4abb-953f-a068f8b993bb"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "natural_encounter_failed_incorrect_sound_and_missing_san",
+      "final_event_seqs": [
+        530,
+        531,
+        564,
+        568,
+        569,
+        570,
+        576,
+        600
+      ]
+    },
+    {
+      "id": "bodies2",
+      "category": "clue",
+      "source_orders": [
+        121
+      ],
+      "entity_keys": [
+        "bodies2"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "21b98985-1876-44f1-bdcd-54b878c252cf"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "breathing",
+      "category": "clue",
+      "source_orders": [
+        122
+      ],
+      "entity_keys": [
+        "breathing"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "ef2db1d2-9cc5-49c5-ad64-fdb9091c7b38"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "natural_encounter_failed_incorrect_sound_and_missing_san",
+      "final_event_seqs": [
+        530,
+        531,
+        564,
+        568,
+        569,
+        570,
+        576,
+        600
+      ]
+    },
+    {
+      "id": "quiet_passage",
+      "category": "location",
+      "source_orders": [
+        123,
+        124,
+        125
+      ],
+      "entity_keys": [
+        "quiet_passage"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "0d43e6f5-9b37-4ffd-a0f1-ee64680b9db1"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "natural_encounter_failed_incorrect_sound_and_missing_san",
+      "final_event_seqs": [
+        530,
+        531,
+        564,
+        568,
+        569,
+        570,
+        576,
+        600
+      ]
+    },
+    {
+      "id": "sacrifice",
+      "category": "clue",
+      "source_orders": [
+        130,
+        131
+      ],
+      "entity_keys": [
+        "sacrifice"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "8e25d017-64f8-4ad5-92fc-d96fced1d906"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "cab_door",
+      "category": "location",
+      "source_orders": [
+        149,
+        150
+      ],
+      "entity_keys": [
+        "cab_door"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "a14bcdd5-38d9-4d9a-b5e7-abab29cbeeca"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "panel",
+      "category": "location",
+      "source_orders": [
+        150,
+        151,
+        152,
+        153,
+        154,
+        155,
+        156,
+        157,
+        158
+      ],
+      "entity_keys": [
+        "panel"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "455da07c-e4fe-4889-b2b5-3ad89ed9aaf1"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "controls",
+      "category": "clue",
+      "source_orders": [
+        151,
+        152,
+        153,
+        154,
+        155,
+        156,
+        157,
+        158
+      ],
+      "entity_keys": [
+        "controls"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "5228313e-7b89-4ece-9636-676f43c1b24d"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "ending_a",
+      "category": "clue",
+      "source_orders": [
+        160,
+        161,
+        162,
+        163,
+        164,
+        165,
+        166,
+        167,
+        168,
+        179,
+        180,
+        181,
+        182,
+        183,
+        184
+      ],
+      "entity_keys": [
+        "ending_a"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "60ee1a20-c23f-4158-9cd3-c8a3b0768305"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "final_package_fixture_only_not_natural_gameplay",
+      "final_event_seqs": []
+    },
+    {
+      "id": "ending_b",
+      "category": "clue",
+      "source_orders": [
+        169,
+        170,
+        171,
+        172,
+        185,
+        186,
+        187
+      ],
+      "entity_keys": [
+        "ending_b"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "b93daf2b-6612-4f72-b360-a15cd3fc5644"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "final_package_fixture_only_not_natural_gameplay",
+      "final_event_seqs": []
+    },
+    {
+      "id": "ending_c",
+      "category": "clue",
+      "source_orders": [
+        146,
+        147,
+        173,
+        174,
+        175,
+        176,
+        177,
+        178
+      ],
+      "entity_keys": [
+        "ending_c"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "2abb4310-b6ab-483b-aae0-d56db888db98"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "final_package_fixture_only_not_natural_gameplay",
+      "final_event_seqs": []
+    },
+    {
+      "id": "station_staff",
+      "category": "npc",
+      "source_orders": [
+        164,
+        168
+      ],
+      "entity_keys": [
+        "station_staff"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "ca4b48a6-cd31-4936-bacf-9bf07038204c"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "dark_man",
+      "category": "npc",
+      "source_orders": [
+        220,
+        221,
+        222
+      ],
+      "entity_keys": [
+        "dark_man"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "c00621f6-bae4-48f9-992c-f0aa001de03f"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "phone",
+      "category": "item",
+      "source_orders": [
+        22,
+        23,
+        24,
+        37,
+        106,
+        107,
+        108,
+        110
+      ],
+      "entity_keys": [
+        "phone"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413",
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "08404f37-9461-4a61-ac17-8bac48ea0f0b"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "transfer_and_teammate_use_passed_later_incorrect_drop",
+      "final_event_seqs": [
+        439,
+        476,
+        500,
+        600
+      ]
+    },
+    {
+      "id": "torch",
+      "category": "item",
+      "source_orders": [
+        22,
+        37,
+        99,
+        106,
+        107,
+        108,
+        110
+      ],
+      "entity_keys": [
+        "torch"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413",
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "9fec8309-e578-4c15-8c75-5128442dccbd"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "credits_introduction",
+      "category": "context",
+      "source_orders": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35
+      ],
+      "entity_keys": [
+        "s6"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "f4e91f89-787e-4b70-95f4-47966f4a4bff"
+      ],
+      "source_status": "context",
+      "runtime_verification": "source_context_only",
+      "final_event_seqs": []
+    },
+    {
+      "id": "initial_belongings",
+      "category": "mechanic",
+      "source_orders": [
+        22,
+        23,
+        24,
+        37
+      ],
+      "entity_keys": [
+        "s6"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "gaps": [
+        "第十七批实现后待冻结版本验收；模型裁定和真实结算不能由夹具替代。"
+      ],
+      "prepared_entity_ids_supplement": [
+        "f4e91f89-787e-4b70-95f4-47966f4a4bff"
+      ],
+      "source_status": "host_ruling",
+      "runtime_verification": "actual_initial_phone_passed_other_branches_fixture_only",
+      "batch17_scope": "每人已确认选择＋真实幸运；初始骰／回执幂等，原遗失物按原检定寻回。",
+      "final_event_seqs": [
+        19,
+        39,
+        45
+      ]
+    },
+    {
+      "id": "optional_pressure",
+      "category": "mechanic",
+      "source_orders": [
+        25,
+        26,
+        27,
+        28,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        228,
+        231,
+        232,
+        239,
+        240
+      ],
+      "entity_keys": [
+        "devouring"
+      ],
+      "node_ids": [
+        "node_611a06c91238f4c5338aa82007dcd0f4",
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [
+        "原文3-4行动/车厢为KP可选建议，不固定启用；实际吞噬时需确认被毁车厢并阻断回访。"
+      ],
+      "prepared_entity_ids_supplement": [
+        "05b13c00-a797-4b77-b930-7ceb745b7aaa"
+      ],
+      "source_status": "host_ruling",
+      "runtime_verification": "prepared_not_naturally_verified",
+      "final_event_seqs": []
+    },
+    {
+      "id": "staff_values",
+      "category": "npc_template",
+      "source_orders": [
+        78,
+        79,
+        94,
+        206,
+        207,
+        208,
+        209,
+        210,
+        211,
+        212
+      ],
+      "entity_keys": [
+        "staff"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [
+        "缺HP/最大HP/CON/DEX/攻击技能/伤害/护甲；只支持原文STR55对抗和清醒伤员剧情，不能普通HP治疗。"
+      ],
+      "prepared_entity_ids_supplement": [
+        "ad0fb37f-31a1-4aed-a83a-57ce5c16741e"
+      ],
+      "source_status": "blocked",
+      "runtime_verification": "supplement_treatment_passed_original_values_missing",
+      "batch17_scope": "原稿STR对抗保留；补充测试版具备治疗／受伤字段，普通攻击仍缺值。",
+      "final_event_seqs": [
+        256,
+        262,
+        265
+      ]
+    },
+    {
+      "id": "clicker_values",
+      "category": "npc_template",
+      "source_orders": [
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        213,
+        214,
+        215,
+        216,
+        217,
+        218
+      ],
+      "entity_keys": [
+        "clicker"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "gaps": [
+        "缺HP/最大HP/CON/攻击技能/武器伤害/护甲/DB；不创建普通人代替。"
+      ],
+      "prepared_entity_ids_supplement": [
+        "4c37cf6a-c587-4abb-953f-a068f8b993bb"
+      ],
+      "source_status": "blocked",
+      "runtime_verification": "supplement_instances_generated_combat_fixture_only_original_values_missing",
+      "batch17_scope": "原稿DEX／STR对抗及数量保留；补充测试版普通战斗字段完整，补充值未批准。",
+      "final_event_seqs": [
+        530
+      ]
+    },
+    {
+      "id": "sourced_modifiers",
+      "category": "mechanic",
+      "source_orders": [
+        94,
+        103,
+        104,
+        105,
+        107,
+        110,
+        123,
+        134,
+        144,
+        145,
+        154,
+        155
+      ],
+      "entity_keys": [
+        "staff",
+        "keys",
+        "quiet_passage",
+        "clicker",
+        "controls"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [
+        "第十七批实现后待冻结版本验收；模型裁定和真实结算不能由夹具替代。"
+      ],
+      "prepared_entity_ids_supplement": [
+        "ad0fb37f-31a1-4aed-a83a-57ce5c16741e",
+        "29444762-faf3-4a70-8a01-42a6eca2569e",
+        "0d43e6f5-9b37-4ffd-a0f1-ee64680b9db1",
+        "4c37cf6a-c587-4abb-953f-a068f8b993bb",
+        "5228313e-7b89-4ece-9636-676f43c1b24d"
+      ],
+      "source_status": "host_ruling",
+      "runtime_verification": "final_package_fixture_only_not_natural_gameplay",
+      "batch17_scope": "冻结普通、对抗、攻击与防御依据；定向测试不替代完整模型战斗。",
+      "final_event_seqs": []
+    },
+    {
+      "id": "sound_and_grab",
+      "category": "mechanic",
+      "source_orders": [
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        215,
+        216,
+        217,
+        218
+      ],
+      "entity_keys": [
+        "clicker"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "gaps": [
+        "第十七批实现后待冻结版本验收；模型裁定和真实结算不能由夹具替代。"
+      ],
+      "prepared_entity_ids_supplement": [
+        "4c37cf6a-c587-4abb-953f-a068f8b993bb"
+      ],
+      "source_status": "host_ruling",
+      "runtime_verification": "natural_encounter_failed_incorrect_sound_and_missing_san",
+      "batch17_scope": "已接入当前动作核对＋有界KP条件裁定；声音、实际抓握、门与背负状态；待统一模型验收。",
+      "final_event_seqs": [
+        530,
+        531,
+        564,
+        568,
+        569,
+        570,
+        576,
+        600
+      ]
+    },
+    {
+      "id": "end_rewards",
+      "category": "mechanic",
+      "source_orders": [
+        179,
+        180,
+        181,
+        182,
+        183,
+        184,
+        185,
+        186,
+        187
+      ],
+      "entity_keys": [
+        "ending_a",
+        "ending_b"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "60ee1a20-c23f-4158-9cd3-c8a3b0768305",
+        "b93daf2b-6612-4f72-b360-a15cd3fc5644"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "final_package_fixture_only_not_natural_gameplay",
+      "final_event_seqs": []
+    },
+    {
+      "id": "ending_c_san",
+      "category": "mechanic",
+      "source_orders": [
+        146,
+        147,
+        178
+      ],
+      "entity_keys": [
+        "ending_c"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "2abb4310-b6ab-483b-aae0-d56db888db98"
+      ],
+      "source_status": "prepared",
+      "runtime_verification": "final_package_fixture_only_not_natural_gameplay",
+      "final_event_seqs": []
+    },
+    {
+      "id": "ending_heading",
+      "category": "context",
+      "source_orders": [
+        159
+      ],
+      "entity_keys": [
+        "ending_a",
+        "ending_b",
+        "ending_c"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "60ee1a20-c23f-4158-9cd3-c8a3b0768305",
+        "b93daf2b-6612-4f72-b360-a15cd3fc5644",
+        "2abb4310-b6ab-483b-aae0-d56db888db98"
+      ],
+      "source_status": "context",
+      "runtime_verification": "source_context_only",
+      "final_event_seqs": []
+    },
+    {
+      "id": "ideal_route",
+      "category": "context",
+      "source_orders": [
+        188,
+        189,
+        190,
+        191,
+        192,
+        193,
+        194,
+        195,
+        196,
+        197,
+        198,
+        199,
+        200,
+        201,
+        202,
+        203,
+        204,
+        205,
+        206
+      ],
+      "entity_keys": [
+        "s6",
+        "s5",
+        "s4",
+        "s3",
+        "s2",
+        "s1"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413",
+        "node_611a06c91238f4c5338aa82007dcd0f4",
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "f4e91f89-787e-4b70-95f4-47966f4a4bff",
+        "16059da2-6c42-4911-be1f-094c6b9afca5",
+        "bac756e1-3171-47d0-a34b-4a3426fb136d",
+        "7138c3b2-d5a2-45cd-85a7-929c512ae4d2",
+        "95d56b45-cdec-48b2-9986-0147f9630987",
+        "70250043-cef4-49f4-a67a-42fe619f79ef"
+      ],
+      "source_status": "context",
+      "runtime_verification": "source_context_only",
+      "final_event_seqs": []
+    },
+    {
+      "id": "npc_and_backstage",
+      "category": "context",
+      "source_orders": [
+        207,
+        208,
+        209,
+        210,
+        211,
+        212,
+        213,
+        214,
+        215,
+        216,
+        217,
+        218,
+        219,
+        220,
+        221,
+        222,
+        223
+      ],
+      "entity_keys": [
+        "staff",
+        "clicker",
+        "dark_man",
+        "mouth"
+      ],
+      "node_ids": [
+        "node_7457aed4bc9192589c7bb737927da8ad",
+        "node_611a06c91238f4c5338aa82007dcd0f4",
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8",
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "ad0fb37f-31a1-4aed-a83a-57ce5c16741e",
+        "4c37cf6a-c587-4abb-953f-a068f8b993bb",
+        "c00621f6-bae4-48f9-992c-f0aa001de03f",
+        "97504f6e-1946-4395-a62d-bba957e33a1a"
+      ],
+      "source_status": "context",
+      "runtime_verification": "source_context_only",
+      "final_event_seqs": []
+    },
+    {
+      "id": "editorial_notes",
+      "category": "context",
+      "source_orders": [
+        224,
+        225,
+        226,
+        227,
+        228,
+        229,
+        230,
+        231,
+        232,
+        233,
+        234,
+        235,
+        236,
+        237,
+        238,
+        239,
+        240,
+        241,
+        242
+      ],
+      "entity_keys": [
+        "devouring",
+        "mouth"
+      ],
+      "node_ids": [
+        "node_7457aed4bc9192589c7bb737927da8ad",
+        "node_611a06c91238f4c5338aa82007dcd0f4",
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "05b13c00-a797-4b77-b930-7ceb745b7aaa",
+        "97504f6e-1946-4395-a62d-bba957e33a1a"
+      ],
+      "source_status": "context",
+      "runtime_verification": "source_context_only",
+      "final_event_seqs": []
+    },
+    {
+      "id": "clicker_illustration",
+      "category": "illustration",
+      "source_orders": [
+        119
+      ],
+      "entity_keys": [
+        "clicker"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "gaps": [],
+      "prepared_entity_ids_supplement": [
+        "4c37cf6a-c587-4abb-953f-a068f8b993bb"
+      ],
+      "source_status": "context",
+      "runtime_verification": "source_context_only",
+      "final_event_seqs": []
+    }
+  ],
+  "runtime_status_counts": {
+    "partial_natural_flow_passed": 6,
+    "prepared_not_naturally_verified": 25,
+    "natural_encounter_failed_incorrect_sound_and_missing_san": 5,
+    "supplement_treatment_passed_original_values_missing": 3,
+    "natural_investigation_or_dialogue_failed": 4,
+    "final_package_fixture_only_not_natural_gameplay": 6,
+    "transfer_and_teammate_use_passed_later_incorrect_drop": 1,
+    "source_context_only": 6,
+    "actual_initial_phone_passed_other_branches_fixture_only": 1,
+    "supplement_instances_generated_combat_fixture_only_original_values_missing": 1
+  }
+}

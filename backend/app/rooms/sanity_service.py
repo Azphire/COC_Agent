@@ -174,7 +174,11 @@ class SanityService:
             )
         else:
             require(False, "模型只能提出 SAN 提案，须等待行动后遭遇验证", 403)
-        if effect.trigger == "action_target":
+        if (
+            effect.trigger == "action_target"
+            or effect.kp_enabled
+            and source.type == "action.submitted"
+        ):
             require(
                 source.type == "action.submitted"
                 and (encounter or source.actor_member_id == member.id)

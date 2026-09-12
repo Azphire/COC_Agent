@@ -1,7 +1,5 @@
 """Source-approved inventory and event effects, never parsed from public narration."""
 
-import re
-
 from sqlalchemy import select
 
 from app.persistence.agent_models import AgentCycle, CheckRecord
@@ -12,6 +10,8 @@ from app.rooms.service import require
 
 
 async def apply_interaction(agents, session, room, args, *, run=None, host=False):
+    from app.preparation.inventory import held_instance
+
     entity = await agents.entities.entity(session, room.id, args.entity_id)
     definition = next(
         (r for r in entity.snapshot.get("interactions", []) if r["id"] == args.interaction_id),
@@ -33,7 +33,36 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
     key = f"{seq}:{entity.source_entity_id}:{rule.id}"
     if key in state.module_runtime.receipts:
         return state.module_runtime.receipts[key]
+    if rule.inventory_operation == "initial" and actor in state.module_runtime.initial_belongings:
+        initial = state.module_runtime.initial_belongings[actor]
+        return next(
+            r
+            for r in state.module_runtime.receipts.values()
+            if r.get("source_event_seq") == initial["source_event_seq"]
+            and r.get("actor_member_id") == actor
+        )
+    if rule.once_per_actor:
+        prior = next(
+            (
+                r
+                for r in state.module_runtime.receipts.values()
+                if r.get("entity_id") == args.entity_id
+                and r.get("interaction_id") == rule.id
+                and r.get("actor_member_id") == actor
+            ),
+            None,
+        )
+        if prior:
+            return prior
     require(not state.module_runtime.outcome, "模组已经结束")
+    if rule.requires_party_loss:
+        require(
+            bool(state.characters)
+            and all(c.injury.dead for c in state.characters.values())
+            or state.module_runtime.flags.get("party_consumed")
+            or state.module_runtime.flags.get("divine_manifested"),
+            "此结局需要实际全员死亡、已结算吞噬或已发生的可选神祇显现，威胁不构成结局",
+        )
     require(
         not state.module_runtime.pending_outcome
         or rule.outcome == state.module_runtime.pending_outcome,
@@ -44,6 +73,10 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         agents.combat.require_movement_ready(room)
     nav = await agents.navigation.require_available(session, room.id)
     snapshot, _ = await agents.navigation.snapshot(session, nav)
+    require(
+        not rule.scene_node_ids or nav.current_scene_node_id in rule.scene_node_ids,
+        "此交互不适用于当前场景",
+    )
     last_move = await session.scalar(
         select(RoomEvent.seq)
         .where(RoomEvent.room_id == room.id, RoomEvent.type == "scene.updated")
@@ -56,7 +89,10 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             b.entity_id == args.entity_id and b.node_id == nav.current_scene_node_id
             for b in snapshot.entity_bindings
         )
-        or args.entity_id in state.module_runtime.inventory,
+        or args.entity_id
+        in current_entity_ids(
+            snapshot, [nav.current_scene_node_id], state.module_runtime.model_dump()
+        ),
         "交互实体不在当前场景",
     )
     require(entity.state != "hidden", "交互目标尚未实际揭示")
@@ -79,30 +115,49 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             "交互目标不匹配玩家实际行动",
         )
         actual_action = doc.plan.focus.action if doc.plan.focus else ""
+        ruling = state.module_runtime.rulings.get(key)
         require(
-            actual_action
-            and actual_action in event.payload.get("text", "")
-            and re.search(
-                r"拿|取|拾|收起|保管|打开|开启|关闭|插入|使用|解锁|推动|推下|拉动|"
-                r"扔|投|抛|潜行|绕过|穿过|扶|背起|带上|携带|告知|告诉|关掉|加速|减速|停车|"
-                r"\b(?:take|pick|use|unlock|open|close|throw|push|pull|carry|sneak)\b",
-                actual_action,
-                re.IGNORECASE,
-            )
-            and not re.search(r"是否|能否|可否|假如|如果|假设|不要|并未|没有|[?？]", actual_action),
-            "只有观察或询问不能执行物品和事件操作，请主机核对实际行动",
+            actual_action and actual_action in event.payload.get("text", ""), "交互缺少实际行动片段"
         )
-    require(host or not rule.host_review, "此原文特殊方法需要KP确认实际情境")
+        if rule.kp_enabled:
+            require(
+                ruling
+                and ruling.get("action") == actual_action
+                and ruling.get("actor_member_id") == actor,
+                "缺少本次有界KP裁定",
+            )
+            verification = ruling.get("current_action_verification") or {}
+            require(
+                verification.get("matches")
+                and verification.get("action_quote") == actual_action,
+                "当前动作未授权此具体操作",
+            )
+        else:
+            # Compatibility for old packages: retain their conservative action guard.
+            import re
+
+            require(
+                re.search(
+                    r"拿|取|拾|打开|使用|解锁|推|拉|扔|投|抛|潜行|绕过|扶|背起|携带|告诉|关|加速|减速|停车|\b(?:take|pick|use|unlock|open|close|throw|push|pull|carry|sneak)\b",
+                    actual_action,
+                    re.I,
+                )
+                and not re.search(
+                    r"是否|能否|可否|假如|如果|假设|不要|并未|没有|[?？]", actual_action
+                ),
+                "只有观察或询问不能执行物品和事件操作",
+            )
     require(
-        all(state.module_runtime.inventory.get(eid) == actor for eid in rule.required_item_ids),
+        host or not rule.host_review or rule.kp_enabled and key in state.module_runtime.rulings,
+        "此原文特殊方法需要KP确认实际情境",
+    )
+    require(
+        all(held_instance(state.module_runtime, eid, actor) for eid in rule.required_item_ids),
         "所需物品必须由本次实际行动者持有，不能使用队友的物品",
     )
     require(
         all(state.module_runtime.flags.get(k, False) == v for k, v in rule.required_flags.items()),
         "交互事件条件未满足",
-    )
-    require(
-        set(rule.required_item_ids) <= set(state.module_runtime.inventory), "尚未实际持有所需物品"
     )
     visible = {
         e.source_entity_id
@@ -131,11 +186,22 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
                 )
     if rule.max_npc_count is not None:
         require(
-            rule.opposed_npc_id is not None
-            and state.module_runtime.npc_counts.get(rule.opposed_npc_id, 0) <= rule.max_npc_count,
-            "实际怪物数量不允许此逃脱方法",
+            0 < len(state.module_runtime.grapples.get(actor, [])) <= rule.max_npc_count,
+            "实际抓握人数不允许此逃脱方法",
         )
-    if rule.check_name:
+    needs_check = bool(rule.check_name)
+    if rule.carry_attribute:
+        slot = next(
+            (s for s in await agents.rooms.slots(session, room) if s.member_id == actor), None
+        )
+        value = (
+            slot.character_snapshot.get("effective_attributes", {}).get(rule.carry_attribute)
+            if slot
+            else None
+        )
+        require(value is not None, "背负伤员需要行动者的力量／体质")
+        needs_check = value < 70
+    if needs_check:
         checks = list(
             await session.scalars(
                 select(CheckRecord).where(
@@ -145,6 +211,30 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
                 )
             )
         )
+        relevant = []
+        for check in checks:
+            check_cycle = await session.get(AgentCycle, check.cycle_id)
+            if (
+                check_cycle
+                and check_cycle.state.get("triggering_event_seq") == seq
+                and check.document.get("name") == rule.check_name
+            ):
+                relevant.append(check)
+        if (
+            relevant
+            and not relevant[-1].document.get("result", {}).get("passed")
+            and rule.failure_interaction_id
+        ):
+            failure = next(
+                (
+                    r
+                    for r in entity.snapshot["interactions"]
+                    if r["id"] == rule.failure_interaction_id
+                ),
+                None,
+            )
+            require(failure and not failure.get("check_passed", True), "缺少批准失败结算")
+            rule = ModuleInteraction.model_validate(failure)
         matched = []
         for check in checks:
             check_cycle = await session.get(AgentCycle, check.cycle_id)
@@ -159,17 +249,32 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             if rule.opposed_npc_id:
                 if (c.get("opposed") or {}).get("opponent_npc_id") != rule.opposed_npc_id:
                     continue
-                if c.get("result", {}).get("winner_id") != actor:
+                if rule.check_passed and c.get("result", {}).get("winner_id") != actor:
                     continue
             matched.append(check.id)
         require(matched, "必须先结算本次行动所需的真实检定；主机确认也不能替代骰点")
     else:
         matched = []
+    from app.preparation.encounters import apply_encounter
+    from app.preparation.inventory import apply_inventory
+
+    await apply_inventory(
+        agents, session, room, state, rule, args, actor, nav.current_scene_node_id, seq, matched
+    )
+    apply_encounter(state, rule, args, actor, nav.current_scene_node_id, seq)
     state.module_runtime.flags.update(rule.set_flags)
+    if rule.encounter_operation in {"sound_start", "sound_stop", "sound_once"}:
+        state.module_runtime.flags["continuous_sound"] = any(
+            s.get("active") and s.get("continuous") for s in state.module_runtime.sounds.values()
+        )
     for eid in rule.acquire_item_ids:
         item = await agents.entities.entity(session, room.id, eid)
         require(item.entity_type == "item" and item.state != "hidden", "所获物品必须已实际发现")
-        state.module_runtime.inventory.setdefault(eid, actor)
+        require(eid not in state.module_runtime.consumed_items, "物品已经消耗，不能重新取得")
+        require(eid not in state.module_runtime.dropped_items, "放下的物品须在实际位置拾取")
+        holder = state.module_runtime.inventory.get(eid)
+        require(holder in {None, actor}, "物品已有持有者，必须由持有者实际交接")
+        state.module_runtime.inventory[eid] = actor
     state.module_runtime.following_npc_ids = list(
         dict.fromkeys(
             [
@@ -194,6 +299,9 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         "text": rule.public_result,
         "check_ids": matched,
         "host_confirmed": host,
+        "kp_ruling": state.module_runtime.rulings.get(key),
+        "inventory": dict(state.module_runtime.inventory),
+        "recipient_member_id": args.recipient_member_id,
         "reason": args.reason if host else "批准玩家行动",
         "outcome": rule.outcome,
     }
@@ -212,6 +320,11 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
                 c.san = 0
                 c.sanity.kind, c.sanity.phase = "permanent", "bout"
             for index, reward in enumerate(rule.san_rewards):
+                if reward.surviving_npc_id and not any(
+                    p.npc_id == reward.surviving_npc_id and p.hp and not p.injury.dead
+                    for p in state.combat.participants.values()
+                ):
+                    continue
                 if (
                     not c.hp
                     or c.injury.dead
@@ -287,6 +400,7 @@ async def freeze_adjustment(agents, session, room, check, entity):
         PreparedCheckAdjustment.model_validate(r)
         for r in (entity or {}).get("check_adjustments", [])
         if (r["kind"], r["name"]) == (check.kind, check.name)
+        and not r.get("combat_only")
         and (not r.get("opposed_only") or check.opposed)
         and (
             not r.get("scene_node_ids") or nav and nav.current_scene_node_id in r["scene_node_ids"]
@@ -328,7 +442,13 @@ async def freeze_adjustment(agents, session, room, check, entity):
 
 def current_entity_ids(snapshot, node_ids, runtime):
     ids = {b.entity_id for b in snapshot.entity_bindings if b.node_id in node_ids}
-    ids |= set(runtime.get("inventory", {}))
+    instances = runtime.get("item_instances", {})
+    ids |= {instances.get(key, key) for key in runtime.get("inventory", {})}
+    ids |= {
+        instances.get(eid, eid)
+        for eid, node in runtime.get("dropped_items", {}).items()
+        if node in node_ids
+    }
     for eid, location in runtime.get("npc_locations", {}).items():
         if location in node_ids:
             ids.add(eid)

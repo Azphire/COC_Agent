@@ -82,15 +82,18 @@ class Combatant(DomainModel):
     skills: dict[str, Stat]
     hp: Number
     hp_max: Annotated[StrictInt, Field(ge=1, le=100_000)]
-    armor: Number = 0
-    damage_bonus: str = "0"
-    weapons: list[Weapon] = Field(default_factory=lambda: [unarmed()], min_length=1, max_length=20)
+    armor: Number | None = 0
+    damage_bonus: str | None = "0"
+    weapons: list[Weapon] = Field(default_factory=lambda: [unarmed()], max_length=20)
+    traits: list[str] = Field(default_factory=list, max_length=12)
     injury: Injury = Field(default_factory=Injury)
     source: str = Field(min_length=1, max_length=500)
 
     @field_validator("damage_bonus")
     @classmethod
     def bonus(cls, value):
+        if value is None:
+            return value
         from app.rules.combat import damage_bounds
 
         low, high = damage_bounds(value)
@@ -100,13 +103,30 @@ class Combatant(DomainModel):
 
     @model_validator(mode="after")
     def stats(self):
-        if not {"dex", "con"} <= self.attributes.keys():
-            raise ValueError("战斗必须有DEX和CON")
         if self.hp > self.hp_max or len({w.id for w in self.weapons}) != len(self.weapons):
             raise ValueError("HP或武器ID不合法")
         if any(w.skill not in self.skills for w in self.weapons):
             raise ValueError("武器技能必须来自角色数值")
         return self
+
+    def missing(self, operation="combat"):
+        return missing_values(self, operation)
+
+
+def missing_values(profile, operation):
+    fields = {
+        "treatment": ("hp", "hp_max"),
+        "damage": ("hp", "hp_max", "armor"),
+        "attack": ("hp", "hp_max", "damage_bonus"),
+        "combat": ("hp", "hp_max", "armor", "damage_bonus"),
+    }[operation]
+    attributes = ("con",) if operation in {"treatment", "damage"} else ("dex", "con")
+    missing = [key for key in fields if getattr(profile, key) is None]
+    missing += [key for key in attributes if key not in profile.attributes]
+    if operation in {"attack", "combat"}:
+        missing += [] if profile.weapons else ["weapons"]
+        missing += [w.skill for w in profile.weapons if w.skill not in profile.skills]
+    return missing
 
 
 class CombatTemplate(DomainModel):
@@ -127,27 +147,17 @@ class CombatTemplate(DomainModel):
     traits: list[str] = Field(default_factory=list, max_length=12)
     limitations: list[str] = Field(default_factory=list, max_length=12)
 
-    def missing(self):
-        return [
-            *[
-                key
-                for key in ("hp", "hp_max", "armor", "damage_bonus")
-                if getattr(self, key) is None
-            ],
-            *[key for key in ("dex", "con") if key not in self.attributes],
-            *([] if self.weapons else ["weapons"]),
-            *[w.skill for w in self.weapons if w.skill not in self.skills],
-            *self.limitations,
-        ]
+    def missing(self, operation="combat"):
+        return missing_values(self, operation)
 
     @model_validator(mode="after")
     def valid_complete_template(self):
-        if not self.missing():
+        if not self.missing("treatment"):
             Combatant(
                 id="validate",
                 label="validate",
                 scene_id="validate",
-                **self.model_dump(exclude={"count", "traits", "limitations"}),
+                **self.model_dump(exclude={"count", "limitations"}),
             )
         return self
 

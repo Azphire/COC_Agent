@@ -17,6 +17,7 @@ DECISION = (
     "攻击目标只能选attack_targets，不能攻击已经脱离本次战斗的角色；追逐属于后续场景裁定。"
     "range_band按场景距离选base/long/extreme/point_blank，不明确距离用base。"
     "first_aid急救；medicine医学；reload装填；pass主动等待或站起等占用行动；end仅表示自己脱离战斗。"
+    "急救和医学的目标选treatment_targets；不要将原话中的NPC替换成队友。没有对应目标时用talk说明。"
     "不因聊天自动结束战斗。自动角色结合自己的队伍、伤势和武器选行动，攻击对方，受伤严重可以脱离。"
     "无需主机审批普通合法行动。reason简短描述尝试，不宣布伤害或成败。"
 )
@@ -86,6 +87,35 @@ async def call_model(runtime, state, schema, instruction, context, node):
     return schema.model_validate(await service.mutate(state["room_id"], finish))
 
 
+async def reveal_addressed_npc(service, session, room, raw_text, scene, cycle_id=None):
+    """Bridge an explicitly addressed, already described NPC into ordinary treatment."""
+    summary = next(
+        (
+            s.get("public_description", "")
+            for s in scene.document.get("scenes", [])
+            if s["id"] == scene.state["scene_id"]
+        ),
+        "",
+    )
+    for entity in await service.entities.rows(session, room.id):
+        title = entity.snapshot.get("title", "")
+        if (
+            entity.entity_type != "npc"
+            or entity.state != "hidden"
+            or not title
+            or title not in raw_text
+            or title not in summary
+        ):
+            continue
+        try:
+            await service.entities.check_conditions(session, room, entity, cycle_id)
+        except RoomError:
+            continue  # A named but gated NPC still requires its actual source condition.
+        await service.entities.reveal(
+            session, room, entity.source_entity_id, room.host_member_id, cycle_id=cycle_id
+        )
+
+
 async def drive_combat(runtime, state):
     service, rooms = runtime.service, runtime.rooms
     combat_service = service.combat
@@ -97,9 +127,15 @@ async def drive_combat(runtime, state):
         await combat_service.ensure_members(session, room, data, module.state["scene_id"])
         store_state(room, data)
         trigger = await session.get(RoomEvent, (room.id, state["triggering_event_seq"]))
+        await reveal_addressed_npc(
+            service, session, room, trigger.payload["text"], module, cycle.id
+        )
+        data = load_state(room)
         actor = state.get("combat_actor_id") or state["triggering_member_id"]
         public = await combat_service.view(session, room, Identity(actor, False))
         own = data.combat.participants.get(actor)
+        from app.preparation.encounters import can_locate
+
         recent = [
             {"actor_id": e["actor_member_id"], "text": e["payload"]["text"]}
             for e in await rooms.events(session, room, Identity(actor, False))
@@ -119,7 +155,16 @@ async def drive_combat(runtime, state):
                 if pid != actor
                 and data.combat.participants[pid].scene_id == module.state["scene_id"]
                 and data.combat.participants[pid].public
+                and (not own or can_locate(data, own, data.combat.participants[pid]))
                 and not public["participants"].get(pid, {}).get("incapacitated")
+            ],
+            "treatment_targets": [
+                {"id": p.id, "label": p.label}
+                for p in data.combat.participants.values()
+                if p.public
+                and p.scene_id == module.state["scene_id"]
+                and not p.injury.dead
+                and (p.hp < p.hp_max or p.injury.dying)
             ],
             "scene": next(
                 (

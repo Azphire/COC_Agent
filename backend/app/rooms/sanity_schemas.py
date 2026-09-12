@@ -14,6 +14,8 @@ class SanityEffect(DomainModel):
     encounter: str = Field(min_length=1, max_length=200)
     trigger: Literal["action_target", "entity_revealed"] = "action_target"
     automation: Literal["automatic", "host_review"] = "host_review"
+    kp_enabled: bool = False
+    audience: Literal["actor", "party"] = "actor"
     repeat: Literal["first_only", "host_confirmed"] = "first_only"
     action_types: list[Literal["observe", "investigate", "interact", "use_item"]] = Field(
         default_factory=lambda: ["observe", "investigate", "interact"], max_length=4
@@ -102,7 +104,7 @@ class ResourceCorrection(DomainModel):
 
 
 class SanityProgress(DomainModel):
-    origin: Literal["automatic", "host_review", "host"] = "host"
+    origin: Literal["automatic", "host_review", "host", "kp_ruling"] = "host"
     insanity_kind: str = "none"
     phase: str = "none"
     symptom: str = ""

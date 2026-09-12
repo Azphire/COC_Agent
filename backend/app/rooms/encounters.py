@@ -112,7 +112,11 @@ class EncounterService:
             effects = [
                 SanityEffect.model_validate(e)
                 for e in facts.approved_entities[eid].get("sanity_effects", [])
-                if e.get("trigger", "action_target") == trigger
+                if (
+                    e.get("trigger", "action_target") == trigger
+                    or e.get("kp_enabled")
+                    and trigger == "action_target"
+                )
                 and (
                     trigger != "action_target"
                     or intent.type in e.get("action_types", ["observe", "investigate", "interact"])
@@ -140,7 +144,11 @@ class EncounterService:
                         "target_member_ids": [facts.actor_member_id],
                         "slot_ids": [facts.actor_slot_id],
                         "trigger": trigger,
-                        "status": "approved" if automatic else "review",
+                        "status": "kp_review"
+                        if effect.kp_enabled
+                        else "approved"
+                        if automatic
+                        else "review",
                         "origin": "automatic" if automatic else "host_review",
                         "condition": effect.condition
                         or (
