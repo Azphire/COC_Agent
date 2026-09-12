@@ -315,7 +315,7 @@ class ModuleStructureService:
                 if e.status == "approved"
             }
             require(
-                set(body.required_revealed_entity_ids) <= approved_entities,
+                {*body.required_revealed_entity_ids, *body.required_item_ids} <= approved_entities,
                 "转换条件必须引用批准实体",
                 422,
             )
@@ -368,7 +368,10 @@ class ModuleStructureService:
             require(
                 all(
                     e in entities and entities[e].status == "approved"
-                    for e in transition.required_revealed_entity_ids
+                    for e in [
+                        *transition.required_revealed_entity_ids,
+                        *transition.required_item_ids,
+                    ]
                 ),
                 "转换条件引用的实体未批准",
                 422,

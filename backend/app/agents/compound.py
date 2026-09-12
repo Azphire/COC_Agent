@@ -139,6 +139,8 @@ class CompoundCheckService:
                     "settlement": None,
                 }
             )
+        if check.module_adjustment:
+            sides[0]["value"] = check.value
         check.compound = {
             "stage": "rolling",
             "participants": sides,

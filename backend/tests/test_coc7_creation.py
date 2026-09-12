@@ -37,7 +37,8 @@ def create_seventh(client, mode="point-buy", age=25):
 def test_coc7_source_and_point_buy(client):
     rules = client.get(f"/api/character-rulesets/{COC7}").json()
     assert rules["enabled"] and rules["verification_status"] == "verified"
-    assert rules["edition"] == "coc7" and len(rules["source_reference"]) == 3
+    assert rules["edition"] == "coc7" and len(rules["source_reference"]) >= 3
+    assert any("68–69" in source["section"] for source in rules["source_reference"])
     character = create_seventh(client)
     assert sum(item["value"] for item in character["attributes"].values()) == 460
     assert character["remaining_points"]["attributes"] == 0

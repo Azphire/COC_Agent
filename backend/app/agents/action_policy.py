@@ -39,7 +39,9 @@ READ_TOOLS = frozenset(
 PROPOSAL_TOOLS = frozenset(
     {"request_skill_check", "request_sanity_check", "propose_module_fact", "request_host_review"}
 )
-STATE_TOOLS = frozenset({"reveal_entity", "reveal_clue", "transition_scene", "update_scene"})
+STATE_TOOLS = frozenset(
+    {"reveal_entity", "reveal_clue", "transition_scene", "update_scene", "apply_module_action"}
+)
 
 
 def explicit_movement(text: str) -> bool:
@@ -63,6 +65,24 @@ def explicit_movement(text: str) -> bool:
     return not re.search(r"观察|检查|调查|打听|建议|提议", compact[: movement.start()])
 
 
+def named_move_exits(text, transitions):
+    """Corroborate a destination named after a movement verb, not a later door mention."""
+    verbs = (
+        r"进入|走进|走入|前往|走向|走到|返回|回到|退回|赶往|抵达|跨入|跨进|"
+        r"\b(?:enter|return to|move to|walk to)\b"
+    )
+    return [
+        t
+        for t in transitions
+        if t.get("target_public_title")
+        and re.search(
+            rf"(?:{verbs})[^，。！？；,.!?;\n]{{0,12}}{re.escape(t['target_public_title'])}",
+            text,
+            re.IGNORECASE,
+        )
+    ]
+
+
 @dataclass
 class ActionFacts:
     room_id: str
@@ -76,6 +96,7 @@ class ActionFacts:
     structure: bool = False
     approved_entities: dict = field(default_factory=dict)
     visible_entity_ids: set = field(default_factory=set)
+    searchable_entity_ids: set = field(default_factory=set)
     local_entity_ids: set = field(default_factory=set)
     node_ids: set = field(default_factory=set)
     allowed_node_ids: set = field(default_factory=set)
@@ -140,6 +161,7 @@ class ActionPolicyValidator:
             ):
                 return "clarification_required", "玩家尚未明确表示移动"
             transitions = [t for t in facts.transitions.values() if t.get("approved")]
+            named = named_move_exits(facts.raw_text, transitions)
             matching = [
                 t
                 for t in transitions
@@ -149,8 +171,17 @@ class ActionPolicyValidator:
             ]
             if len(matching) != 1:
                 return "clarification_required", "移动目标不能唯一匹配当前批准出口"
+            if named and (
+                len(named) != 1 or named[0]["transition_id"] != matching[0]["transition_id"]
+            ):
+                return "clarification_required", "出口与玩家明确提出的目的地不一致"
         elif intent.target_id:
-            if intent.target_id not in facts.visible_entity_ids | facts.member_ids | {
+            search = (
+                facts.searchable_entity_ids
+                if intent.type in {"investigate", "observe", "interact"}
+                else set()
+            )
+            if intent.target_id not in facts.visible_entity_ids | search | facts.member_ids | {
                 facts.scene_id
             }:
                 return "clarification_required", "目标不存在或不在当前可见范围"
@@ -391,6 +422,26 @@ class ActionPolicyValidator:
                                 and not facts.host_review_approved
                             ):
                                 code, reason = "permission_denied", "此转换仅允许主机操作"
+                    elif tool.name == "apply_module_action":
+                        target = data["entity_id"]
+                        entity = facts.approved_entities.get(target, {})
+                        if (
+                            target not in facts.local_entity_ids
+                            or target not in facts.observed_entity_ids
+                        ):
+                            code, reason = "context_missing", "交互目标不在当前可用实体中"
+                        elif (
+                            intent.type not in {"interact", "use_item", "investigate"}
+                            or intent.target_id != target
+                        ):
+                            code, reason = "precondition_failed", "交互必须匹配玩家当前行动及目标"
+                        elif data["evidence_quote"] not in facts.raw_text:
+                            code, reason = "precondition_failed", "交互没有引用玩家原话"
+                        elif not any(
+                            r["id"] == data["interaction_id"]
+                            for r in entity.get("interactions", [])
+                        ):
+                            code, reason = "precondition_failed", "交互规则未批准"
                     elif tool.name in {"reveal_entity", "reveal_clue"}:
                         target = data.get("entity_id") or data.get("clue_id")
                         if target not in facts.approved_entities:

@@ -87,7 +87,10 @@ async def public_fact_scopes(agents, session, room_id, entities):
         valid_nodes = {n.node_id for n in snapshot.nodes}
         for node_id in visited_nodes & valid_nodes:
             previous.update(scene_nodes(snapshot, node_id))
-        current = {b.entity_id for b in snapshot.entity_bindings if b.node_id in local}
+        from app.preparation.runtime import current_entity_ids
+
+        room = await agents.rooms.room(session, room_id)
+        current = current_entity_ids(snapshot, local, room.session_state.get("module_runtime", {}))
         visited = {b.entity_id for b in snapshot.entity_bindings if b.node_id in previous}
     for entity in entities:
         eid = entity["id"]

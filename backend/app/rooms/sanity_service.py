@@ -43,6 +43,11 @@ def runtime_context(room, slot_id):
 
 
 def current_check_value(room, slot, kind, name):
+    if kind == "attribute" and name == "luck":
+        value = room.session_state.get("characters", {}).get(str(slot.id), {}).get("luck")
+        if type(value) is not int or not 0 <= value <= 99:
+            raise ValueError("角色尚无当前幸运值")
+        return value
     value = check_value(slot.character_snapshot, kind, name)
     if kind == "skill" and name == "cthulhu_mythos":
         gain = (

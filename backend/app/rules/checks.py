@@ -2,11 +2,21 @@
 
 from app.dice.service import DiceService
 
+# Local CoC7 rulebook PDF 68–69. Older frozen cards predate this minimal subset.
+MODULE_BASE_SKILLS = {"stealth": 20, "throw": 20}
+
+
+def available_skills(snapshot):
+    values = snapshot.get("skill_values", {})
+    if snapshot.get("ruleset_id") == "coc7-character-creation":
+        return {**MODULE_BASE_SKILLS, **values}
+    return values
+
 
 def check_value(snapshot: dict, kind: str, name: str) -> int:
     if snapshot.get("ruleset_id") != "coc7-character-creation":
         raise ValueError("检定仅支持已核对的第七版角色")
-    source = snapshot["effective_attributes" if kind == "attribute" else "skill_values"]
+    source = snapshot["effective_attributes"] if kind == "attribute" else available_skills(snapshot)
     if name not in source or type(source[name]) is not int or not 0 <= source[name] <= 999:
         raise ValueError("角色快照中没有此属性或技能")
     return source[name]

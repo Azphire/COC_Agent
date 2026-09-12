@@ -5,6 +5,8 @@ from pydantic import Field, model_validator
 from app.agents.modules import SuggestedCheck
 from app.domain.character import DomainModel
 from app.knowledge.schemas import SourceRef
+from app.preparation.runtime_schemas import ModuleInteraction, PreparedCheckAdjustment
+from app.rooms.combat_schemas import CombatTemplate
 from app.rooms.sanity_schemas import SanityEffect
 from app.rules.compound import NPCCheckStats
 
@@ -42,6 +44,12 @@ class RevealConditions(DomainModel):
 
 
 class EntityFields(DomainModel):
+    check_adjustments: list[PreparedCheckAdjustment] = Field(default_factory=list, max_length=12)
+    interactions: list[ModuleInteraction] = Field(default_factory=list, max_length=20)
+    combat_template: CombatTemplate | None = None
+    source_block_ids: list[str] = Field(default_factory=list, max_length=60)
+    reviewed_by: str = Field(default="", max_length=120)
+    review_basis: str = Field(default="", max_length=500)
     check_stats: NPCCheckStats | None = None
     sanity_effects: list[SanityEffect] = Field(default_factory=list, max_length=8)
     type: EntityType
@@ -58,6 +66,8 @@ class EntityFields(DomainModel):
 
     @model_validator(mode="after")
     def distinct_sanity_effects(self):
+        if self.combat_template and self.type != "npc":
+            raise ValueError("只有 NPC 可以准备战斗模板")
         if self.check_stats and self.type != "npc":
             raise ValueError("只有 NPC 可以准备对抗数值")
         if len({e.id for e in self.sanity_effects}) != len(self.sanity_effects):
@@ -66,6 +76,10 @@ class EntityFields(DomainModel):
 
 
 class EntityDraft(EntityFields):
+    check_adjustments: list[PreparedCheckAdjustment] = Field(default_factory=list, max_length=0)
+    interactions: list[ModuleInteraction] = Field(default_factory=list, max_length=0)
+    combat_template: None = None
+    reviewed_by: Literal[""] = ""
     # Numeric NPC preparation must be confirmed by a human, never invented by generation.
     check_stats: None = None
     # Require an explicit public decision, including an intentional empty value.
@@ -73,6 +87,7 @@ class EntityDraft(EntityFields):
     public_summary: str = Field(max_length=1000)
     evidence_ids: list[str] = Field(max_length=12)
     local_id: str = Field(min_length=1, max_length=80)
+    existing_entity_id: str | None = Field(default=None, max_length=80)
 
 
 class RelationDraft(DomainModel):
@@ -93,6 +108,12 @@ class HostEntityInput(EntityFields):
 
 
 class EntityPatch(DomainModel):
+    check_adjustments: list[PreparedCheckAdjustment] | None = Field(default=None, max_length=12)
+    interactions: list[ModuleInteraction] | None = Field(default=None, max_length=20)
+    combat_template: CombatTemplate | None = None
+    source_block_ids: list[str] | None = Field(default=None, max_length=60)
+    reviewed_by: str | None = Field(default=None, max_length=120)
+    review_basis: str | None = Field(default=None, max_length=500)
     check_stats: NPCCheckStats | None = None
     sanity_effects: list[SanityEffect] | None = Field(default=None, max_length=8)
     type: EntityType | None = None

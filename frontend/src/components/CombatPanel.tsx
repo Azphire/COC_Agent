@@ -42,6 +42,7 @@ export default function CombatPanel({ room, busy, command }: Props) {
   const act = (operation: string) => actor && command('/combat/action', { actor_id: actor.id, target_id: target || null, weapon_id: weapon, operation, reason: operation === 'attack' ? '按面板选择发动攻击' : '按面板选择行动', client_request_id: requestId(), turn_key: combat.turn_key })
   return <section className="combat-panel" aria-label="基础战斗">
     <h2>{combat.active ? `战斗 · 第 ${combat.round} 轮` : '战斗与伤势'}</h2>
+    {room.is_host && combat.unavailable_templates?.map(npc => <p key={npc.entity_id}>当前场景 {npc.title} 缺少战斗资料：{npc.missing.join('、')}。请按原文已支持的遭遇方法处理；来源：{npc.source}</p>)}
     {combat.active && <p role="status">当前行动者：<strong>{actor?.label || '等待处理'}</strong>。你仍可在下方自由交谈或描述其他尝试。</p>}
     {room.is_host && combat.active && !pending && <button disabled={busy} onClick={() => void command('/combat/control', { operation: 'end', expected_revision: room.revision, reason: '主机确认双方停止冲突' })}>确认战斗结束</button>}
     <ol>{(combat.active ? combat.order : participants.map(p => p.id)).map(id => {

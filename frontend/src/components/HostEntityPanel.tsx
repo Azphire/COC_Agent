@@ -12,6 +12,7 @@ export default function HostEntityPanel({ room, token, acceptRoom }: Props) {
   const [entities, setEntities] = useState<Entity[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [interaction, setInteraction] = useState('')
   const prefix = `/rooms/${room.id}`
   useEffect(() => {
     let active = true
@@ -34,6 +35,10 @@ export default function HostEntityPanel({ room, token, acceptRoom }: Props) {
   return <section data-testid="host-entity-panel"><h2>模组准备与主机审阅</h2><p><a href="#/preparations">打开模组准备工作台</a></p>{error && <p role="alert">{error}</p>}
     {room.status === 'lobby' && <form onSubmit={e => { e.preventDefault(); void command('/module-preparation', { preparation_id: selected }, 'PATCH') }}><label>批准版本<select id="room-preparation" value={selected} onChange={e => setSelected(e.target.value)}><option value="">选择已批准准备任务</option>{preparations.map(p => <option value={p.id} key={p.id}>{p.display_title} · v{p.version} · {p.source_hash.slice(0, 12)}</option>)}</select></label><button disabled={busy || !selected}>绑定准备版本</button></form>}
     {room.game?.preparation && <p>当前快照 v{room.game.preparation.version} · {room.game.preparation.source_hash.slice(0, 12)}</p>}
+    {room.game?.preparation && <details><summary>确认原稿物品／事件交互</summary><p>引用实际玩家行动，核对原文情境后确认。服务器仍会检查位置、物品、事件条件和已结算的骰点。</p><form onSubmit={e => {
+      e.preventDefault(); const fields = new FormData(e.currentTarget); const [entityId, interactionId] = interaction.split(':')
+      void command('/module-action', { entity_id: entityId, interaction_id: interactionId, source_event_seq: Number(fields.get('seq')), evidence_quote: fields.get('quote'), reason: fields.get('reason'), mode: 'confirm' })
+    }}><label>已发现对象的交互<select required value={interaction} onChange={e => setInteraction(e.target.value)}><option value="">选择原稿交互</option>{entities.filter(e => e.state !== 'hidden').flatMap(e => (e.interactions || []).map(r => <option key={`${e.id}:${String(r.id)}`} value={`${e.id}:${String(r.id)}`}>{e.title} · {String(r.instruction)}</option>))}</select></label><label>玩家行动事件序号<input name="seq" type="number" min={1} required /></label><label>引用玩家原话<textarea name="quote" maxLength={1000} required /></label><label>校对情境与依据<input name="reason" maxLength={500} required /></label><button disabled={busy || !interaction}>核对并确认交互</button></form></details>}
     {reviews.filter(r => r.status === 'pending').map(review => <ReviewEditor key={review.id} review={review} busy={busy} onResolve={(decision, body) => void command(`/review-requests/${review.id}/${decision}`, body)} />)}
     <details><summary>批准实体与隐藏状态 · 仅主机</summary>{entities.map(entity => <article className="entity-card" key={entity.id}><h4>{entityLabels[entity.type]} · {entity.title} · {entity.state}</h4><p>主机摘要：{entity.keeper_summary}</p><p>公开摘要：{entity.public_summary || '尚未填写，不能公开'}</p>{entity.state === 'hidden' ? <button disabled={busy || !entity.public_summary} onClick={() => void command(`/entities/${entity.id}/reveal`)}>主机公开实体</button> : <form onSubmit={e => { e.preventDefault(); const data = new FormData(e.currentTarget); void command(`/entities/${entity.id}/correct`, { public_summary: data.get('summary'), reason: data.get('reason') }) }}><label>修正后的公开摘要<textarea name="summary" defaultValue={entity.public_summary} required maxLength={1000} /></label><label>公开修正说明<input name="reason" required maxLength={400} /></label><button disabled={busy}>追加公开修正</button></form>}</article>)}</details>
     {reviews.some(r => r.status !== 'pending') && <details><summary>已处理审阅</summary>{reviews.filter(r => r.status !== 'pending').map(r => <p key={r.id}>{r.proposed_title} · {r.status} · {r.host_response}</p>)}</details>}

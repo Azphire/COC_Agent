@@ -680,6 +680,7 @@ class AgentRuntime(ActionRuntimeMixin):
                 "inspect_character",
                 "inspect_approved_entities",
                 "reveal_entity",
+                "apply_module_action",
                 "transition_scene",
                 "propose_module_fact",
                 "request_host_review",
@@ -740,6 +741,9 @@ class AgentRuntime(ActionRuntimeMixin):
                 "只有真人明确要求移动才可执行转场，检定请求本身不是移动请求。自然语言不能修改场景。"
                 "可用 module_node claim 引用本轮实际选中的 node_ids，visibility 必须 keeper_only。"
                 "公开事实仍只通过批准实体揭示。"
+                "获取物品、声音诱导、开锁和操作装置必须执行实体interactions中的"
+                "apply_module_action，复制interaction_id并引用玩家原话。"
+                "看见钥匙不代表持有钥匙；没有交互回执不能宣布获得物品、改变事件或到达结局。"
             )
         started = time.monotonic()
         try:

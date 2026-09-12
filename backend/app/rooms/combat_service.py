@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.agents.conversation import initial_state
 from app.persistence.agent_models import AgentCycle
 from app.persistence.room_models import RoomEvent, RoomMember
-from app.rooms.combat_schemas import Combatant, Weapon, unarmed
+from app.rooms.combat_schemas import Combatant, CombatTemplate, Weapon, unarmed
 from app.rooms.schemas import SessionStateV1
 from app.rooms.service import require
 from app.rules.check_options import luck_options
@@ -146,16 +146,81 @@ class CombatService:
             "host_only",
         )
 
-    async def ensure_members(self, session, room, state, scene):
+    async def ensure_members(self, session, room, state, scene, *, navigation=None):
+        nav = navigation or await self.agents.navigation.state(session, room.id)
         for slot in await self.rooms.slots(session, room):
-            if not slot.member_id or slot.member_id in state.combat.participants:
+            if not slot.member_id:
                 continue
             member = await session.get(RoomMember, slot.member_id)
             if (
                 member.active
                 and slot.character_snapshot.get("ruleset_id") == "coc7-character-creation"
             ):
-                state.combat.participants[member.id] = self.member_profile(slot, state, scene)
+                if member.id not in state.combat.participants:
+                    state.combat.participants[member.id] = self.member_profile(slot, state, scene)
+                elif nav is None:
+                    continue  # Legacy manually positioned encounters have no party navigator.
+                p = state.combat.participants[member.id]
+                p.scene_id = scene
+                p.scene_entity_id = scene if nav else None
+                p.scene_node_id = nav.current_scene_node_id if nav else None
+
+    async def sync_navigation(self, session, room, nav, snapshot):
+        """Move identities, never recreate their mutable resource state."""
+        state = load_state(room)
+        module = await self.agents.module(session, room.id)
+        scene = module.state["scene_id"]
+        await self.ensure_members(session, room, state, scene, navigation=nav)
+        bound = {
+            b.entity_id for b in snapshot.entity_bindings if b.node_id == nav.current_scene_node_id
+        }
+        for row in await self.agents.entities.rows(session, room.id):
+            raw = row.snapshot.get("combat_template")
+            if row.entity_type != "npc" or not raw:
+                continue
+            eid = row.source_entity_id
+            template = CombatTemplate.model_validate(raw)
+            if eid in state.module_runtime.following_npc_ids:
+                state.module_runtime.npc_locations[eid] = nav.current_scene_node_id
+            if eid in bound:
+                state.module_runtime.npc_locations.setdefault(eid, nav.current_scene_node_id)
+                if eid not in state.module_runtime.npc_counts:
+                    roll = await self.fixed(
+                        session, room, {"id": f"module-npc:{eid}"}, "count", formula=template.count
+                    )
+                    state.module_runtime.npc_counts[eid] = roll["total"]
+            location = state.module_runtime.npc_locations.get(eid)
+            for index in range(state.module_runtime.npc_counts.get(eid, 0)):
+                pid = f"module:{eid}:{index + 1}"
+                if pid not in state.combat.participants and not template.missing():
+                    state.combat.participants[pid] = Combatant(
+                        id=pid,
+                        npc_id=eid,
+                        label=row.snapshot["title"]
+                        + (f" {index + 1}" if template.count != "1" else ""),
+                        scene_id=scene,
+                        scene_node_id=location,
+                        scene_entity_id=scene,
+                        public=False,
+                        **template.model_dump(exclude={"count", "traits", "limitations"}),
+                    )
+                p = state.combat.participants.get(pid)
+                if p:
+                    p.scene_node_id = location
+                    if location == nav.current_scene_node_id:
+                        p.scene_id = p.scene_entity_id = scene
+                    p.public = row.state != "hidden" and location == nav.current_scene_node_id
+        store_state(room, state)
+
+    @staticmethod
+    def require_movement_ready(room):
+        state = load_state(room)
+        require(
+            not state.combat.pending_id
+            and not any(p.injury.con_pending for p in state.combat.participants.values()),
+            "请先完成攻击、防御和伤势结算，再移动",
+        )
+        require(not state.combat.active, "请先合理脱离或结束当前战斗，再移动")
 
     def order(self, combat, remaining=False):
         priority = []
@@ -1044,12 +1109,39 @@ class CombatService:
                 for k in ("id", "active", "round", "index", "pending_id", "turn_key")
             }
         )
-        allowed = {p.id for p in combat.participants.values() if identity.is_host or p.public}
+        module = await self.agents.module(session, room.id)
+        scene = module.state["scene_id"] if module else None
+        allowed = {
+            p.id
+            for p in combat.participants.values()
+            if identity.is_host or p.public and p.scene_id == scene
+        }
         result["order"] = [pid for pid in combat.order if pid in allowed]
         result["current_actor_id"] = (
             current_actor(combat) if current_actor(combat) in allowed else None
         )
         result["participants"] = {}
+        if identity.is_host:
+            result["unavailable_templates"] = []
+            nav = await self.agents.navigation.state(session, room.id)
+            for entity in await self.agents.entities.rows(session, room.id):
+                template = entity.snapshot.get("combat_template")
+                if (
+                    template
+                    and nav
+                    and state.module_runtime.npc_locations.get(entity.source_entity_id)
+                    == nav.current_scene_node_id
+                ):
+                    missing = CombatTemplate.model_validate(template).missing()
+                    if missing:
+                        result["unavailable_templates"].append(
+                            {
+                                "entity_id": entity.source_entity_id,
+                                "title": entity.snapshot["title"],
+                                "missing": missing,
+                                "source": template["source"],
+                            }
+                        )
         for pid, p in combat.participants.items():
             if pid not in allowed:
                 continue
@@ -1074,7 +1166,16 @@ class CombatService:
                     if full
                     else {}
                 ),
-                **({"source": p.source} if identity.is_host else {}),
+                **(
+                    {
+                        "source": p.source,
+                        "npc_id": p.npc_id,
+                        "scene_node_id": p.scene_node_id,
+                        "scene_entity_id": p.scene_entity_id,
+                    }
+                    if identity.is_host
+                    else {}
+                ),
             }
         action = combat.actions.get(combat.pending_id)
         result["pending"] = self.public_action(state, action, identity) if action else None

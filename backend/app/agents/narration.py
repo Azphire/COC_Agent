@@ -185,6 +185,10 @@ class NarrationValidator:
 
 
 def fallback_narration(intent_type, results, public_scene, *, rejected=False, brief=None):
+    if (brief or {}).get("resource_gate") == "unconfirmed_item" and not any(
+        e["type"] == "check.resolved" for e in results["events"]
+    ):
+        return "你检查了随身物品，但还没有完成确认物品所需的检定。"
     checks = [e["payload"] for e in results["events"] if e["type"] == "check.resolved"]
     transitions = [e["payload"] for e in results["events"] if e["type"] == "scene.updated"]
     reveals = [

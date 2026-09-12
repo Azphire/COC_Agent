@@ -74,6 +74,8 @@ class Combatant(DomainModel):
     npc_id: str | None = None
     team: str = "investigators"
     scene_id: str
+    scene_node_id: str | None = None
+    scene_entity_id: str | None = None
     public: StrictBool = True
     stats_public: StrictBool = False
     attributes: dict[str, Stat]
@@ -104,6 +106,49 @@ class Combatant(DomainModel):
             raise ValueError("HP或武器ID不合法")
         if any(w.skill not in self.skills for w in self.weapons):
             raise ValueError("武器技能必须来自角色数值")
+        return self
+
+
+class CombatTemplate(DomainModel):
+    """Immutable prepared numbers; missing original values stay explicitly unknown."""
+
+    source: str = Field(min_length=1, max_length=500)
+    attributes: dict[str, Stat] = Field(default_factory=dict)
+    skills: dict[str, Stat] = Field(default_factory=dict)
+    hp: Number | None = None
+    hp_max: Annotated[StrictInt, Field(ge=1, le=100_000)] | None = None
+    armor: Number | None = None
+    damage_bonus: str | None = None
+    weapons: list[Weapon] = Field(default_factory=list, max_length=20)
+    injury: Injury = Field(default_factory=Injury)
+    team: str = "module_npc"
+    stats_public: StrictBool = False
+    count: Literal["1", "1d3"] = "1"
+    traits: list[str] = Field(default_factory=list, max_length=12)
+    limitations: list[str] = Field(default_factory=list, max_length=12)
+
+    def missing(self):
+        return [
+            *[
+                key
+                for key in ("hp", "hp_max", "armor", "damage_bonus")
+                if getattr(self, key) is None
+            ],
+            *[key for key in ("dex", "con") if key not in self.attributes],
+            *([] if self.weapons else ["weapons"]),
+            *[w.skill for w in self.weapons if w.skill not in self.skills],
+            *self.limitations,
+        ]
+
+    @model_validator(mode="after")
+    def valid_complete_template(self):
+        if not self.missing():
+            Combatant(
+                id="validate",
+                label="validate",
+                scene_id="validate",
+                **self.model_dump(exclude={"count", "traits", "limitations"}),
+            )
         return self
 
 

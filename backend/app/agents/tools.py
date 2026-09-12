@@ -26,6 +26,7 @@ from app.persistence.agent_models import (
     ProfileRecord,
     ToolReceipt,
 )
+from app.preparation.runtime_schemas import ModuleActionArgs
 from app.preparation.schemas import EntityArgs, ProposalArgs
 from app.rooms.sanity_schemas import SanityRequest
 from app.rooms.service import RoomError, require
@@ -45,6 +46,10 @@ KEEPER, INVESTIGATOR, BOTH = (
     frozenset({"keeper", "investigator"}),
 )
 TOOLS = {
+    "apply_module_action": ToolDefinition(
+        ModuleActionArgs, KEEPER,
+        "执行实体中批准的交互；复制interaction_id并引用玩家本次行动原话，后端核对物品、事件及真实检定",
+    ),
     "request_sanity_check": ToolDefinition(
         SanityRequest,
         KEEPER,
@@ -359,6 +364,10 @@ class AgentTools:
             }
         if name == "search_module" and navigation:
             return await service.module_context.search(session, room, run, args)
+        if name == "apply_module_action":
+            from app.preparation.runtime import apply_interaction
+
+            return await apply_interaction(service, session, room, args, run=run)
         if name == "transition_scene" and navigation:
             if args.scene_id:
                 return await service.entities.transition(session, room, run, args.scene_id)

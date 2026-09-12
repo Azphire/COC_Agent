@@ -63,7 +63,11 @@ class ModuleContextResolver:
         current = nodes[state.current_scene_node_id]
         selected_nodes = scene_nodes(snapshot, current.node_id)
         candidate_blocks = [b for b in ir.blocks if b.node_id in selected_nodes]
-        entity_ids = {b.entity_id for b in snapshot.entity_bindings if b.node_id in selected_nodes}
+        from app.preparation.runtime import current_entity_ids
+
+        entity_ids = current_entity_ids(
+            snapshot, selected_nodes, room.session_state.get("module_runtime", {})
+        )
         entities = await self.agents.entities.host(session, room.id)
         relevant_ids = {e["id"] for e in public_entities}
         entities = [e for e in entities if e["id"] in entity_ids or e["id"] in relevant_ids]
@@ -132,6 +136,12 @@ class ModuleContextResolver:
             }
             for e in entities
         ]
+        runtime = room.session_state.get("module_runtime", {})
+        if runtime.get("flags") or runtime.get("inventory"):
+            module["interaction_state"] = {
+                "flags": runtime.get("flags", {}),
+                "held_items": list(runtime.get("inventory", {})),
+            }
         raw_size = sum(len(b.text) + 130 for b in candidate_blocks)
         long_scene = (
             len(json.dumps(module, ensure_ascii=False))
@@ -139,16 +149,6 @@ class ModuleContextResolver:
             + len(json.dumps(compact_entities, ensure_ascii=False))
             + len(json.dumps([t.model_dump() for t in outgoing], ensure_ascii=False))
         ) > budget
-        # Reserve outgoing navigation before spending the remaining budget on prose.
-        for transition in outgoing:
-            append(
-                "outgoing_transitions",
-                {
-                    **transition.model_dump(),
-                    "target_public_title": nodes[transition.target_scene_node_id].public_title,
-                    "available": transition.transition_id in state.available_transition_ids,
-                },
-            )
         query_tokens = set(tokens(recent_action))
         matched_titles = [
             e["title"] for e in entities if normalize(e["title"]) in normalize(recent_action)
@@ -160,6 +160,7 @@ class ModuleContextResolver:
             compact_entities.sort(
                 key=lambda e: (
                     -int(e["title"] in matched_titles),
+                    -len(query_tokens & set(tokens(e["title"]))),
                     {"npc": 0, "clue": 1, "location": 2, "item": 3, "scene": 4}[e["type"]],
                 )
             )
@@ -178,6 +179,22 @@ class ModuleContextResolver:
                     -len(query_tokens & set(tokens(b.text))),
                     b.source_order,
                 )
+            )
+        # Exact current-action entities must survive a small context budget.
+        # Full exit provenance remains in the frozen navigation snapshot/audit.
+        for entity in compact_entities:
+            if entity["title"] in matched_titles:
+                append("approved_entities", entity)
+        for transition in outgoing:
+            append(
+                "outgoing_transitions",
+                {
+                    "transition_id": transition.transition_id,
+                    "target_scene_node_id": transition.target_scene_node_id,
+                    "target_public_title": nodes[transition.target_scene_node_id].public_title,
+                    "condition_summary": transition.condition_summary[:160],
+                    "available": transition.transition_id in state.available_transition_ids,
+                },
             )
         # Keep room for entity and transition metadata in long scenes.
         reserve = min(900, max(0, budget // 3)) if long_scene else 0

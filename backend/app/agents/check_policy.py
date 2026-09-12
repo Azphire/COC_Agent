@@ -131,7 +131,14 @@ class CheckPolicyEvaluator:
             return decision(False, "wrong_actor", "只能为本次行动者请求检定")
         if intent.type in {"wait", "recall", "out_of_character"}:
             return decision(False, "routine_action", "等待、回顾和场外讨论不触发检定")
-        if target not in (facts.visible_entity_ids & facts.local_entity_ids) | {facts.scene_id}:
+        searchable = (
+            facts.searchable_entity_ids
+            if intent.type in {"investigate", "observe", "interact"}
+            else set()
+        )
+        if target not in ((facts.visible_entity_ids | searchable) & facts.local_entity_ids) | {
+            facts.scene_id
+        }:
             return decision(False, "not_visible", "目标不在当前场景可见范围")
         if p.clue_id and p.clue_id != target:
             return decision(False, "target_mismatch", "检定目标与关联实体不一致")

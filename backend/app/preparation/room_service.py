@@ -62,7 +62,13 @@ class RoomEntityService:
             for e in await self.rows(session, room_id)
             if e.state in {"revealed", "corrected"}
         ]
-        return await public_fact_scopes(self.agents, session, room_id, entities)
+        entities = await public_fact_scopes(self.agents, session, room_id, entities)
+        room = await self.rooms.room(session, room_id)
+        inventory = room.session_state.get("module_runtime", {}).get("inventory", {})
+        for entity in entities:
+            if entity["type"] == "item":
+                entity["held_by_member_id"] = inventory.get(entity["id"])
+        return entities
 
     async def host(self, session, room_id):
         return [{**e.snapshot, **self.public_view(e)} for e in await self.rows(session, room_id)]
@@ -214,10 +220,12 @@ class RoomEntityService:
             "approved_review_id"
         ):
             _, snapshot, _, local, _, _ = await self.agents.module_context.allowed(session, room)
+            from app.preparation.runtime import current_entity_ids
+
             require(
-                any(
-                    b.entity_id == entity.source_entity_id and b.node_id in local
-                    for b in snapshot.entity_bindings
+                entity.source_entity_id
+                in current_entity_ids(
+                    snapshot, local, room.session_state.get("module_runtime", {})
                 ),
                 "实体未绑定当前场景",
             )
@@ -302,6 +310,8 @@ class RoomEntityService:
             await self.agents.navigation.refresh(session, room, navigation, snapshot)
             navigation.updated_event_seq = event.seq
             await self.agents.navigation.persist(session, navigation)
+            if entity.entity_type == "npc":
+                await self.agents.combat.sync_navigation(session, room, navigation, snapshot)
         return {"entity_id": entity_id, "event_seq": event.seq}
 
     async def observe(self, session, room, entity, event, correction=False):
@@ -334,8 +344,24 @@ class RoomEntityService:
 
     async def correct(self, session, room, entity_id, body):
         entity = await self.entity(session, room.id, entity_id)
-        require(entity.state != "hidden", "只能修正已公开实体")
         if entity.frozen_public_summary == body.public_summary:
+            return self.public_view(entity)
+        if entity.state == "hidden":
+            # The host can narrow a disclosure to what was actually perceived
+            # before publishing it. This does not reveal or activate the entity.
+            entity.frozen_public_summary = body.public_summary
+            self.rooms.append(
+                session,
+                room,
+                "entity.disclosure_reviewed",
+                room.host_member_id,
+                {
+                    "entity_id": entity_id,
+                    "reason": body.reason,
+                    "public_summary": body.public_summary,
+                },
+                "host_only",
+            )
             return self.public_view(entity)
         entity.frozen_public_summary, entity.state = body.public_summary, "corrected"
         event = self.rooms.append(

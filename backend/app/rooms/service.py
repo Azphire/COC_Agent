@@ -148,6 +148,7 @@ class RoomService:
         }
         if not identity.is_host:
             state["combat"] = {}
+            state["module_runtime"] = {}
         return {
             "id": room.id,
             "name": room.name,
@@ -652,6 +653,8 @@ class RoomService:
             require(body.expected_revision == room.revision, "房间已更新，请重新加载状态后编辑")
             previous_state = SessionStateV1.model_validate(room.session_state)
             require(body.state.combat == previous_state.combat, "战斗状态请使用战斗结算接口", 422)
+            require(body.state.module_runtime == previous_state.module_runtime,
+                    "物品、事件与结局请使用批准模组交互接口", 422)
             require(
                 body.state.luck_spending == previous_state.luck_spending,
                 "幸运可选规则请使用检定规则配置接口",

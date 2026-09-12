@@ -7,6 +7,7 @@ from app.api.agents import Service, Token, host
 from app.api.preparation import host_command
 from app.module_ir import schemas as s
 from app.persistence.agent_models import AgentCycle
+from app.preparation.runtime_schemas import HostModuleAction
 from app.rooms.service import RoomError, require
 
 router = APIRouter(prefix="/api")
@@ -137,6 +138,7 @@ async def navigation(room_id: UUID, svc: Service, token: Token):
                 session, room, "keeper", budget=3000, persist_selection=False
             )
             snapshot, _ = await svc.navigation.snapshot(session, state)
+            await svc.navigation.refresh(session, room, state, snapshot)
             cycle = await session.scalar(
                 select(AgentCycle)
                 .where(AgentCycle.room_id == room.id)
@@ -155,6 +157,7 @@ async def navigation(room_id: UUID, svc: Service, token: Token):
                 "enabled": True,
                 **state.model_dump(mode="json"),
                 "context": context,
+                "runtime": room.session_state.get("module_runtime", {}),
                 "last_cycle_audit": {k: v for k, v in cycle.state.items() if k in audit_keys}
                 if cycle
                 else None,
@@ -204,4 +207,16 @@ async def host_search(room_id: UUID, body: s.ModuleSearchArgs, svc: Service, tok
         room_id,
         token,
         lambda session, room: svc.module_context.search(session, room, None, body, host=True),
+    )
+
+
+@router.post("/rooms/{room_id}/module-action")
+async def module_action(room_id: UUID, body: HostModuleAction, svc: Service, token: Token):
+    from app.preparation.runtime import apply_interaction
+
+    return await host_command(
+        svc,
+        room_id,
+        token,
+        lambda session, room: apply_interaction(svc, session, room, body, host=True),
     )

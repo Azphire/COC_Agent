@@ -117,6 +117,7 @@ async def drive_combat(runtime, state):
                 pid
                 for pid in (data.combat.order if data.combat.active else data.combat.participants)
                 if pid != actor
+                and data.combat.participants[pid].scene_id == module.state["scene_id"]
                 and data.combat.participants[pid].public
                 and not public["participants"].get(pid, {}).get("incapacitated")
             ],

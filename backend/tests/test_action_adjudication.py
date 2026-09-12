@@ -48,6 +48,65 @@ def facts_for(text):
     )
 
 
+def test_explicit_destination_overrides_wrong_model_exit_and_policy_checks_it():
+    from app.agents.generation_contracts import generation_contract, restore_output
+
+    raw = "我们迅速前往先头车厢。跨过门后关闭连接2号车厢的门。"
+    exits = [
+        {
+            "transition_id": "forward",
+            "target_scene_node_id": "cab",
+            "target_public_title": "先头车厢",
+            "approved": True,
+        },
+        {
+            "transition_id": "back",
+            "target_scene_node_id": "rear",
+            "target_public_title": "3号车厢",
+            "approved": True,
+        },
+    ]
+    facts = facts_for(raw)
+    facts.transitions = {t["transition_id"]: t for t in exits}
+    wrong = plan_for(raw, "move", "rear")
+    assert (
+        ActionPolicyValidator().validate_intent(wrong.parsed_intent, wrong, facts)[0]
+        == "clarification_required"
+    )
+    context = {
+        "action_identifiers": {
+            "plan_id": "plan",
+            "cycle_id": "cycle",
+            "actor_member_id": "actor",
+            "actor_character_slot_id": "slot",
+            "current_scene_id": "scene",
+            "expected_navigation_revision": 0,
+        },
+        "triggering_action": {"seq": 1, "payload": {"text": raw}},
+        "approved_exits": exits,
+    }
+    schema = generation_contract(KeeperPlan, context)
+    result = restore_output(
+        schema(
+            parsed_intent={"type": "move"},
+            focus={"action_clause_ids": ["u1"], "action_target_id": "rear"},
+            proposed_transition_id="back",
+        ),
+        KeeperPlan,
+        context,
+    )
+    assert result.proposed_transition_id == "forward"
+    assert result.focus.action_target_id == "cab"
+    correct = plan_for(raw, "move", "cab")
+    assert ActionPolicyValidator().validate_intent(correct.parsed_intent, correct, facts) is None
+    facts.raw_text = "我前往先头车厢，然后返回3号车厢。"
+    correct.parsed_intent.evidence_quote = facts.raw_text
+    assert (
+        ActionPolicyValidator().validate_intent(correct.parsed_intent, correct, facts)[0]
+        == "clarification_required"
+    )
+
+
 @pytest.mark.parametrize(
     "kind",
     [

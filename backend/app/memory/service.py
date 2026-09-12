@@ -146,7 +146,12 @@ async def build_context(
         if narrator:
             cards.append({"member_id": slot.member_id, **slot.public_summary})
         elif keeper or slot.member_id == binding.member_id:
-            card = slot.character_snapshot
+            from app.rules.checks import available_skills
+
+            card = {
+                **slot.character_snapshot,
+                "skill_values": available_skills(slot.character_snapshot),
+            }
             cards.append(
                 {
                     "member_id": slot.member_id,

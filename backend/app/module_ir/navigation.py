@@ -162,6 +162,17 @@ class ModuleNavigationService:
         return state
 
     async def conditions(self, session, room, state, transition):
+        from app.rooms.combat_service import load_state
+
+        runtime = load_state(room).module_runtime
+        if runtime.outcome or runtime.pending_outcome:
+            return False
+        if transition.target_scene_node_id in runtime.blocked_scene_node_ids:
+            return False
+        if not all(runtime.flags.get(k, False) == v for k, v in transition.required_flags.items()):
+            return False
+        if not set(transition.required_item_ids) <= set(runtime.inventory):
+            return False
         if not set(transition.required_revealed_entity_ids) <= set(state.revealed_entity_ids):
             return False
         event_types = set(
@@ -171,15 +182,15 @@ class ModuleNavigationService:
 
     async def refresh(self, session, room, state, snapshot):
         rows = await self.agents.entities.rows(session, room.id)
-        bound = {
-            b.entity_id
-            for b in snapshot.entity_bindings
-            if b.node_id == state.current_scene_node_id
-        }
+        from app.preparation.runtime import current_entity_ids
+
+        bound = current_entity_ids(
+            snapshot, [state.current_scene_node_id], room.session_state.get("module_runtime", {})
+        )
         state.active_npc_entity_ids = [
             e.source_entity_id
             for e in rows
-            if e.source_entity_id in bound and e.entity_type == "npc"
+            if e.source_entity_id in bound and e.entity_type == "npc" and e.state != "hidden"
         ]
         state.active_location_entity_ids = [
             e.source_entity_id
@@ -257,6 +268,7 @@ class ModuleNavigationService:
             ],
         }
         shell.state = {**shell.state, "scene_id": public_id}
+        await self.agents.combat.sync_navigation(session, room, state, snapshot)
 
     async def transition(self, session, room, request, run=None, host=False, reviewed=False):
         require(room.status in {"lobby", "running", "paused"}, "房间已结束，不能转换场景")
@@ -365,6 +377,12 @@ class ModuleNavigationService:
                 "code": "transition_waiting_host_review",
             }
         else:
+            self.agents.combat.require_movement_ready(room)
+            runtime = room.session_state.get("module_runtime", {})
+            require(
+                not runtime.get("pending_outcome") and not runtime.get("outcome"),
+                "当前终幕须先结算；已结束模组不能继续转场",
+            )
             source_id = state.current_scene_node_id
             state.previous_scene_node_id, state.current_scene_node_id = source_id, target.node_id
             if target.node_id not in state.visited_scene_node_ids:

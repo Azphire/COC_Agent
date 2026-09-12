@@ -1,6 +1,7 @@
 """Bounded draft generation, evidence provenance and explicit host approval."""
 
 import asyncio
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -207,7 +208,25 @@ class PreparationService:
             prep.status = "review_ready"
 
     async def validation_errors(self, session, prep, entity):
+        from app.module_ir.parser import stable_id
         from app.rules.sanity import RULE_SOURCE
+
+        blocks = entity.document.get("source_block_ids", [])
+        rules = [
+            *entity.document.get("interactions", []),
+            *entity.document.get("check_adjustments", []),
+        ]
+        if blocks or rules:
+            ir = self.agents.structure.repository.get(
+                stable_id("ir1_", prep.source_id, prep.source_hash)
+            )
+            if not ir or not set(blocks) <= {b.block_id for b in ir.blocks}:
+                return ["实体来源区块不属于当前原稿"]
+            if any(not set(r["source_block_ids"]) <= set(blocks) for r in rules):
+                return ["交互必须引用实体的已核对来源区块"]
+        if entity.document.get("combat_template"):
+            if not blocks or not entity.document.get("reviewed_by"):
+                return ["战斗模板必须有来源区块及实际校对者"]
 
         for effect in entity.document.get("sanity_effects", []):
             if effect["source"] == RULE_SOURCE:
@@ -249,6 +268,21 @@ class PreparationService:
             if i in evidence
         ):
             errors.append("source_hash_mismatch")
+        for supplement in entity.document.get("additional_evidence", []):
+            extra_run = await session.get(GenerationRun, supplement["generation_run_id"])
+            extra_evidence = {e["evidence_id"]: e for e in extra_run.evidence} if extra_run else {}
+            if (
+                not extra_run
+                or extra_run.preparation_id != prep.id
+                or not set(supplement["evidence_ids"]) <= extra_evidence.keys()
+                or any(
+                    (extra_evidence[i]["source_id"], extra_evidence[i]["source_hash"])
+                    != (prep.source_id, prep.source_hash)
+                    for i in supplement["evidence_ids"]
+                    if i in extra_evidence
+                )
+            ):
+                errors.append("cross_segment_evidence_invalid")
         pages = {evidence[i]["physical_page"] for i in ids if i in evidence}
         if not set(entity.document["source_pages"]) <= pages:
             errors.append("source_page_mismatch")
@@ -270,7 +304,17 @@ class PreparationService:
                     "generated_by": "host",
                     "host_edited": False,
                     "validation_errors": [],
-                    "source_references": [],
+                    "source_references": [
+                        {
+                            "source_id": prep.source_id,
+                            "source_hash": prep.source_hash,
+                            "source_title": self.repository.source(prep.source_id).title,
+                            "physical_page": page,
+                            "page_kind": "word",
+                        }
+                        for page in body.source_pages
+                        if body.source_block_ids
+                    ],
                 },
             )
             session.add(entity)
@@ -288,6 +332,8 @@ class PreparationService:
                 updates = self.safe(body.model_dump(exclude_unset=True, exclude_none=True))
                 if "check_stats" in body.model_fields_set and body.check_stats is None:
                     updates["check_stats"] = None
+                if "combat_template" in body.model_fields_set and body.combat_template is None:
+                    updates["combat_template"] = None
                 fields = {
                     k: entity.document[k]
                     for k in s.EntityFields.model_fields
@@ -368,6 +414,24 @@ class PreparationService:
                     422,
                 )
                 condition = entity.document["reveal_conditions"]
+                for rule in entity.document.get("interactions", []):
+                    refs = {
+                        *rule["required_item_ids"],
+                        *rule["required_entity_ids"],
+                        *rule["acquire_item_ids"],
+                        *rule["reveal_entity_ids"],
+                        *rule["following_npc_ids"],
+                        *(r["entity_id"] for r in rule.get("required_sanity", [])),
+                    }
+                    require(refs <= approved.keys(), "交互引用未批准实体", 422)
+                    require(
+                        all(
+                            approved[i].type == "item"
+                            for i in [*rule["required_item_ids"], *rule["acquire_item_ids"]]
+                        ),
+                        "物品条件必须引用item",
+                        422,
+                    )
                 require(
                     set(condition["required_entity_ids"]) <= approved.keys(),
                     "公开条件引用了未批准实体",
@@ -430,7 +494,7 @@ class PreparationService:
                 "knowledge_missing：来源版本不可用",
             )
             prep.status = "extracting"
-            prep.document = {**prep.document, "safe_error": None, "completed_batches": 0}
+            prep.document = {**prep.document, "safe_error": None}
         self.generating.add(preparation_id)
         task = asyncio.create_task(self.generate(preparation_id))
         self.tasks.add(task)
@@ -454,11 +518,18 @@ class PreparationService:
             budget = min(4200, settings.model_context_limit - output_limit - 2200)
             require(budget >= 1400, "生成上下文预算不足", 422)
             batches, batch = [], []
+            section = None
             for chunk in chunks:
+                chunk_section = (chunk["file_reference"], chunk["section"])
+                if batch and chunk_section != section:
+                    batches.append(batch)
+                    batch = []
+                section = chunk_section
                 for start in range(0, len(chunk["display_text"]), 400):
+                    key = f"{prep.source_hash}:{chunk['chunk_id']}:{start}"
                     evidence = {
                         **source_ref,
-                        "evidence_id": "ev_" + uuid4().hex,
+                        "evidence_id": "ev_" + hashlib.sha256(key.encode()).hexdigest()[:32],
                         "chunk_id": chunk["chunk_id"],
                         "offset": start,
                         "physical_page": chunk["physical_page"],
@@ -474,18 +545,44 @@ class PreparationService:
                     batch.append(evidence)
             if batch:
                 batches.append(batch)
-            require(
-                batches and len(batches) <= MAX_BATCHES,
-                "范围超过三批生成预算，请缩小页码或章节范围",
-                422,
-            )
+            require(batches, "所选范围没有文本", 422)
             async with self.rooms.transaction() as session:
                 prep = await self.get(session, preparation_id)
-                prep.document = {**prep.document, "total_batches": len(batches)}
+                completed = {
+                    tuple(e["evidence_id"] for e in run.evidence)
+                    for run in await session.scalars(
+                        select(GenerationRun).where(
+                            GenerationRun.preparation_id == prep.id,
+                            GenerationRun.status == "completed",
+                        )
+                    )
+                }
+                prep.document = {
+                    **prep.document,
+                    "total_batches": len(batches),
+                    "completed_batches": sum(
+                        tuple(e["evidence_id"] for e in batch) in completed for batch in batches
+                    ),
+                    "generation_coverage": "evidence_processed_only",
+                }
             calls = 0
-            for evidence in batches:
+            for batch_index, evidence in enumerate(batches):
+                # Each serial segment retains the original three-batch/six-call ceiling.
+                # Successful batches survive retries and process restarts.
+                if batch_index % MAX_BATCHES == 0:
+                    calls = 0
+                if tuple(e["evidence_id"] for e in evidence) in completed:
+                    continue
                 run_id = str(uuid4())
                 async with self.rooms.transaction() as session:
+                    prep = await self.get(session, preparation_id)
+                    require(prep.status == "extracting", "来源已变更，停止生成")
+                    catalog = [
+                        {"id": e.id, "type": e.type, "title": e.document["title"]}
+                        for e in await self.entities(session, preparation_id)
+                        if e.status != "rejected"
+                        and any(e.document["title"] in item["excerpt"] for item in evidence)
+                    ][:12]
                     session.add(
                         GenerationRun(
                             id=run_id,
@@ -516,9 +613,9 @@ class PreparationService:
                                 "每个实体必须引用本批给出的 evidence_id，不编造证据、页码或事实。"
                                 "local_id 是本批唯一短名称，关系用 local_id 引用实体。"
                                 "类型仅 scene/npc/location/clue/item，"
-                                "若证据支持，生成开场所需的1个scene、1个location、"
-                                "1个npc或item以及2个clue；不要只列出地名。"
-                                "优先最早的开始地点及其可调查物品，不提前挑选后续场景或谜底。"
+                                "逐段覆盖本段实际场景、人物、线索、物品、遭遇和结局，不偏向开场。"
+                                "同一NPC或物品跨段再次出现时，在existing_entities中找到确定的同一实体，"
+                                "复制其id到existing_entity_id；不确定是否同一实体则留空，不能编造ID。"
                                 "keeper_summary 保留私密信息；"
                                 "public_summary 必须显式填写，写该实体被揭示时玩家看到的"
                                 "简短具体描述；clue只写可见线索，不写背后谜底或动机；"
@@ -528,7 +625,10 @@ class PreparationService:
                         },
                         {
                             "role": "user",
-                            "content": json.dumps({"evidence": evidence}, ensure_ascii=False),
+                            "content": json.dumps(
+                                {"evidence": evidence, "existing_entities": catalog},
+                                ensure_ascii=False,
+                            ),
                         },
                     ],
                     response_schema=s.GenerationOutput,
@@ -588,7 +688,7 @@ class PreparationService:
         mapping = {}
         for draft in output.entities:
             document = {
-                **draft.model_dump(exclude={"local_id"}),
+                **draft.model_dump(exclude={"local_id", "existing_entity_id"}),
                 "generated_by": "model",
                 "host_edited": False,
                 "source_references": [
@@ -620,7 +720,20 @@ class PreparationService:
             fingerprint = re.sub(r"[^\w]", "", normalize(draft.title))
             chunks = {evidence[i]["chunk_id"] for i in draft.evidence_ids if i in evidence}
             duplicate = None
+            if draft.existing_entity_id:
+                duplicate = next((e for e in existing if e.id == draft.existing_entity_id), None)
+                require(
+                    duplicate
+                    and duplicate.type == draft.type
+                    and duplicate.status != "rejected"
+                    and re.sub(r"[^\w]", "", normalize(duplicate.document["title"])) == fingerprint
+                    and not document["validation_errors"],
+                    "跨段实体引用必须匹配同任务的已知实体及本段证据",
+                    422,
+                )
             for prior in existing:
+                if duplicate:
+                    break
                 if (
                     prior.type != draft.type
                     or prior.status == "rejected"
@@ -648,6 +761,22 @@ class PreparationService:
             if not duplicate:
                 session.add(entity)
                 existing.append(entity)
+            else:
+                # Retain reviewed fields and primary evidence; append independently validated
+                # provenance instead of replacing the original generation run.
+                added = duplicate.document.get("additional_evidence", [])
+                if not any(e["generation_run_id"] == run_id for e in added):
+                    duplicate.document = {
+                        **duplicate.document,
+                        "additional_evidence": [
+                            *added,
+                            {
+                                "generation_run_id": run_id,
+                                "evidence_ids": draft.evidence_ids,
+                                "source_references": document["source_references"],
+                            },
+                        ],
+                    }
         await session.flush()
         for draft in output.relations:
             if draft.source_entity_id not in mapping or draft.target_entity_id not in mapping:
@@ -657,6 +786,28 @@ class PreparationService:
                 if draft.evidence_ids and set(draft.evidence_ids) <= evidence.keys()
                 else ["evidence_not_in_generation_run"]
             )
+            prior = await session.scalar(
+                select(ModuleEntityRelation).where(
+                    ModuleEntityRelation.preparation_id == prep.id,
+                    ModuleEntityRelation.source_entity_id == mapping[draft.source_entity_id],
+                    ModuleEntityRelation.target_entity_id == mapping[draft.target_entity_id],
+                    ModuleEntityRelation.relation_type == draft.relation_type,
+                )
+            )
+            if prior:
+                if not errors:
+                    added = prior.document.get("additional_evidence", [])
+                    prior.document = {
+                        **prior.document,
+                        "additional_evidence": [
+                            *added,
+                            {
+                                "generation_run_id": run_id,
+                                "evidence_ids": draft.evidence_ids,
+                            },
+                        ],
+                    }
+                continue
             session.add(
                 ModuleEntityRelation(
                     id=str(uuid4()),

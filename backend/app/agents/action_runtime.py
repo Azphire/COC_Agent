@@ -44,6 +44,9 @@ PLAN_INSTRUCTION = (
     "incidental_memories是先前公开的KP即兴，保留说话人和地点以便续聊，不能当作关键发现；私有知识仍受公开条件限制。"
     "conversation_parent是等待事项：放弃未掷尝试填pending_action=withdraw，改方法replace，独立交流independent，依赖原结果defer；同句问题仍保留。"
     "发现和转场必须对应当前动作与批准条件；proposed_transition_id从approved_exits选，旧模组用已有移动工具。"
+    "module_interactions列出当前批准交互。拿物品、开锁、操作装置、诱导怪物时，"
+    "在proposed_tool_calls填apply_module_action，arguments填entity_id、interaction_id及本轮evidence_quote。"
+    "发现物品不代表已持有；无交互回执不能宣布获得物品、解锁或结局。host_review=true的特殊方法先交KP确认。"
     "只回顾用recall，规则用out_of_character。不能替其他人行动或凭空创造关键事实、成功、出口、资源。"
     "普通裁决不需主机审批。服务端绑定元数据；不重复工具与高层提案。"
 )
@@ -76,6 +79,45 @@ TEAMMATE_INSTRUCTION = (
     "act/assist只描述自己的尝试，后续由KP裁决，不宣布成功或控制其他角色。集体移动先征询玩家。简短目标不能包含新事实。若有behavior_rejection只修复一次。"
     "speech_text只写自己说的话，action_text只写自己的具体尝试，不能在两处重复同一句话。"
 )
+
+
+def planning_prompt(context):
+    """Keep audit data in the run ledger without spending action prompt space twice."""
+    result = {
+        k: v
+        for k, v in context.items()
+        if k != "module_context_audit" and (v not in (None, [], {}) or k == "approved_exits")
+    }
+    if context.get("structure_navigation"):
+        # Visibility/scope is already carried by the actual fact candidates and
+        # approved entity summaries; the full projection remains in the run audit.
+        result.pop("public_entities", None)
+        result["previous_attempts"] = [
+            {
+                **{k: v for k, v in a.items() if k not in {"attempt_purpose", "result"}},
+                "result": {k: v for k, v in (a.get("result") or {}).items() if k != "display_text"},
+            }
+            for a in context.get("previous_attempts", [])
+        ]
+        if context.get("module_context_audit"):
+            result["module_context_audit"] = {
+                "navigation_revision": context["module_context_audit"].get("navigation_revision", 0)
+            }
+        result["triggering_action"] = {
+            k: v
+            for k, v in context["triggering_action"].items()
+            if k not in {"occurred_at", "client_request_id", "visibility"}
+        }
+        result["module"] = {
+            k: v
+            for k, v in context.get("module", {}).items()
+            if k not in {"ancestors", "public_introduction"}
+        }
+        if context.get("current_participants"):
+            result["current_participants"] = {
+                k: v for k, v in context["current_participants"].items() if k != "assignments"
+            }
+    return result
 
 
 class ActionRuntimeMixin:
@@ -424,7 +466,17 @@ class ActionRuntimeMixin:
                         )
                     }
                     for c in facts.completed_checks[-6:]
-                    if c.get("target_member_id") == facts.actor_member_id and not c.get("sanity")
+                    if c.get("target_member_id") == facts.actor_member_id
+                    and not c.get("sanity")
+                    and (
+                        not c.get("policy_target_id")
+                        or c["policy_target_id"] in facts.local_entity_ids | {facts.scene_id}
+                        or (
+                            facts.approved_entities.get(c["policy_target_id"], {}).get("title")
+                            or "\0"
+                        )
+                        in facts.raw_text
+                    )
                 ]
                 for attempt in context["previous_attempts"]:
                     if isinstance(attempt.get("result"), dict):
@@ -442,7 +494,7 @@ class ActionRuntimeMixin:
                         "title": facts.approved_entities[eid]["title"],
                         "type": facts.approved_entities[eid]["type"],
                     }
-                    for eid in sorted(facts.visible_entity_ids)
+                    for eid in sorted(facts.visible_entity_ids | facts.searchable_entity_ids)
                     if eid in facts.approved_entities
                 ]
                 from app.module_ir.facts import explicit_recall, recalling
@@ -468,6 +520,61 @@ class ActionRuntimeMixin:
                     if eid in facts.local_entity_ids
                     and eid not in facts.revealed_entity_ids
                     and entity_access(e) != "automatic"
+                ]
+                for character in context.get("characters", []):
+                    if character.get("member_id") == facts.actor_member_id:
+                        luck = character.get("runtime", {}).get("luck")
+                        if luck is not None:
+                            character["effective_attributes"] = {
+                                **character.get("effective_attributes", {}),
+                                "luck": luck,
+                            }
+                from app.knowledge.text import tokens
+
+                action_terms = set(tokens(facts.raw_text))
+                interaction_entities = [
+                    (eid, e)
+                    for eid, e in facts.approved_entities.items()
+                    if eid in facts.local_entity_ids
+                    and eid in facts.revealed_entity_ids
+                    and e.get("interactions")
+                    and action_terms & set(tokens(e["title"]))
+                ]
+                interaction_entities.sort(
+                    key=lambda pair: -len(action_terms & set(tokens(pair[1]["title"])))
+                )
+                module_state = room.session_state.get("module_runtime", {})
+
+                def relevant_interactions(entity):
+                    rules = [
+                        r
+                        for r in entity.get("interactions", [])
+                        if all(
+                            module_state.get("flags", {}).get(k, False) == v
+                            for k, v in r.get("required_flags", {}).items()
+                        )
+                        and set(r.get("required_item_ids", []))
+                        <= set(module_state.get("inventory", {}))
+                        and set(r.get("required_entity_ids", [])) <= facts.revealed_entity_ids
+                    ]
+                    return sorted(
+                        rules, key=lambda r: -len(action_terms & set(tokens(r["instruction"])))
+                    )[:3]
+
+                context["module_interactions"] = [
+                    {
+                        "entity_id": eid,
+                        "title": e["title"],
+                        "interactions": [
+                            {
+                                "id": r["id"],
+                                "instruction": r["instruction"][:160],
+                                "host_review": r["host_review"],
+                            }
+                            for r in relevant_interactions(e)
+                        ],
+                    }
+                    for eid, e in interaction_entities[:2]
                 ]
                 # Pure recall already forbids checks; its context needs no opponents.
                 if not explicit_recall(facts.raw_text):
@@ -514,7 +621,12 @@ class ActionRuntimeMixin:
                 context["approved_exits"] = [
                     {
                         k: t.get(k)
-                        for k in ("transition_id", "target_scene_node_id", "target_entity_id")
+                        for k in (
+                            "transition_id",
+                            "target_scene_node_id",
+                            "target_entity_id",
+                            "target_public_title",
+                        )
                     }
                     for t in list(facts.transitions.values())[:8]
                     if explicit_movement(facts.raw_text)
@@ -570,6 +682,20 @@ class ActionRuntimeMixin:
                     withdrawal=cycle.state.get("withdrawal_result"),
                 )
                 context["response_brief"] = brief
+                target = doc.plan.parsed_intent.target_id
+                row = next(
+                    (
+                        e
+                        for e in await self.service.entities.rows(session, room.id)
+                        if e.source_entity_id == target and e.entity_type == "item"
+                    ),
+                    None,
+                )
+                if row and row.state == "hidden":
+                    brief["resource_gate"] = "unconfirmed_item"
+                    brief["resource_instruction"] = (
+                        "物品尚未通过所需检定确认，不能宣称它在身上或已经取得；旧即兴不是物品依据。"
+                    )
                 context["PUBLIC_CLAIM_OPTIONS"] = selected
                 for key in (
                     "events",
@@ -621,6 +747,8 @@ class ActionRuntimeMixin:
 
             def context_size():
                 measured = run.context
+                if schema is KeeperPlan:
+                    measured = planning_prompt(measured)
                 if schema is KeeperNarration:
                     # These are the actual prompt fields below. The rest is verification data.
                     measured = {
@@ -635,12 +763,41 @@ class ActionRuntimeMixin:
                         )
                         if k in measured
                     }
-                return len(json.dumps(measured, ensure_ascii=False))
+                return len(json.dumps(measured, ensure_ascii=False, separators=(",", ":")))
 
             if schema is KeeperPlan:
                 # Speaking style belongs to the public reply, not adjudication.
                 run.context = {k: v for k, v in run.context.items() if k != "profile"}
                 module_context = dict(run.context.get("module", {}))
+                if run.context.get("structure_navigation"):
+                    # Full source/approval metadata stays in the retrieval audit. Reserve
+                    # the same prompt budget for the current action and its actual rules.
+                    module_context["outgoing_transitions"] = [
+                        {
+                            k: t[k]
+                            for k in (
+                                "transition_id",
+                                "target_scene_node_id",
+                                "target_public_title",
+                                "condition_summary",
+                                "available",
+                            )
+                            if k in t
+                        }
+                        for t in module_context.get("outgoing_transitions", [])
+                    ]
+                    run.context["check_requirements"] = [
+                        {
+                            **{k: v for k, v in r.items() if k not in {"task_scope", "conditions"}},
+                            "conditions": {
+                                k: v
+                                for k, v in r.get("conditions", {}).items()
+                                if v and k not in {"successful_check", "access_policy"}
+                            },
+                        }
+                        for r in run.context.get("check_requirements", [])
+                    ]
+                    run.context = {**run.context, "module": module_context}
                 if "approved_entities" in module_context:
                     compact_entities = []
                     for entity in module_context["approved_entities"]:
@@ -727,6 +884,19 @@ class ActionRuntimeMixin:
                     **run.context,
                     "incidental_memories": run.context["incidental_memories"][:-1],
                 }
+            # Older prose is optional when current rules/receipts fill the budget.
+            # Durable memories remain available to later relevant actions.
+            for key in ("incidental_memories", "recent_dialogue"):
+                while run.context.get(key) and context_size() > budget:
+                    run.context = {**run.context, key: run.context[key][1:]}
+            if context_size() > budget:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Action context exceeds %s: %s",
+                    budget,
+                    {k: len(json.dumps(v, ensure_ascii=False)) for k, v in run.context.items()},
+                )
             require(
                 context_size() <= budget,
                 "当前行动资料超过上下文预算，请主机缩小场景资料",
@@ -782,9 +952,22 @@ class ActionRuntimeMixin:
         from app.agents.generation_contracts import generation_contract, restore_output
 
         async def validate_narration(output):
+            from pydantic import ValidationError
+
+            from app.models.ollama import ModelFormatError
+
+            try:
+                restored = restore_output(output, schema, context)
+            except ValidationError as error:
+                raise ModelFormatError(
+                    "计划恢复失败，请填写完整focus与实际行动依据",
+                    [
+                        {"field": ".".join(str(p) for p in item["loc"]), "code": item["type"]}
+                        for item in error.errors()
+                    ],
+                ) from None
             if schema is not KeeperNarration:
                 return
-            from app.models.ollama import ModelFormatError
 
             async with self.rooms.database.sessions() as session:
                 from app.persistence.room_models import GameRoom
@@ -793,15 +976,15 @@ class ActionRuntimeMixin:
                 run = await session.get(AgentRun, run_id)
                 cycle = await session.get(AgentCycle, state["cycle_id"])
                 try:
-                    await self.validate_narration_output(
-                        session, room, cycle, run, restore_output(output, schema, context)
-                    )
+                    await self.validate_narration_output(session, room, cycle, run, restored)
                 except RoomError as error:
                     raise ModelFormatError(
                         "叙事校验失败", [{"field": "public_narration", "code": error.message}]
                     ) from None
 
         prompt_context = context
+        if schema is KeeperPlan:
+            prompt_context = planning_prompt(context)
         if schema is KeeperNarration:
             prompt_context = {
                 k: context[k]
@@ -827,10 +1010,15 @@ class ActionRuntimeMixin:
                     )
                     + "\n只处理这句的新意图，旧对话中已处理的动作不再执行。",
                 },
-                {"role": "user", "content": json.dumps(prompt_context, ensure_ascii=False)},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        prompt_context, ensure_ascii=False, separators=(",", ":")
+                    ),
+                },
             ],
             response_schema=generation_contract(schema, context),
-            validate_output=validate_narration if schema is KeeperNarration else None,
+            validate_output=validate_narration if schema in {KeeperNarration, KeeperPlan} else None,
             max_attempts=1 if schema is TeammateDecision else 2,
             on_call=consume,
             on_result=self.call_recorder(state["room_id"], run_id),
@@ -871,7 +1059,8 @@ class ActionRuntimeMixin:
             KeeperPlan,
             PLAN_INSTRUCTION
             + "可用proposed_tool_calls：get_current_scene({})、open_module_node({node_id})、"
-            "inspect_approved_entities({})、inspect_character({member_id})、search_rules({query})。"
+            "inspect_approved_entities({})、inspect_character({member_id})、search_rules({query})、"
+            "apply_module_action({entity_id,interaction_id,evidence_quote})。"
             "普通资料留白交给公开回应适度即兴；核心事实变更仍按原审阅机制。无需重复输出检定、揭示和转场工具。",
         )
 
@@ -1347,6 +1536,7 @@ class ActionRuntimeMixin:
             and e["type"]
             in {
                 "check.resolved",
+                "module.interaction",
                 "entity.revealed",
                 "clue.revealed",
                 "scene.updated",
@@ -1385,6 +1575,7 @@ class ActionRuntimeMixin:
                         "title",
                         "public_summary",
                         "status",
+                        "text",
                     }
                 },
             }
@@ -1427,6 +1618,12 @@ class ActionRuntimeMixin:
         )
         public_material = "\n".join(e["public_summary"] for e in public.values())
         brief = run.context.get("response_brief", {})
+        if brief.get("resource_gate") == "unconfirmed_item":
+            require(
+                not re.search(r"还在|仍在|拿到了|拿好了|已找到|已经找到|收好|揣入|装进", text),
+                "物品尚未实际确认，不能沿用旧即兴宣布取得",
+                422,
+            )
         if brief and not brief.get("attempt"):
             require(
                 not re.search(

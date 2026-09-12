@@ -171,6 +171,8 @@ class SceneTransition(DomainModel):
     condition_summary: str = Field(default="", max_length=600)
     required_revealed_entity_ids: list[str] = Field(default_factory=list, max_length=30)
     required_event_types: list[str] = Field(default_factory=list, max_length=30)
+    required_flags: dict[str, bool] = Field(default_factory=dict)
+    required_item_ids: list[str] = Field(default_factory=list, max_length=12)
     approved: bool = False
     source_evidence: list[str] = Field(default_factory=list, max_length=12)
     relation_id: str | None = None

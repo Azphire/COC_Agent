@@ -1,0 +1,1701 @@
+{
+  "preparation_id": "4bf539fb-a225-4357-b971-9274ee66be67",
+  "package_sha256": "7614317d9ad032793faac264bee16f3db753ceb480fb0166105fedea1291b8de",
+  "summary": {
+    "source_hash": "a72e88d5a4cb08831bb4ab6719094447b6c995932b4760945a1abb871cad57c8",
+    "file_hashes": [
+      "af1033fc931f85b53109856e7bbb9695313a3adb90008e6615cc2c091c85c1d8"
+    ],
+    "pages": 17,
+    "blocks_accounted": 243,
+    "nodes": 11,
+    "playable_scenes": 7,
+    "entities": 44,
+    "entity_types": {
+      "scene": 7,
+      "clue": 24,
+      "npc": 5,
+      "item": 4,
+      "location": 4
+    },
+    "transitions": 12,
+    "outcomes": [
+      "A",
+      "B",
+      "C"
+    ],
+    "coverage_entries": 58,
+    "coverage_status": {
+      "prepared": 46,
+      "context": 6,
+      "host_ruling": 4,
+      "blocked": 2
+    },
+    "missing_combat_values": {
+      "staff": [
+        "hp",
+        "hp_max",
+        "armor",
+        "damage_bonus",
+        "dex",
+        "con",
+        "weapons",
+        "原文未给HP/CON/DEX/战斗技能/伤害/护甲，不能结算普通HP治疗与攻击"
+      ],
+      "clicker": [
+        "hp",
+        "hp_max",
+        "armor",
+        "damage_bonus",
+        "con",
+        "weapons",
+        "原文没有HP/CON/攻击技能/伤害/护甲/DB；普通伤害战斗不可结算"
+      ]
+    },
+    "reviewer": "Codex（第十六批，非用户人工审核）",
+    "human_review": false,
+    "source_accounting_complete": true,
+    "runtime_complete": false,
+    "potentially_reachable_outcomes": [
+      "A",
+      "B",
+      "C"
+    ],
+    "reachability_basis": "source bindings/prerequisites; dice/KP rulings still required"
+  },
+  "package_file_sha256": "0cc14b2ec5976c16d85f7225487e0c86555103729f3dd580debd5562cd8587f3",
+  "local_directory": "data/prepared/changan/batch-16",
+  "coverage_path": "data/prepared/changan/batch-16/ready/coverage-audit.json",
+  "snapshot_id": "5b9c13c2-603a-4e52-81a4-c6572d610139",
+  "entries": [
+    {
+      "id": "s6",
+      "category": "scene",
+      "source_orders": [
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45
+      ],
+      "entity_keys": [
+        "s6"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "entity_ids": [
+        "c5ad3ce2-5e83-4f15-b28c-55956aaae160"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "s7",
+      "category": "scene",
+      "source_orders": [
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55
+      ],
+      "entity_keys": [
+        "s7"
+      ],
+      "node_ids": [
+        "node_7457aed4bc9192589c7bb737927da8ad"
+      ],
+      "entity_ids": [
+        "a6178baa-4f90-4195-b856-56eae8f03a43"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "s5",
+      "category": "scene",
+      "source_orders": [
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76
+      ],
+      "entity_keys": [
+        "s5"
+      ],
+      "node_ids": [
+        "node_611a06c91238f4c5338aa82007dcd0f4"
+      ],
+      "entity_ids": [
+        "7cdfbe13-8bd1-412c-8f1a-cb95bd4ff434"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "s4",
+      "category": "scene",
+      "source_orders": [
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96
+      ],
+      "entity_keys": [
+        "s4"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2"
+      ],
+      "entity_ids": [
+        "fdb7f44f-21a7-4651-a37c-abcdd1e1b263"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "s3",
+      "category": "scene",
+      "source_orders": [
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113
+      ],
+      "entity_keys": [
+        "s3"
+      ],
+      "node_ids": [
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "entity_ids": [
+        "5361cffb-cc11-49cb-afcd-e1f3d1c93d1e"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "s2",
+      "category": "scene",
+      "source_orders": [
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147
+      ],
+      "entity_keys": [
+        "s2"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "entity_ids": [
+        "8dfbea1a-eb10-4769-8903-28bb8c663f13"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "s1",
+      "category": "scene",
+      "source_orders": [
+        148,
+        149,
+        150,
+        151,
+        152,
+        153,
+        154,
+        155,
+        156,
+        157,
+        158
+      ],
+      "entity_keys": [
+        "s1"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "1cfba05d-c375-4ed9-8c7f-85448e489337"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "note_front",
+      "category": "clue",
+      "source_orders": [
+        38,
+        39,
+        40,
+        41,
+        42,
+        43
+      ],
+      "entity_keys": [
+        "note_front"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "entity_ids": [
+        "fb0023e8-4ef6-4aeb-957f-9f6062f3d02d"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "note_back",
+      "category": "clue",
+      "source_orders": [
+        40,
+        41,
+        42,
+        43
+      ],
+      "entity_keys": [
+        "note_back"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "entity_ids": [
+        "8e5c1373-0e0c-4eef-9ee4-2239a37aa772"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "train_map",
+      "category": "clue",
+      "source_orders": [
+        44,
+        45
+      ],
+      "entity_keys": [
+        "train_map"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "entity_ids": [
+        "3f03a552-2c1e-4c8e-aad8-b8fbeadcb35d"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "map_erased",
+      "category": "clue",
+      "source_orders": [
+        44,
+        45
+      ],
+      "entity_keys": [
+        "map_erased"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "entity_ids": [
+        "b870cca5-7b2e-46fa-9302-7ed1325f2519"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "s7_warning",
+      "category": "clue",
+      "source_orders": [
+        47,
+        48,
+        49
+      ],
+      "entity_keys": [
+        "s7_warning"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "entity_ids": [
+        "2cb6990e-6394-4cf6-a9ff-3822009ba0b1"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "remains7",
+      "category": "clue",
+      "source_orders": [
+        50,
+        51
+      ],
+      "entity_keys": [
+        "remains7"
+      ],
+      "node_ids": [
+        "node_7457aed4bc9192589c7bb737927da8ad"
+      ],
+      "entity_ids": [
+        "3adbf7b0-3e69-4a45-8595-53f639127626"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "recent_deaths",
+      "category": "clue",
+      "source_orders": [
+        52
+      ],
+      "entity_keys": [
+        "recent_deaths"
+      ],
+      "node_ids": [
+        "node_7457aed4bc9192589c7bb737927da8ad"
+      ],
+      "entity_ids": [
+        "b43b7a88-5440-4e17-bd7d-c26eca7311ca"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "mouth",
+      "category": "npc",
+      "source_orders": [
+        54,
+        55,
+        220,
+        234,
+        236,
+        238
+      ],
+      "entity_keys": [
+        "mouth"
+      ],
+      "node_ids": [
+        "node_7457aed4bc9192589c7bb737927da8ad",
+        "node_611a06c91238f4c5338aa82007dcd0f4",
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "c5d52375-f5e3-45ed-a27d-1d39161b50fd"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "newspaper",
+      "category": "item",
+      "source_orders": [
+        57,
+        58,
+        59,
+        60
+      ],
+      "entity_keys": [
+        "newspaper"
+      ],
+      "node_ids": [
+        "node_611a06c91238f4c5338aa82007dcd0f4"
+      ],
+      "entity_ids": [
+        "212671fa-3acb-46d2-8020-b8956bdf67f2"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "newspaper_date",
+      "category": "clue",
+      "source_orders": [
+        59,
+        60,
+        61
+      ],
+      "entity_keys": [
+        "newspaper_date"
+      ],
+      "node_ids": [
+        "node_611a06c91238f4c5338aa82007dcd0f4"
+      ],
+      "entity_ids": [
+        "06f58614-f1c6-47cd-8b75-f1f7b910eb4f"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "car_disappearing",
+      "category": "clue",
+      "source_orders": [
+        62,
+        63,
+        64
+      ],
+      "entity_keys": [
+        "car_disappearing"
+      ],
+      "node_ids": [
+        "node_611a06c91238f4c5338aa82007dcd0f4"
+      ],
+      "entity_ids": [
+        "74051643-b01b-4d42-ba2e-58c6301d4e95"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "devouring",
+      "category": "clue",
+      "source_orders": [
+        26,
+        27,
+        28,
+        65,
+        66,
+        68,
+        69,
+        70,
+        75,
+        76,
+        228,
+        231,
+        232,
+        239,
+        240
+      ],
+      "entity_keys": [
+        "devouring"
+      ],
+      "node_ids": [
+        "node_611a06c91238f4c5338aa82007dcd0f4",
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "5a72b901-69c2-4e48-bece-47638f28449b"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "staff",
+      "category": "npc",
+      "source_orders": [
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        205,
+        206,
+        207,
+        208,
+        209,
+        210,
+        211,
+        212
+      ],
+      "entity_keys": [
+        "staff"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "9f3d51d6-0ca5-414d-9eb0-bfc129af5575"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "staff_story",
+      "category": "clue",
+      "source_orders": [
+        80,
+        81,
+        82
+      ],
+      "entity_keys": [
+        "staff_story"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2"
+      ],
+      "entity_ids": [
+        "3d537659-83b9-439b-bf74-e13715e64da0"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "sound_hint",
+      "category": "clue",
+      "source_orders": [
+        83,
+        84,
+        85
+      ],
+      "entity_keys": [
+        "sound_hint"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "entity_ids": [
+        "95c4b7f9-58d5-492f-aea8-8ce9fc226960"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "key_hint",
+      "category": "clue",
+      "source_orders": [
+        89,
+        90,
+        91
+      ],
+      "entity_keys": [
+        "key_hint"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "entity_ids": [
+        "799b3c7d-3e73-4708-aea6-916f571d1de1"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "aid",
+      "category": "clue",
+      "source_orders": [
+        78,
+        79,
+        94,
+        206
+      ],
+      "entity_keys": [
+        "aid"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2"
+      ],
+      "entity_ids": [
+        "1911062e-a5e3-4aee-9172-febb9c3bbdb0"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "staff_lost",
+      "category": "clue",
+      "source_orders": [
+        95
+      ],
+      "entity_keys": [
+        "staff_lost"
+      ],
+      "node_ids": [
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "entity_ids": [
+        "02a487d6-8845-4eb9-ae64-1e6a900fd304"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "s3_safe",
+      "category": "clue",
+      "source_orders": [
+        96
+      ],
+      "entity_keys": [
+        "s3_safe"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2"
+      ],
+      "entity_ids": [
+        "365ba3e6-ee64-4386-80a7-2c8f62fb5239"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "luggage",
+      "category": "location",
+      "source_orders": [
+        98,
+        99,
+        100,
+        106,
+        107,
+        108
+      ],
+      "entity_keys": [
+        "luggage"
+      ],
+      "node_ids": [
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "entity_ids": [
+        "3dbbdc79-a362-400b-8326-2b74d9a65db6"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "keys",
+      "category": "item",
+      "source_orders": [
+        89,
+        90,
+        91,
+        101,
+        102,
+        103,
+        104,
+        105
+      ],
+      "entity_keys": [
+        "keys"
+      ],
+      "node_ids": [
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "entity_ids": [
+        "f1ebd2e8-ef45-4465-8bef-9f83bf78c255"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "silhouettes",
+      "category": "clue",
+      "source_orders": [
+        109,
+        110,
+        111,
+        112,
+        113
+      ],
+      "entity_keys": [
+        "silhouettes"
+      ],
+      "node_ids": [
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "entity_ids": [
+        "76cf8209-5db8-4ec0-8f1f-2871813f0a9e"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "clicker",
+      "category": "npc",
+      "source_orders": [
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        213,
+        214,
+        215,
+        216,
+        217,
+        218
+      ],
+      "entity_keys": [
+        "clicker"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "entity_ids": [
+        "83996564-9490-4040-abb9-5ee2fe0ed3c3"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "bodies2",
+      "category": "clue",
+      "source_orders": [
+        121
+      ],
+      "entity_keys": [
+        "bodies2"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "entity_ids": [
+        "f389b1e5-00bd-492b-8e1b-8feb0452e1cc"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "breathing",
+      "category": "clue",
+      "source_orders": [
+        122
+      ],
+      "entity_keys": [
+        "breathing"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "entity_ids": [
+        "d4ae61af-1d5f-4b1f-961e-c20d2acca0d7"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "quiet_passage",
+      "category": "location",
+      "source_orders": [
+        123,
+        124,
+        125
+      ],
+      "entity_keys": [
+        "quiet_passage"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "entity_ids": [
+        "92b3b7a0-6ca6-4d12-b18a-0d1600e92fae"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "sacrifice",
+      "category": "clue",
+      "source_orders": [
+        130,
+        131
+      ],
+      "entity_keys": [
+        "sacrifice"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "entity_ids": [
+        "02d68492-12b1-4357-830e-d06dc6148663"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "cab_door",
+      "category": "location",
+      "source_orders": [
+        149,
+        150
+      ],
+      "entity_keys": [
+        "cab_door"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "fcffde6c-2800-498f-9484-ad7fda4550cd"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "panel",
+      "category": "location",
+      "source_orders": [
+        150,
+        151,
+        152,
+        153,
+        154,
+        155,
+        156,
+        157,
+        158
+      ],
+      "entity_keys": [
+        "panel"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "825fcd83-ac70-47fe-be80-c244e1c689f4"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "controls",
+      "category": "clue",
+      "source_orders": [
+        151,
+        152,
+        153,
+        154,
+        155,
+        156,
+        157,
+        158
+      ],
+      "entity_keys": [
+        "controls"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "cbf61bf4-3dda-497e-861b-dcd4c9bcad31"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "ending_a",
+      "category": "clue",
+      "source_orders": [
+        160,
+        161,
+        162,
+        163,
+        164,
+        165,
+        166,
+        167,
+        168,
+        179,
+        180,
+        181,
+        182,
+        183,
+        184
+      ],
+      "entity_keys": [
+        "ending_a"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "c365372c-9c28-4330-85a8-66d5be4919e5"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "ending_b",
+      "category": "clue",
+      "source_orders": [
+        169,
+        170,
+        171,
+        172,
+        185,
+        186,
+        187
+      ],
+      "entity_keys": [
+        "ending_b"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "080eb757-59cb-42a6-bab9-a9a5cf92e9f2"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "ending_c",
+      "category": "clue",
+      "source_orders": [
+        146,
+        147,
+        173,
+        174,
+        175,
+        176,
+        177,
+        178
+      ],
+      "entity_keys": [
+        "ending_c"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "cabdae3e-cc9c-40af-a0c3-8f3058c804dc"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "station_staff",
+      "category": "npc",
+      "source_orders": [
+        164,
+        168
+      ],
+      "entity_keys": [
+        "station_staff"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "a3cabef6-42a2-48c6-a046-14b40ae2d523"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "dark_man",
+      "category": "npc",
+      "source_orders": [
+        220,
+        221,
+        222
+      ],
+      "entity_keys": [
+        "dark_man"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "entity_ids": [
+        "f48241b1-06c4-4231-811e-9d91a96ccbf8"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "phone",
+      "category": "item",
+      "source_orders": [
+        22,
+        23,
+        24,
+        37,
+        106,
+        107,
+        108,
+        110
+      ],
+      "entity_keys": [
+        "phone"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413",
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "entity_ids": [
+        "285bf7f3-995f-436c-9eba-0cf3e831b221"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "torch",
+      "category": "item",
+      "source_orders": [
+        22,
+        37,
+        99,
+        106,
+        107,
+        108,
+        110
+      ],
+      "entity_keys": [
+        "torch"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413",
+        "node_5cc99dedc1d148f347359c9793e61868"
+      ],
+      "entity_ids": [
+        "04cfe02f-82e7-4d9a-9f21-feed96e5ef19"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "credits_introduction",
+      "category": "context",
+      "source_orders": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35
+      ],
+      "entity_keys": [
+        "s6"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "entity_ids": [
+        "c5ad3ce2-5e83-4f15-b28c-55956aaae160"
+      ],
+      "status": "context",
+      "gaps": []
+    },
+    {
+      "id": "initial_belongings",
+      "category": "mechanic",
+      "source_orders": [
+        22,
+        23,
+        24,
+        37
+      ],
+      "entity_keys": [
+        "s6"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "entity_ids": [
+        "c5ad3ce2-5e83-4f15-b28c-55956aaae160"
+      ],
+      "status": "host_ruling",
+      "gaps": [
+        "每位玩家原幸运决定起始物品；枪械没收、无手机信号。完整物品卡未实现，需用已有真实骰和主机物品记录确认。"
+      ]
+    },
+    {
+      "id": "optional_pressure",
+      "category": "mechanic",
+      "source_orders": [
+        25,
+        26,
+        27,
+        28,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        228,
+        231,
+        232,
+        239,
+        240
+      ],
+      "entity_keys": [
+        "devouring"
+      ],
+      "node_ids": [
+        "node_611a06c91238f4c5338aa82007dcd0f4",
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "5a72b901-69c2-4e48-bece-47638f28449b"
+      ],
+      "status": "host_ruling",
+      "gaps": [
+        "原文3-4行动/车厢为KP可选建议，不固定启用；实际吞噬时需确认被毁车厢并阻断回访。"
+      ]
+    },
+    {
+      "id": "staff_values",
+      "category": "npc_template",
+      "source_orders": [
+        78,
+        79,
+        94,
+        206,
+        207,
+        208,
+        209,
+        210,
+        211,
+        212
+      ],
+      "entity_keys": [
+        "staff"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "9f3d51d6-0ca5-414d-9eb0-bfc129af5575"
+      ],
+      "status": "blocked",
+      "gaps": [
+        "缺HP/最大HP/CON/DEX/攻击技能/伤害/护甲；只支持原文STR55对抗和清醒伤员剧情，不能普通HP治疗。"
+      ]
+    },
+    {
+      "id": "clicker_values",
+      "category": "npc_template",
+      "source_orders": [
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        213,
+        214,
+        215,
+        216,
+        217,
+        218
+      ],
+      "entity_keys": [
+        "clicker"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "entity_ids": [
+        "83996564-9490-4040-abb9-5ee2fe0ed3c3"
+      ],
+      "status": "blocked",
+      "gaps": [
+        "缺HP/最大HP/CON/攻击技能/武器伤害/护甲/DB；不创建普通人代替。"
+      ]
+    },
+    {
+      "id": "sourced_modifiers",
+      "category": "mechanic",
+      "source_orders": [
+        94,
+        103,
+        104,
+        105,
+        107,
+        110,
+        123,
+        134,
+        144,
+        145,
+        154,
+        155
+      ],
+      "entity_keys": [
+        "staff",
+        "keys",
+        "quiet_passage",
+        "clicker",
+        "controls"
+      ],
+      "node_ids": [
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "9f3d51d6-0ca5-414d-9eb0-bfc129af5575",
+        "f1ebd2e8-ef45-4465-8bef-9f83bf78c255",
+        "92b3b7a0-6ca6-4d12-b18a-0d1600e92fae",
+        "83996564-9490-4040-abb9-5ee2fe0ed3c3",
+        "cbf61bf4-3dda-497e-861b-dcd4c9bcad31"
+      ],
+      "status": "host_ruling",
+      "gaps": [
+        "已接通固定修正、半幸运、3号找回物品暗骰1d20及后续近距投掷乘2；实际距离与首次应急仍由KP确认。普通战斗技能减半分支因模板数值缺失阻塞。"
+      ]
+    },
+    {
+      "id": "sound_and_grab",
+      "category": "mechanic",
+      "source_orders": [
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        215,
+        216,
+        217,
+        218
+      ],
+      "entity_keys": [
+        "clicker"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "entity_ids": [
+        "83996564-9490-4040-abb9-5ee2fe0ed3c3"
+      ],
+      "status": "host_ruling",
+      "gaps": [
+        "声音诱导的距离、持续声源、关门和多人抓握必须依据实际行动确认。光照不是怪物弱点。"
+      ]
+    },
+    {
+      "id": "end_rewards",
+      "category": "mechanic",
+      "source_orders": [
+        179,
+        180,
+        181,
+        182,
+        183,
+        184,
+        185,
+        186,
+        187
+      ],
+      "entity_keys": [
+        "ending_a",
+        "ending_b"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "c365372c-9c28-4330-85a8-66d5be4919e5",
+        "080eb757-59cb-42a6-bab9-a9a5cf92e9f2"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "ending_c_san",
+      "category": "mechanic",
+      "source_orders": [
+        146,
+        147,
+        178
+      ],
+      "entity_keys": [
+        "ending_c"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "cabdae3e-cc9c-40af-a0c3-8f3058c804dc"
+      ],
+      "status": "prepared",
+      "gaps": []
+    },
+    {
+      "id": "ending_heading",
+      "category": "context",
+      "source_orders": [
+        159
+      ],
+      "entity_keys": [
+        "ending_a",
+        "ending_b",
+        "ending_c"
+      ],
+      "node_ids": [
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "entity_ids": [
+        "c365372c-9c28-4330-85a8-66d5be4919e5",
+        "080eb757-59cb-42a6-bab9-a9a5cf92e9f2",
+        "cabdae3e-cc9c-40af-a0c3-8f3058c804dc"
+      ],
+      "status": "context",
+      "gaps": []
+    },
+    {
+      "id": "ideal_route",
+      "category": "context",
+      "source_orders": [
+        188,
+        189,
+        190,
+        191,
+        192,
+        193,
+        194,
+        195,
+        196,
+        197,
+        198,
+        199,
+        200,
+        201,
+        202,
+        203,
+        204,
+        205,
+        206
+      ],
+      "entity_keys": [
+        "s6",
+        "s5",
+        "s4",
+        "s3",
+        "s2",
+        "s1"
+      ],
+      "node_ids": [
+        "node_1de7131691918b24dc119191d8054413",
+        "node_611a06c91238f4c5338aa82007dcd0f4",
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "c5ad3ce2-5e83-4f15-b28c-55956aaae160",
+        "7cdfbe13-8bd1-412c-8f1a-cb95bd4ff434",
+        "fdb7f44f-21a7-4651-a37c-abcdd1e1b263",
+        "5361cffb-cc11-49cb-afcd-e1f3d1c93d1e",
+        "8dfbea1a-eb10-4769-8903-28bb8c663f13",
+        "1cfba05d-c375-4ed9-8c7f-85448e489337"
+      ],
+      "status": "context",
+      "gaps": []
+    },
+    {
+      "id": "npc_and_backstage",
+      "category": "context",
+      "source_orders": [
+        207,
+        208,
+        209,
+        210,
+        211,
+        212,
+        213,
+        214,
+        215,
+        216,
+        217,
+        218,
+        219,
+        220,
+        221,
+        222,
+        223
+      ],
+      "entity_keys": [
+        "staff",
+        "clicker",
+        "dark_man",
+        "mouth"
+      ],
+      "node_ids": [
+        "node_7457aed4bc9192589c7bb737927da8ad",
+        "node_611a06c91238f4c5338aa82007dcd0f4",
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8",
+        "node_1de7131691918b24dc119191d8054413"
+      ],
+      "entity_ids": [
+        "9f3d51d6-0ca5-414d-9eb0-bfc129af5575",
+        "83996564-9490-4040-abb9-5ee2fe0ed3c3",
+        "f48241b1-06c4-4231-811e-9d91a96ccbf8",
+        "c5d52375-f5e3-45ed-a27d-1d39161b50fd"
+      ],
+      "status": "context",
+      "gaps": []
+    },
+    {
+      "id": "editorial_notes",
+      "category": "context",
+      "source_orders": [
+        224,
+        225,
+        226,
+        227,
+        228,
+        229,
+        230,
+        231,
+        232,
+        233,
+        234,
+        235,
+        236,
+        237,
+        238,
+        239,
+        240,
+        241,
+        242
+      ],
+      "entity_keys": [
+        "devouring",
+        "mouth"
+      ],
+      "node_ids": [
+        "node_7457aed4bc9192589c7bb737927da8ad",
+        "node_611a06c91238f4c5338aa82007dcd0f4",
+        "node_1362de4c1da901fffbc8054a4a3a1bf2",
+        "node_5cc99dedc1d148f347359c9793e61868",
+        "node_4e4172a1aeaad11cc6a3c14d8f003659",
+        "node_7e3aba52b0a27e4fb9615f5d500baaa8"
+      ],
+      "entity_ids": [
+        "5a72b901-69c2-4e48-bece-47638f28449b",
+        "c5d52375-f5e3-45ed-a27d-1d39161b50fd"
+      ],
+      "status": "context",
+      "gaps": []
+    },
+    {
+      "id": "clicker_illustration",
+      "category": "illustration",
+      "source_orders": [
+        119
+      ],
+      "entity_keys": [
+        "clicker"
+      ],
+      "node_ids": [
+        "node_4e4172a1aeaad11cc6a3c14d8f003659"
+      ],
+      "entity_ids": [
+        "83996564-9490-4040-abb9-5ee2fe0ed3c3"
+      ],
+      "status": "context",
+      "gaps": []
+    }
+  ]
+}

@@ -340,6 +340,17 @@ def test_generation_repair_limit_preserves_existing_drafts(client, preparation):
     before = preparation["prep"]["entity_count"]
     svc.model.adapter = FakeModelAdapter(responses=[{"bad": True}, {"bad": True}])
     prep_id = preparation["prep"]["id"]
+    # Simulate an interrupted batch. Completed batches are intentionally reused now.
+    async def interrupted():
+        from sqlalchemy import select
+
+        async with svc.rooms.transaction() as session:
+            for run in await session.scalars(select(GenerationRun).where(
+                GenerationRun.preparation_id == prep_id
+            )):
+                run.status = "failed"
+
+    client.portal.call(interrupted)
     ok(client.post(f"/api/module-preparations/{prep_id}/generate"))
     failed = wait_preparation(client, prep_id)
     assert failed["status"] == "failed" and failed["entity_count"] == before

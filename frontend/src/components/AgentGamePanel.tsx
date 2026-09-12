@@ -67,8 +67,8 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
   }
   const seats = room.members.filter(m => m.active && (m.id === room.host_member_id || m.controller_type === 'agent'))
   return <>
-    {room.is_host && <details open={room.status === 'lobby'}><summary>主机模组与 AI 设置</summary>
     {room.is_host && <ModuleNavigationPanel room={room} token={token} acceptRoom={acceptRoom} />}
+    {room.is_host && <details open={room.status === 'lobby'}><summary>主机模组与 AI 设置</summary>
     {room.is_host && <HostEntityPanel room={room} token={token} acceptRoom={acceptRoom} />}
     {room.is_host && <KnowledgeBindingPanel room={room} token={token} acceptRoom={acceptRoom} />}
     {room.is_host && <section><h2>AI 与模组设置</h2><p><a href="#/agents">创建或编辑 Agent 档案</a></p>

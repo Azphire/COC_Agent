@@ -999,6 +999,10 @@ class AgentService:
             requester=run.actor_member_id,
             agent_run_id=run.id,
         )
+        from app.preparation.runtime import freeze_adjustment
+
+        await freeze_adjustment(self, session, room, check,
+                                facts.approved_entities.get(policy.target_entity_id))
         if check.opposed or check.combined:
             await self.compound.freeze(session, room, check, facts)
         # The private KP model must not publish arbitrary text through a check reason.
@@ -1082,7 +1086,7 @@ class AgentService:
         # Snapshot plus confirmed mythos growth; model output never sets values.
         from app.rooms.sanity_service import current_check_value
 
-        if not check.combined:
+        if not check.combined and not check.module_adjustment:
             check.value = current_check_value(room, slot, check.kind, check.name)
         await self.settlement.rolled(session, room, record, check, automatic)
 

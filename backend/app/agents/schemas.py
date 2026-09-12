@@ -113,6 +113,7 @@ class CheckRequest(DomainModel):
 
 
 class PendingCheck(CheckRequest):
+    module_adjustment: dict | None = None
     compound: dict | None = None
     attempt_purpose: str = ""
     attempt_method: str = ""

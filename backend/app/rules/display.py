@@ -33,6 +33,13 @@ def display_names():
 
 
 def resolve_check_name(name, kind="skill", ruleset_id="coc7-character-creation"):
+    if (ruleset_id, kind, name) == ("coc7-character-creation", "attribute", "luck"):
+        return {
+            "skill_id": "luck",
+            "display_name": "幸运",
+            "ruleset_id": ruleset_id,
+            "english_name": "Luck",
+        }
     return display_names().get(
         (ruleset_id, kind, name),
         {

@@ -234,6 +234,20 @@ def restore_output(output, schema, context):
                     if positions
                     else ""
                 )
+        from app.agents.action_policy import named_move_exits
+
+        named = named_move_exits(
+            context["triggering_action"]["payload"]["text"], context.get("approved_exits", [])
+        )
+        if value["parsed_intent"]["type"] == "move" and len(named) == 1:
+            value["proposed_transition_id"] = named[0]["transition_id"]
+            # Discard a model-authored movement call with a different destination.
+            # The approved transition proposal is normalized by the existing planner.
+            value["proposed_tool_calls"] = [
+                t
+                for t in value["proposed_tool_calls"]
+                if t["name"] not in {"transition_scene", "update_scene"}
+            ]
         transition = next(
             (
                 t
@@ -247,12 +261,79 @@ def restore_output(output, schema, context):
             # candidate; the ordinary intent/exit/ownership guards still apply.
             focus["action_target_id"] = transition["target_scene_node_id"]
         proposal = value.get("proposed_check")
+        named_requirements = [
+            r
+            for r in context.get("check_requirements", [])
+            if r.get("access_policy") == "requires_check"
+            and r.get("successful_check")
+            and r["title"] in focus.get("action", "")
+        ]
+        if len(named_requirements) == 1 and value["parsed_intent"]["type"] in {
+            "investigate",
+            "observe",
+            "interact",
+        }:
+            # Resolve an explicitly named gated detail instead of its parent object.
+            focus["action_target_id"] = named_requirements[0]["entity_id"]
+        required = next(
+            (
+                r
+                for r in context.get("check_requirements", [])
+                if r["entity_id"] == focus.get("action_target_id")
+                and r.get("access_policy") == "requires_check"
+                and r.get("successful_check")
+                and r["title"] in focus.get("action", "")
+            ),
+            None,
+        )
+        if (
+            required
+            and focus.get("action")
+            and not focus.get("obstacle")
+            and value["parsed_intent"]["type"] in {"investigate", "observe", "interact"}
+        ):
+            focus["obstacle"] = "模组已批准条件要求先完成检定，目标尚未确认。"
+        if (
+            required
+            and not proposal
+            and focus.get("action")
+            and value["parsed_intent"]["type"] in {"investigate", "observe", "interact"}
+        ):
+            # A source-approved mandatory search is a rule, not optional model
+            # judgement. This requests a real roll; it never supplies its result.
+            focus["obstacle"] = "模组已批准条件要求先完成检定，目标尚未确认。"
+            proposal = CheckProposal(
+                **required["successful_check"],
+                target_member_id=context["action_identifiers"]["actor_member_id"],
+                reason=focus["action"],
+                clue_id=required["entity_id"],
+                target_entity_id=required["entity_id"],
+                basis_entity_id=required["entity_id"],
+                success_effect="完成模组配置的调查目标。",
+                failure_consequence="本次未取得模组配置的发现，不自动扣除资源。",
+            ).model_dump(mode="json")
+            value["proposed_check"] = proposal
+            value["rationale_summary"] = "按已批准的目标条件补齐必需检定；使用真实骰。"
         if not focus.get("action") or not focus.get("obstacle"):
             value["proposed_check"] = None
             value["proposed_tool_calls"] = [
                 t for t in value["proposed_tool_calls"] if t["name"] != "request_skill_check"
             ]
         elif proposal:
+            actor = next(
+                (
+                    c
+                    for c in context.get("characters", [])
+                    if c.get("member_id") == context["action_identifiers"]["actor_member_id"]
+                ),
+                {},
+            )
+            # Resolve an unambiguous attribute name, e.g. luck, without letting
+            # the model choose numeric values or invent a new skill.
+            if proposal.get("name") in actor.get("effective_attributes", {}) and proposal.get(
+                "name"
+            ) not in actor.get("skill_values", {}):
+                proposal["kind"] = "attribute"
             proposal.update(
                 rule_topic_id="coc7.skill_check",
                 necessity="required",

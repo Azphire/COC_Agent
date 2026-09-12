@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, requestId } from '../api/session'
 import type { Result, Room } from '../api/rooms'
 
-type Navigation = { last_cycle_audit: Record<string, unknown> | null; enabled: boolean; module_structure_missing: boolean; current_scene_node_id: string; previous_scene_node_id: string | null; visited_scene_node_ids: string[]; active_npc_entity_ids: string[]; available_transition_ids: string[]; navigation_revision: number; pending_review_id: string | null; scenes: { node_id: string; title: string }[]; context: { module: { current_scene: { title: string; heading_path: string[] }; outgoing_transitions: { transition_id: string; target_scene_node_id: string; available: boolean; condition_summary: string }[] }; module_context_audit: { selected_node_ids: string[]; selected_block_ids: string[]; context_mode: string; omitted_block_count: number } } }
+type Navigation = { runtime?: { flags: Record<string, boolean>; inventory: Record<string, string>; outcome: string | null; pending_outcome?: string | null }; last_cycle_audit: Record<string, unknown> | null; enabled: boolean; module_structure_missing: boolean; current_scene_node_id: string; previous_scene_node_id: string | null; visited_scene_node_ids: string[]; active_npc_entity_ids: string[]; available_transition_ids: string[]; navigation_revision: number; pending_review_id: string | null; scenes: { node_id: string; title: string }[]; context: { module: { current_scene: { title: string; heading_path: string[] }; outgoing_transitions: { transition_id: string; target_scene_node_id: string; available: boolean; condition_summary: string }[] }; module_context_audit: { selected_node_ids: string[]; selected_block_ids: string[]; context_mode: string; omitted_block_count: number } } }
 export default function ModuleNavigationPanel({ room, token, acceptRoom }: { room: Room; token: string; acceptRoom: (room: Room) => void }) {
   const [nav, setNav] = useState<Navigation | null>(null)
   const [error, setError] = useState('')
@@ -19,9 +19,10 @@ export default function ModuleNavigationPanel({ room, token, acceptRoom }: { roo
       <p>前一场景：{nav.scenes.find(n => n.node_id === nav.previous_scene_node_id)?.title || '无'} · 已访问 {nav.visited_scene_node_ids.length} 个场景 · 活动 NPC {nav.active_npc_entity_ids.length}</p>
       <p>主机审阅：{nav.pending_review_id ? '等待中' : '无'} · 模组上下文 {nav.context.module_context_audit.context_mode}</p>
       {nav.context.module.outgoing_transitions.map(t => <p key={t.transition_id}>{nav.scenes.find(n => n.node_id === t.target_scene_node_id)?.title} · {t.available ? '可执行' : '条件未满足或仅主机'} {t.condition_summary}</p>)}
+      {nav.runtime && <details><summary>已结算的物品与事件</summary><p>已持有 {Object.keys(nav.runtime.inventory).length} 件物品 · 结局 {nav.runtime.outcome || (nav.runtime.pending_outcome ? `${nav.runtime.pending_outcome}：等待终幕结算` : '尚未达成')}</p><pre>{JSON.stringify(nav.runtime.flags, null, 2)}</pre></details>}
       <details><summary>节点与上下文审计</summary><p>当前 {nav.current_scene_node_id} · revision {nav.navigation_revision}</p><pre>{JSON.stringify(nav.last_cycle_audit || nav.context.module_context_audit, null, 2)}</pre></details>
       <form onSubmit={async e => { e.preventDefault(); const d = new FormData(e.currentTarget); try { const r = await api<Result>(prefix + '/scene-transition', token, 'POST', { target_scene_node_id: d.get('target'), expected_revision: nav.navigation_revision, request_id: requestId() }); acceptRoom(r.room) } catch (e) { setError(String(e)) } }}>
-        <label>一次性主机转换<select name="target">{nav.scenes.map(n => <option key={n.node_id} value={n.node_id}>{n.title}</option>)}</select></label><button>主机批准并转场</button>
+        <label>一次性主机转换<select name="target">{nav.scenes.map(n => <option key={n.node_id} value={n.node_id}>{n.title}</option>)}</select></label><button disabled={!!(nav.runtime?.outcome || nav.runtime?.pending_outcome)}>主机批准并转场</button>
       </form>
     </>}
   </section>

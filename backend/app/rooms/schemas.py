@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import Field, SecretStr, StrictBool, StrictInt, StringConstraints
 
 from app.domain.character import DomainModel
+from app.preparation.runtime_schemas import ModuleRuntimeState
 from app.rooms.combat_schemas import CombatState, Injury, Weapon
 from app.rooms.sanity_schemas import SanityState
 
@@ -31,6 +32,7 @@ class CharacterRuntimeV1(DomainModel):
 
 
 class SessionStateV1(DomainModel):
+    module_runtime: ModuleRuntimeState = Field(default_factory=ModuleRuntimeState)
     combat: CombatState = Field(default_factory=CombatState)
     luck_spending: StrictBool = False
     game_minute: Annotated[StrictInt, Field(ge=0, le=1_000_000)] = 0

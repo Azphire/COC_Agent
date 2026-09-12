@@ -131,7 +131,13 @@ class ActionAdjudicationService:
             member_ids={m.id for m in members if m.active},
             can_move_party=cycle.state.get("origin") != "teammate",
             characters={
-                s.member_id: s.character_snapshot
+                s.member_id: {
+                    **s.character_snapshot,
+                    "effective_attributes": {
+                        **s.character_snapshot.get("effective_attributes", {}),
+                        "luck": room.session_state.get("characters", {}).get(s.id, {}).get("luck"),
+                    },
+                }
                 for s in slots
                 if s.member_id and any(m.id == s.member_id and m.active for m in members)
             },
@@ -176,6 +182,7 @@ class ActionAdjudicationService:
                         "transition_id": tid,
                         "source_scene_node_id": facts.scene_id,
                         "target_scene_node_id": scene.id,
+                        "target_public_title": scene.title,
                         "approved": True,
                     }
                     facts.available_transition_ids.add(tid)
@@ -245,13 +252,20 @@ class ActionAdjudicationService:
                 for n in snapshot.nodes
                 if n.node_id in linked and n.approved_type != "scene"
             }
-            facts.local_entity_ids = {
-                b.entity_id for b in snapshot.entity_bindings if b.node_id in local
-            }
+            from app.preparation.runtime import current_entity_ids
+
+            facts.local_entity_ids = current_entity_ids(
+                snapshot, local, room.session_state.get("module_runtime", {})
+            )
             facts.visible_entity_ids &= facts.local_entity_ids
             facts.transitions = {
                 t.transition_id: {
                     **t.model_dump(),
+                    "target_public_title": next(
+                        n.public_title
+                        for n in snapshot.nodes
+                        if n.node_id == t.target_scene_node_id
+                    ),
                     "target_entity_id": next(
                         (
                             b.entity_id
@@ -275,6 +289,15 @@ class ActionAdjudicationService:
             if eid in facts.local_entity_ids and e.get("title") and e["title"] in public_scene_text
         )
         supplied = run.context.get("module", {})
+        # A prepared search can target an undiscovered object without declaring
+        # it present or revealing its contents. It never makes an NPC visible.
+        facts.searchable_entity_ids = {
+            eid
+            for eid, e in facts.approved_entities.items()
+            if eid in facts.local_entity_ids
+            and e.get("type") in {"item", "clue", "location"}
+            and e.get("reveal_conditions", {}).get("access_policy") == "requires_check"
+        }
         supplement = run.context.get("context_supplement", {})
         facts.observed_entity_ids = {
             e["id"] for e in supplied.get("approved_entities", []) + supplement.get("entities", [])
