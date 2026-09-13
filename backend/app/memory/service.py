@@ -399,6 +399,20 @@ async def build_context(
     if incidental:
         context["incidental_memories"] = incidental
     if navigation:
+        runtime_state = room.session_state.get("module_runtime", {})
+        # Reserve the actual state envelope before optional source paragraphs.
+        # The total profile/model budget stays unchanged; prose is trimmed below.
+        scene_floor = (
+            700
+            + len(
+                json.dumps(
+                    {k: runtime_state.get(k, {}) for k in ("flags", "inventory", "doors")},
+                    ensure_ascii=False,
+                )
+            )
+            if keeper
+            else 700
+        )
         base_size = len(
             json.dumps(
                 {k: v for k, v in context.items() if k not in {"module", "public_entities"}},
@@ -410,7 +424,7 @@ async def build_context(
             room,
             "keeper" if keeper else "investigator",
             recent_action=(trigger or {}).get("payload", {}).get("text", ""),
-            budget=max(700, budget - base_size - 1300),
+            budget=max(scene_floor, budget - base_size - 1300),
             cycle=cycle if keeper else None,
         )
         if keeper:
@@ -423,10 +437,16 @@ async def build_context(
                     room,
                     "keeper",
                     recent_action=(trigger or {}).get("payload", {}).get("text", ""),
-                    budget=max(700, resolved["module_context_audit"]["budget"] + remaining),
+                    budget=max(scene_floor, resolved["module_context_audit"]["budget"] + remaining),
                     cycle=cycle,
                 )
         context.update(resolved)
+        if narrator:
+            # Narration uses public receipts/claims and current participants.
+            # These adjudication fields are also removed by the action runtime;
+            # remove them before budgeting so they cannot crowd out public facts.
+            context.pop("characters", None)
+            context.pop("public_state", None)
         if keeper:
             service.rooms.append(
                 session,
@@ -449,6 +469,7 @@ async def build_context(
                     "type",
                     "title",
                     "public_summary",
+                    "current_state_receipts",
                     "state",
                     "origin",
                     "revealed_event_seq",
@@ -462,6 +483,21 @@ async def build_context(
         from app.persistence.adjudication_models import ActionPlanRecord
 
         plan_record = await session.get(ActionPlanRecord, cycle.id)
+        if narrator and plan_record and plan_record.document.get("plan", {}).get("focus"):
+            plan = plan_record.document["plan"]
+            focus = plan["focus"]
+            wanted = set(focus.get("public_fact_ids", [])) | {
+                focus.get("action_target_id"),
+                plan.get("parsed_intent", {}).get("target_id"),
+            }
+            # Planning has already selected the facts this reply uses. Keep
+            # current state plus those historical facts, not every past entity
+            # returned by a broad recall query. Full provenance stays on server.
+            context["public_entities"] = [
+                e
+                for e in context.get("public_entities", [])
+                if e.get("fact_scope", "current_scene") == "current_scene" or e["id"] in wanted
+            ]
         context["rule_concepts"] = (
             plan_record.document.get("plan", {}).get("rule_concepts", []) if plan_record else []
         )
@@ -593,9 +629,10 @@ async def build_context(
         context["incidental_memories"] = context["incidental_memories"][:-1]
     # Retrieval metadata is added after scene allocation. A duplicate source
     # block must not make a valid action fail before the final planning budget.
-    while context.get("module", {}).get("blocks") and len(
-        json.dumps(context, ensure_ascii=False)
-    ) > budget:
+    while (
+        context.get("module", {}).get("blocks")
+        and len(json.dumps(context, ensure_ascii=False)) > budget
+    ):
         module_context = dict(context["module"])
         module_context["blocks"] = module_context["blocks"][:-1]
         audit = dict(context.get("module_context_audit", {}))
@@ -603,6 +640,14 @@ async def build_context(
         audit["omitted_block_count"] = audit.get("omitted_block_count", 0) + 1
         audit["budget_used"] = len(json.dumps(module_context, ensure_ascii=False))
         context = {**context, "module": module_context, "module_context_audit": audit}
+    if len(json.dumps(context, ensure_ascii=False)) > budget:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Memory context exceeds %s: %s",
+            budget,
+            {k: len(json.dumps(v, ensure_ascii=False)) for k, v in context.items()},
+        )
     require(
         len(json.dumps(context, ensure_ascii=False)) <= budget,
         "当前模组和角色超过上下文预算，请提高上下文限制或减少席位",

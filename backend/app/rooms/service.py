@@ -102,7 +102,26 @@ class RoomService:
     async def room(self, session, room_id):
         room = await session.get(GameRoom, str(room_id))
         require(room is not None, "房间不存在", 404)
+        await self.complete_runtime(session, room)
         return room
+
+    async def complete_runtime(self, session, room):
+        if any(
+            c.get("mp_max") is None or c.get("hp_max") is None
+            for c in room.session_state.get("characters", {}).values()
+        ):
+            from app.rooms.resource_service import complete_resources
+
+            state = SessionStateV1.model_validate(room.session_state)
+            complete_resources(state, await self.slots(session, room))
+            room.session_state = state.model_dump(mode="json")
+
+    async def public_inventory(self, session, room):
+        if not self.agent_service:
+            return []
+        from app.preparation.inventory import public_inventory
+
+        return await public_inventory(self.agent_service, session, room)
 
     async def identity(self, session, room, token, credential_type=None):
         if credential_type != "member" and host_matches(self.settings, token):
@@ -149,6 +168,7 @@ class RoomService:
         if not identity.is_host:
             state["combat"] = {}
             state["module_runtime"] = {}
+            state["time_receipts"] = {}
         return {
             "id": room.id,
             "name": room.name,
@@ -163,7 +183,9 @@ class RoomService:
             "is_host": identity.is_host,
             "session_state": state,
             "combat": await self.agent_service.combat.view(session, room, identity)
-            if self.agent_service else None,
+            if self.agent_service
+            else None,
+            "inventory": await self.public_inventory(session, room),
             "members": [
                 {
                     "id": m.id,
@@ -575,6 +597,10 @@ class RoomService:
             state = SessionStateV1.model_validate(room.session_state)
             state.characters[UUID(slot.id)] = CharacterRuntimeV1(
                 hp_max=character.derived_values.get("hp"),
+                mp_max=character.derived_values.get("mp"),
+                mp_recovery_per_hour=(1 + character.effective_attributes.get("pow", 0) // 100)
+                if character.ruleset_id == "coc7-character-creation"
+                else 0,
                 san_max=max(0, 99 - character.skill_values.get("cthulhu_mythos", 0))
                 if character.ruleset_id == "coc7-character-creation"
                 else None,
@@ -653,11 +679,19 @@ class RoomService:
             require(body.expected_revision == room.revision, "房间已更新，请重新加载状态后编辑")
             previous_state = SessionStateV1.model_validate(room.session_state)
             require(body.state.combat == previous_state.combat, "战斗状态请使用战斗结算接口", 422)
-            require(body.state.module_runtime == previous_state.module_runtime,
-                    "物品、事件与结局请使用批准模组交互接口", 422)
+            require(
+                body.state.module_runtime == previous_state.module_runtime,
+                "物品、事件与结局请使用批准模组交互接口",
+                422,
+            )
             require(
                 body.state.luck_spending == previous_state.luck_spending,
                 "幸运可选规则请使用检定规则配置接口",
+                422,
+            )
+            require(
+                body.state.time_receipts == previous_state.time_receipts,
+                "时间回执只能由原规则服务维护",
                 422,
             )
             require(
@@ -799,6 +833,7 @@ class RoomService:
                 await self.agent_service.load(session, room, snapshot)
             require(set(map(str, data.assignments)) == set(slot_by_id), "存档角色席位不兼容")
             room.session_state = data.state.model_dump(mode="json")
+            await self.complete_runtime(session, room)
             if self.agent_service:
                 await self.agent_service.entities.reconcile_scene(session, room)
             # Clear first to support swaps with the unique member assignment constraint.

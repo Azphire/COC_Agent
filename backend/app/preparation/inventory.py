@@ -3,21 +3,24 @@
 from app.rooms.service import require
 
 
-def held_instance(runtime, entity_id, actor):
-    return next(
-        (
-            key
-            for key, holder in runtime.inventory.items()
-            if holder == actor and runtime.item_instances.get(key, key) == entity_id
-        ),
-        None,
-    )
+def held_instance(runtime, entity_id, actor, instance_id=None):
+    matches = [
+        key
+        for key, holder in runtime.inventory.items()
+        if holder == actor and runtime.item_instances.get(key, key) == entity_id
+    ]
+    if instance_id is not None:
+        return instance_id if instance_id in matches else None
+    return matches[0] if len(matches) == 1 else None
 
 
 async def public_inventory(agents, session, room):
     runtime = room.session_state.get("module_runtime", {})
     visible = {e["id"]: e for e in await agents.entities.public(session, room.id)}
     members = {m.id: m.display_name for m in await agents.rooms.members(session, room)}
+    definitions = {
+        e.source_entity_id: e.snapshot for e in await agents.entities.rows(session, room.id)
+    }
     return [
         {
             "instance_id": eid,
@@ -25,6 +28,12 @@ async def public_inventory(agents, session, room):
             "title": visible[runtime.get("item_instances", {}).get(eid, eid)]["title"],
             "holder_id": holder,
             "holder_name": members.get(holder, "未知持有者"),
+            "remaining_uses": runtime.get("item_uses", {}).get(
+                eid,
+                definitions.get(runtime.get("item_instances", {}).get(eid, eid), {}).get(
+                    "item_uses"
+                ),
+            ),
         }
         for eid, holder in runtime.get("inventory", {}).items()
         if runtime.get("item_instances", {}).get(eid, eid) in visible
@@ -41,7 +50,7 @@ async def apply_inventory(agents, session, room, state, rule, args, actor, node,
         item.entity_type == "item" and (item.state != "hidden" or op in {"initial", "recover"}),
         "物品尚未实际发现",
     )
-    instance = held_instance(runtime, eid, actor)
+    instance = held_instance(runtime, eid, actor, args.item_instance_id)
     if op in {"give", "drop", "consume"}:
         require(instance, "交出、放下或消耗只能来自本次行动者持有物")
     if op == "give":
@@ -64,7 +73,9 @@ async def apply_inventory(agents, session, room, state, rule, args, actor, node,
         dropped = [
             key
             for key, location in runtime.dropped_items.items()
-            if location == node and runtime.item_instances.get(key, key) == eid
+            if location == node
+            and runtime.item_instances.get(key, key) == eid
+            and (not args.item_instance_id or key == args.item_instance_id)
         ]
         require(
             len(dropped) == 1,

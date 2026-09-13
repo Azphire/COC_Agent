@@ -30,7 +30,7 @@ def runtime_context(room, slot_id):
     sanity = character.get("sanity", {})
     result = {
         k: character[k]
-        for k in ("hp", "mp", "san", "san_max", "luck")
+        for k in ("hp", "hp_max", "mp", "mp_max", "mp_recovery_progress", "san", "san_max", "luck")
         if character.get(k) is not None
     }
     if character.get("conditions"):
@@ -566,7 +566,15 @@ class SanityService:
             )
             if body.minute is not None:
                 require(body.minute >= state.game_minute, "游戏时间不能倒退")
-                state.game_minute = body.minute
+                from app.rooms.resource_service import advance_time
+
+                advance_time(
+                    state,
+                    body.minute,
+                    key=f"sanity:{room.revision}",
+                    source={"operation": body.operation, "reason": body.reason},
+                    mode="sanity",
+                )
             if body.round is not None:
                 require(body.round >= state.game_round, "游戏轮不能倒退")
                 state.game_round = body.round
@@ -705,6 +713,16 @@ class SanityService:
             require(body.value is not None, "SAN 现值不能留空", 422)
             require(body.value <= character.san_max, "SAN 不能超过 99 − 克苏鲁神话", 422)
         before = getattr(character, body.resource)
+        if body.resource == "mp":
+            require(
+                body.value is not None
+                and character.mp_max is not None
+                and body.value <= character.mp_max,
+                "MP须在0与当前上限之间",
+                422,
+            )
+            if body.value == character.mp_max:
+                character.mp_recovery_progress = 0
         setattr(character, body.resource, body.value)
         if body.resource == "san" and body.value == 0:
             character.sanity.kind, character.sanity.phase = "permanent", "bout"

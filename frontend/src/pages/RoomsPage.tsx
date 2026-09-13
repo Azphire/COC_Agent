@@ -1,4 +1,5 @@
 import { SanityPanel } from '../components/SanityPanel'
+import RuntimeCards from '../components/RuntimeCards'
 import { useEffect, useRef, useState } from 'react'
 import RoomTimelineEvent from '../components/RoomTimelineEvent'
 import { api, ApiError, authHeaders, hostToken, requestId, socketUrl } from '../api/session'
@@ -246,7 +247,7 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
       <SanityPanel room={room} busy={busy} command={command} />
       <section><h2>当前场景</h2><h3 data-testid="scene-title">{room.session_state.scene_title || '尚未设置场景'}</h3><p className="preserve-lines">{room.session_state.scene_summary}</p>
         <p>回合：{room.session_state.round_number ?? '—'} · 当前行动：{room.character_slots.find(s => s.id === room.session_state.active_slot_id)?.public_summary.name || '—'}</p>
-        {Object.entries(room.session_state.characters).map(([id, runtime]) => <p key={id} data-runtime-id={id}>{room.character_slots.find(s => s.id === id)?.public_summary.name} · HP {runtime.hp ?? '—'} / MP {runtime.mp ?? '—'} / SAN {runtime.san ?? '—'} / Luck {runtime.luck ?? '—'} · {runtime.conditions.join('、')}</p>)}
+        <RuntimeCards room={room} />
         {isHost && ['running', 'paused'].includes(room.status) && <button disabled={busy} onClick={() => setEditing({ state: structuredClone(room.session_state), revision: room.revision })}>编辑场景</button>}
         {editing && writable && <form onSubmit={async event => { event.preventDefault(); if (await command('/session-state', { expected_revision: editing.revision, state: editing.state }, 'PATCH')) setEditing(null) }}>
           <label>场景标题<input id="scene-title" maxLength={200} value={editing.state.scene_title} onChange={e => setEditing({ ...editing, state: { ...editing.state, scene_title: e.target.value } })} /></label>

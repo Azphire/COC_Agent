@@ -32,7 +32,20 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
     state = load_state(room)
     key = f"{seq}:{entity.source_entity_id}:{rule.id}"
     if key in state.module_runtime.receipts:
-        return state.module_runtime.receipts[key]
+        prior = state.module_runtime.receipts[key]
+        if prior.get("use_request"):
+            require(
+                prior["use_request"] == args.model_dump(mode="json"), "本事件已按其他物品参数结算"
+            )
+        return prior
+    if rule.use_effect:
+        require(
+            not any(
+                r.get("source_event_seq") == seq and r.get("use_result")
+                for r in state.module_runtime.receipts.values()
+            ),
+            "同一行动事件已经结算物品效果",
+        )
     if rule.inventory_operation == "initial" and actor in state.module_runtime.initial_belongings:
         initial = state.module_runtime.initial_belongings[actor]
         return next(
@@ -133,6 +146,8 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
                 scene=nav.current_scene_node_id,
                 item_id=args.used_item_id,
                 recipient=args.recipient_member_id,
+                instance_id=args.item_instance_id,
+                target=args.target_member_id,
             )
             require(not error, error or "动作不适用")
             require(
@@ -275,7 +290,8 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             c = check.document
             if (
                 c.get("name") != rule.check_name
-                or c.get("result", {}).get("passed") != rule.check_passed
+                or not rule.use_effect
+                and c.get("result", {}).get("passed") != rule.check_passed
             ):
                 continue
             if rule.opposed_npc_id:
@@ -287,19 +303,39 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         require(matched, "必须先结算本次行动所需的真实检定；主机确认也不能替代骰点")
     else:
         matched = []
+    use_result = None
+    passed = True
+    if rule.use_effect:
+        from app.preparation.item_effects import apply_use
+
+        if matched:
+            checked = await session.get(CheckRecord, matched[-1])
+            passed = bool(checked.document.get("result", {}).get("passed"))
+        use_result = await apply_use(agents, session, room, state, rule, args, actor, passed)
+    time_result = None
+    if rule.elapsed_minutes:
+        from app.rooms.resource_service import advance_time
+
+        time_result = advance_time(
+            state,
+            state.game_minute + rule.elapsed_minutes,
+            key=f"interaction:{key}",
+            source={"source_event_seq": seq, "entity_id": args.entity_id, "rule_id": rule.id},
+        )
     from app.preparation.encounters import apply_encounter
     from app.preparation.inventory import apply_inventory
 
     await apply_inventory(
         agents, session, room, state, rule, args, actor, nav.current_scene_node_id, seq, matched
     )
-    apply_encounter(state, rule, args, actor, nav.current_scene_node_id, seq)
-    state.module_runtime.flags.update(rule.set_flags)
+    if passed:
+        apply_encounter(state, rule, args, actor, nav.current_scene_node_id, seq)
+        state.module_runtime.flags.update(rule.set_flags)
     if rule.encounter_operation in {"sound_start", "sound_stop", "sound_once"}:
         state.module_runtime.flags["continuous_sound"] = any(
             s.get("active") and s.get("continuous") for s in state.module_runtime.sounds.values()
         )
-    for eid in rule.acquire_item_ids:
+    for eid in rule.acquire_item_ids if passed else []:
         item = await agents.entities.entity(session, room.id, eid)
         require(item.entity_type == "item" and item.state != "hidden", "所获物品必须已实际发现")
         require(eid not in state.module_runtime.consumed_items, "物品已经消耗，不能重新取得")
@@ -324,6 +360,10 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         )
     )
     receipt = {
+        "use_request": args.model_dump(mode="json") if rule.use_effect else None,
+        "use_result": use_result,
+        "time_result": time_result,
+        "prepare_outcome": rule.prepare_outcome,
         "entity_id": args.entity_id,
         "interaction_id": rule.id,
         "scene_node_id": nav.current_scene_node_id,
@@ -341,6 +381,11 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         "reason": args.reason if host else "批准玩家行动",
         "outcome": rule.outcome,
     }
+    if use_result:
+        result_text = rule.public_result if passed else "本次物品使用检定失败，效果未生效。"
+        receipt["text"] = result_text + (
+            f"；剩余次数 {use_result['uses_after']}" if use_result["uses_after"] is not None else ""
+        )
     if rule.observation_effect_id:
         observation = {
             "actor_member_id": actor,
@@ -405,7 +450,7 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
     state.module_runtime.outcome = rule.outcome or state.module_runtime.outcome
     state.module_runtime.pending_outcome = None if rule.outcome else rule.prepare_outcome
     store_state(room, state)
-    for eid in rule.reveal_entity_ids:
+    for eid in rule.reveal_entity_ids if passed else []:
         await agents.entities.reveal(
             session,
             room,
@@ -420,12 +465,42 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         "module.interaction",
         actor,
         {
-            "text": rule.public_result,
+            "text": receipt["text"],
             "source_event_seq": seq,
             "cycle_id": cycle.id if cycle else None,
         },
     )
     agents.rooms.append(session, room, "module.interaction_receipt", actor, receipt, "host_only")
+    if use_result:
+        agents.rooms.append(
+            session,
+            room,
+            "resource.item_used",
+            actor,
+            {
+                "source_event_seq": seq,
+                "text": (
+                    f"{receipt['text']} MP {use_result['actor_before']}→{use_result['actor_after']}"
+                ),
+                "effect_id": use_result["effect_id"],
+                "item_instance_id": use_result["item_instance_id"],
+            },
+            "actor_and_host",
+        )
+        if use_result["target_member_id"] != actor:
+            agents.rooms.append(
+                session,
+                room,
+                "resource.item_used",
+                use_result["target_member_id"],
+                {
+                    "source_event_seq": seq,
+                    "text": (
+                        f"物品效果：MP {use_result['target_before']}→{use_result['target_after']}"
+                    ),
+                },
+                "actor_and_host",
+            )
     if rule.outcome:
         module = await agents.module(session, room.id)
         module.state = {**module.state, "completed": True, "outcome": rule.outcome}

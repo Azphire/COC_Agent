@@ -465,6 +465,9 @@ class CombatService:
             require(not target.missing("treatment"), "治疗目标缺少HP、最大HP或CON", 422)
             require(target.hp < target.hp_max or target.injury.stabilized, "目标不需要治疗", 422)
             if op == "medicine":
+                from app.rooms.resource_service import validate_time
+
+                validate_time(state, state.game_minute + 60, mode="clinical", treating=target.id)
                 require(not combat.active, "医学治疗至少一小时，请先结束战斗", 422)
                 require(
                     not target.injury.dying or target.injury.stabilized, "濒死者须先急救稳定", 422
@@ -759,7 +762,16 @@ class CombatService:
                     injury.unconscious = False
         else:
             injury.medicine_attempted = True
-            state.game_minute += 60
+            from app.rooms.resource_service import advance_time
+
+            advance_time(
+                state,
+                state.game_minute + 60,
+                key=f"medicine:{action['id']}",
+                source={"action_id": action["id"], "operation": "medicine"},
+                mode="clinical",
+                treating=p.id,
+            )
             if passed:
                 roll = await self.fixed(session, room, action, "medicine_healing", formula="1d3")
                 # PDF102 excludes the dying patient's temporary first-aid HP from
@@ -962,7 +974,15 @@ class CombatService:
                     ),
                     "濒死未稳定时请逐轮处理，不能跳过多分钟",
                 )
-                state.game_minute += body.minutes
+                from app.rooms.resource_service import advance_time
+
+                advance_time(
+                    state,
+                    state.game_minute + body.minutes,
+                    key=f"combat:{room.revision}",
+                    source={"operation": body.operation, "reason": body.reason},
+                    mode="combat",
+                )
                 state.game_round += 1
                 for p in state.combat.participants.values():
                     if p.injury.stabilized and p.injury.check_due_minute <= state.game_minute:

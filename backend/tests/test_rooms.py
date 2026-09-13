@@ -229,6 +229,9 @@ def test_publish_only_finalized_and_immutable(client, character_settings):
     } == {
         "hp": 12,
         "mp": 10,
+        "mp_max": 10,
+        "mp_recovery_per_hour": 1,
+        "mp_recovery_progress": 0,
         "san": 50,
         "luck": sheet["derived_values"]["luck"],
         "conditions": [],

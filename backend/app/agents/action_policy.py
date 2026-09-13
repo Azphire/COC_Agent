@@ -130,6 +130,8 @@ class ActionPolicyValidator:
             return "rejected", "计划不属于当前回合"
         if plan.action_authority.get("rejection_code") == "initial_choice_settled":
             return "clarification_required", "起始随身物已经确定"
+        if plan.action_authority.get("rejection_code") == "item_precondition":
+            return "clarification_required", "物品使用条件未满足"
         if intent.requires_clarification or plan.needs_clarification or intent.type == "unknown":
             return "clarification_required", "行动意图不明确"
         if intent.type == "out_of_character":
@@ -236,6 +238,9 @@ class ActionPolicyValidator:
                 # KP free prose can contain unrevealed discoveries. A rejected
                 # plan cannot publish that prose through the clarification path.
                 result.clarification_question = {
+                    "物品使用条件未满足": plan.action_authority.get(
+                        "rejection_message", "物品尚不能使用"
+                    ),
                     "起始随身物已经确定": (
                         "你的起始随身物已由先前的幸运检定确定，不能重新选择或重骰。"
                         "这次没有取得新的物品，可以继续调查现场或前往其他车厢。"

@@ -64,6 +64,17 @@ class RoomEntityService:
         ]
         entities = await public_fact_scopes(self.agents, session, room_id, entities)
         room = await self.rooms.room(session, room_id)
+        from app.preparation.current_state import current_results
+
+        current = current_results(
+            room.session_state.get("module_runtime", {}), await self.rows(session, room_id)
+        )
+        for entity in entities:
+            receipts = [r for r in current if r["entity_id"] == entity["id"]]
+            if receipts:
+                entity["initial_public_summary"] = entity["public_summary"]
+                entity["current_state_receipts"] = receipts
+                entity["public_summary"] = "\n".join(dict.fromkeys(r["text"] for r in receipts))
         inventory = room.session_state.get("module_runtime", {}).get("inventory", {})
         members = {m.id: m.display_name for m in await self.rooms.members(session, room)}
         for entity in entities:

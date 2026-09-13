@@ -26,3 +26,10 @@ input:focus-visible {
   outline: 3px solid #649c8f;
   outline-offset: 3px;
 }
+/* Runtime cards keep live resources beside the existing natural-language action flow. */
+.runtime-cards { display: flex; flex-wrap: wrap; gap: 1rem; }
+.runtime-card { flex: 1 1 260px; min-width: 0; border: 1px solid #7e899744; border-radius: 8px; padding: 1rem; }
+.runtime-card h3 { margin-top: 0; }
+.runtime-card p { margin: .45rem 0; }
+.runtime-card small { overflow-wrap: anywhere; opacity: .8; }
+.runtime-cards > .muted { flex-basis: 100%; }

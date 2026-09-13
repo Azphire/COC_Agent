@@ -76,6 +76,13 @@ def response_brief(plan, context, results, *, withdrawal=None):
         else {"kind": "keeper"},
         "allowed_facts": [{"id": c["claim_id"], "text": c["statement"]} for c in facts],
         "current_scene": context.get("module", {}).get("scene", {}),
+        "current_inventory": context.get("item_holders", []),
+        "current_state": [
+            r
+            for e in context.get("public_entities", [])
+            if e.get("fact_scope", "current_scene") == "current_scene"
+            for r in e.get("current_state_receipts", [])
+        ],
         "incidental_memories": context.get("incidental_memories", []),
         "completed_results": results,
         "withdrawal": withdrawal,

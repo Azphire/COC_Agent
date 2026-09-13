@@ -44,6 +44,7 @@ class RevealConditions(DomainModel):
 
 
 class EntityFields(DomainModel):
+    item_uses: int | None = Field(default=None, ge=1, le=10000)
     dialogue_topics: list[dict] = Field(default_factory=list, max_length=12)
     aliases: list[str] = Field(default_factory=list, max_length=16)
     search_aliases: list[str] = Field(default_factory=list, max_length=16)
@@ -69,6 +70,8 @@ class EntityFields(DomainModel):
 
     @model_validator(mode="after")
     def distinct_sanity_effects(self):
+        if self.item_uses is not None and self.type != "item":
+            raise ValueError("只有物品可配置使用次数；武器弹药由战斗服务管理")
         if self.combat_template and self.type != "npc":
             raise ValueError("只有 NPC 可以准备战斗模板")
         if self.check_stats and self.type != "npc":
@@ -79,6 +82,7 @@ class EntityFields(DomainModel):
 
 
 class EntityDraft(EntityFields):
+    item_uses: None = None
     check_adjustments: list[PreparedCheckAdjustment] = Field(default_factory=list, max_length=0)
     interactions: list[ModuleInteraction] = Field(default_factory=list, max_length=0)
     combat_template: None = None
@@ -111,6 +115,7 @@ class HostEntityInput(EntityFields):
 
 
 class EntityPatch(DomainModel):
+    item_uses: int | None = Field(default=None, ge=1, le=10000)
     aliases: list[str] | None = Field(default=None, max_length=16)
     search_aliases: list[str] | None = Field(default=None, max_length=16)
     dialogue_topics: list[dict] | None = Field(default=None, max_length=12)

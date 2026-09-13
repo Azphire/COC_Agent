@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import Field, StrictBool, field_validator
+from pydantic import Field, StrictBool, StrictInt, field_validator, model_validator
 
 from app.domain.character import DomainModel
 
@@ -27,6 +27,18 @@ class ModuleReward(DomainModel):
 class RequiredSanitySettlement(DomainModel):
     entity_id: str
     effect_id: str
+
+
+class ItemUseEffect(DomainModel):
+    """Only the supported resource service; arbitrary character patches are forbidden."""
+
+    id: str = Field(min_length=1, max_length=80)
+    basis: str = Field(min_length=1, max_length=500)
+    mp_cost: StrictInt = Field(default=0, ge=0, le=100)
+    mp_restore: StrictInt = Field(default=0, ge=0, le=100)
+    uses: StrictInt = Field(default=1, ge=0, le=100)
+    target: Literal["self", "investigator"] = "self"
+    consume_on_failure: StrictBool = True
 
 
 class ModuleInteraction(DomainModel):
@@ -55,6 +67,8 @@ class ModuleInteraction(DomainModel):
     ) = None
     item_id: str | None = None
     consume_amount: int = Field(default=1, ge=1, le=20)
+    use_effect: ItemUseEffect | None = None
+    elapsed_minutes: StrictInt = Field(default=0, ge=0, le=1440)
     once_per_actor: bool = False
     encounter_operation: (
         Literal[
@@ -92,6 +106,25 @@ class ModuleInteraction(DomainModel):
     mythos_reward: int = Field(default=0, ge=0, le=10)
     san_zero: bool = False
 
+    @model_validator(mode="after")
+    def valid_use_effect(self):
+        if self.use_effect:
+            if not self.item_id or self.inventory_operation or self.failure_interaction_id:
+                raise ValueError("使用效果须指定物品，不能混用库存操作或失败分支")
+            if (
+                self.san_zero
+                or self.san_rewards
+                or self.mythos_reward
+                or self.outcome
+                or self.prepare_outcome
+                or self.following_npc_ids
+                or self.blocked_scene_node_ids
+                or self.encounter_operation
+                or self.observation_effect_id
+            ):
+                raise ValueError("物品不能绕过原规则服务直接改变SAN或终幕奖励")
+        return self
+
 
 class PreparedCheckAdjustment(DomainModel):
     id: str = Field(min_length=1, max_length=80)
@@ -121,6 +154,7 @@ class ModuleRuntimeState(DomainModel):
     consumed_items: dict[str, int] = Field(default_factory=dict)
     initial_belongings: dict[str, dict] = Field(default_factory=dict)
     item_instances: dict[str, str] = Field(default_factory=dict)
+    item_uses: dict[str, int] = Field(default_factory=dict)
     sounds: dict[str, dict] = Field(default_factory=dict)
     sound_attention: dict[str, str] = Field(default_factory=dict)
     doors: dict[str, bool] = Field(default_factory=dict)
@@ -144,6 +178,8 @@ class ModuleActionArgs(DomainModel):
     recipient_member_id: str | None = None
     npc_instance_id: str | None = None
     used_item_id: str | None = None
+    item_instance_id: str | None = None
+    target_member_id: str | None = None
 
 
 class HostModuleAction(ModuleActionArgs):

@@ -28,6 +28,8 @@ from app.rooms.combat_service import load_state, store_state
 
 
 class PreparedDecision(DomainModel):
+    item_instance_id: str | None = None
+    target_member_id: str | None = None
     scene_facts: dict[str, str] = Field(default_factory=dict)
     used_item_id: str | None = Field(default=None, json_schema_extra={"x-explicit-output": True})
     option: str | None = Field(default=None, json_schema_extra={"x-explicit-output": True})
@@ -103,7 +105,9 @@ def matches_action_focus(plan, scene_id, entity_id, rule):
     """An auxiliary method decision cannot redirect an already parsed action."""
     if not plan.focus or not plan.focus.action:
         return False
-    if plan.parsed_intent.type in {"out_of_character", "wait", "recall"}:
+    if plan.parsed_intent.type in {"out_of_character", "recall"} or (
+        plan.parsed_intent.type == "wait" and not rule.elapsed_minutes
+    ):
         return False
     focus = plan.focus.action_target_id if plan.focus else plan.parsed_intent.target_id
     if plan.parsed_intent.type == "move" or (
@@ -132,7 +136,7 @@ def matches_action_focus(plan, scene_id, entity_id, rule):
         not focus
         or focus in {entity_id, rule.item_id, rule.npc_id}
         or focus == scene_id
-        and scene_id in rule.scene_node_ids
+        and (scene_id in rule.scene_node_ids or rule.elapsed_minutes and not rule.scene_node_ids)
     )
 
 
@@ -157,6 +161,20 @@ def decision_contract(context, candidates):
             Literal[tuple([*context["npc_instances"], None])],
             Field(default=None, json_schema_extra={"x-explicit-output": True}),
         ),
+        item_instance_id=(
+            Literal[
+                tuple(
+                    [
+                        i["instance_id"]
+                        for i in context["items"]
+                        if i["holder_id"] == context["actor"]
+                    ]
+                    + [None]
+                )
+            ],
+            Field(default=None),
+        ),
+        target_member_id=(Literal[tuple([*context["members"], None])], Field(default=None)),
         action_clause_ids=(
             list[Literal[tuple(c["id"] for c in context["clauses"])]],
             Field(
@@ -217,6 +235,9 @@ def state_verified_method(raw):
     """Mechanical operations rely on current clauses and executor prerequisites."""
     return bool(
         raw.get("inventory_operation")
+        or raw.get("use_effect")
+        or raw.get("elapsed_minutes")
+        or raw.get("outcome")
         or raw.get("acquire_item_ids")
         or raw.get("encounter_operation") == "sound_once"
         or raw.get("required_item_ids")
@@ -284,6 +305,16 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
         from app.preparation.search import repair_local_interaction_target
 
         repair_local_interaction_target(plan, facts, members)
+        if (
+            plan.parsed_intent.type == "wait"
+            and "rest" in action_kinds(facts.raw_text)
+            and plan.focus
+            and not plan.focus.action
+        ):
+            plan.focus.action = facts.raw_text
+        from app.preparation.current_state import bind_terminal_confirmation
+
+        terminal = bind_terminal_confirmation(plan, facts, data.module_runtime)
         plan.action_authority = freeze_action(
             plan,
             facts.raw_text,
@@ -294,6 +325,8 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
             data.module_runtime,
             members,
         )
+        if terminal:
+            plan.action_authority["terminal_confirmation"] = terminal
         plan.proposed_tool_calls = [
             t for t in plan.proposed_tool_calls if t.name != "apply_module_action"
         ]
@@ -374,7 +407,10 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 ):
                     continue
                 if rule.inventory_operation in {"give", "drop", "consume"} and not held_instance(
-                    data.module_runtime, rule.item_id or eid, facts.actor_member_id
+                    data.module_runtime,
+                    rule.item_id or eid,
+                    facts.actor_member_id,
+                    plan.action_authority.get("held_instances", {}).get(rule.item_id or eid),
                 ):
                     continue
                 if rule.inventory_operation == "pickup" and not any(
@@ -456,6 +492,16 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                     "uses_sound_item": c["rule"]["encounter_operation"] == "sound_once",
                     "allows_worn_item": c["rule"]["allow_worn_sound_item"],
                     "required_facts": c["rule"]["required_facts"],
+                    **(
+                        {"use_effect": c["rule"]["use_effect"]}
+                        if c["rule"].get("use_effect")
+                        else {}
+                    ),
+                    **(
+                        {"elapsed_minutes": c["rule"]["elapsed_minutes"]}
+                        if c["rule"].get("elapsed_minutes")
+                        else {}
+                    ),
                 }
                 for c in candidates
             ],
@@ -547,6 +593,8 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 scene=context["scene"],
                 item_id=decision.used_item_id,
                 recipient=decision.recipient_member_id,
+                instance_id=decision.item_instance_id,
+                target=decision.target_member_id,
             )
             if (
                 not evidence
@@ -583,6 +631,8 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
             verification.action_quote = action
             rule = ModuleInteraction.model_validate(chosen["rule"])
             plan.needs_host_review = plan.needs_clarification = False
+            if rule.elapsed_minutes and plan.parsed_intent.type == "wait":
+                plan.parsed_intent.type = "interact"
             plan.parsed_intent.requires_clarification = False
             plan.proposed_transition_id = None
             args = {
@@ -594,7 +644,37 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 else None,
                 "npc_instance_id": decision.npc_instance_id,
                 "used_item_id": decision.used_item_id,
+                "item_instance_id": decision.item_instance_id
+                or plan.action_authority.get("item_instances", {}).get(rule.item_id),
+                "target_member_id": decision.target_member_id if rule.use_effect else None,
             }
+            if rule.use_effect or rule.elapsed_minutes:
+                from app.preparation.item_effects import preflight_use
+                from app.preparation.runtime_schemas import ModuleActionArgs
+                from app.rooms.resource_service import validate_time
+                from app.rooms.service import RoomError
+
+                try:
+                    if rule.use_effect:
+                        await preflight_use(
+                            agents,
+                            session,
+                            room,
+                            data,
+                            rule,
+                            ModuleActionArgs.model_validate(args),
+                            context["actor"],
+                        )
+                    if rule.elapsed_minutes:
+                        validate_time(data, data.game_minute + rule.elapsed_minutes)
+                except RoomError as exc:
+                    plan.proposed_check = None
+                    plan.action_authority["rejection_code"] = "item_precondition"
+                    plan.action_authority["rejection_message"] = exc.message
+                    plan.needs_clarification = plan.parsed_intent.requires_clarification = True
+                    plan.parsed_intent.clarification_question = exc.message
+                    run.structured_output = plan.model_dump(mode="json")
+                    return
             plan.proposed_tool_calls.append(PlannedTool(name="apply_module_action", arguments=args))
             needs_check = bool(rule.check_name)
             if rule.carry_attribute:
@@ -631,7 +711,8 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 plan.proposed_check = CheckProposal(
                     target_member_id=context["actor"],
                     kind="attribute"
-                    if rule.check_name in {"str", "dex", "con", "luck"}
+                    if rule.check_name
+                    in {"str", "dex", "con", "luck", "pow", "int", "edu", "app", "siz"}
                     else "skill",
                     name=rule.check_name,
                     difficulty=rule.check_difficulty,

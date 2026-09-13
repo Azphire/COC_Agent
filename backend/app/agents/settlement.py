@@ -109,8 +109,7 @@ class CheckSettlementService:
         record.document = check.model_dump(mode="json")
         options = await self.options(session, room, record.document)
         meaningful_luck = any(
-            result_signature(o["result"]) != result_signature(raw)
-            for o in options["luck"]
+            result_signature(o["result"]) != result_signature(raw) for o in options["luck"]
         )
         if automatic or not (meaningful_luck or options["push"]):
             self.finish(session, room, record, check, raw)
@@ -224,7 +223,9 @@ class CheckSettlementService:
                 "角色状态已满，请主机处理后再确认掷骰",
             )
         elif consequence["kind"] == "time":
-            require(state.game_minute + consequence["minutes"] <= 1_000_000, "游戏时间超出上限")
+            from app.rooms.resource_service import validate_time
+
+            validate_time(state, state.game_minute + consequence["minutes"], mode="push")
         dice, result = await self.fixed_roll(session, room, record, check, "push")
         progress.update(push_dice=dice, push_result=result)
         # Retain original dice in check.dice; final outcome is explicitly separate.
@@ -236,12 +237,24 @@ class CheckSettlementService:
             if consequence["condition"] not in character.conditions:
                 character.conditions.append(consequence["condition"])
         elif consequence["kind"] == "time":
-            state.game_minute += consequence["minutes"]
+            from app.rooms.resource_service import advance_time
+
+            advance_time(
+                state,
+                state.game_minute + consequence["minutes"],
+                key=f"push:{record.id}",
+                source={"check_id": record.id},
+                mode="push",
+            )
         elif consequence["kind"] == "damage":
             room.session_state = state.model_dump(mode="json")
             await self.agents.combat.consequence_damage(
-                session, room, record, consequence["damage_formula"],
-                consequence["armor_applies"], consequence["description"],
+                session,
+                room,
+                record,
+                consequence["damage_formula"],
+                consequence["armor_applies"],
+                consequence["description"],
             )
             progress["consequence_status"] = "applied"
             self.finish(session, room, record, check, result)
@@ -270,7 +283,12 @@ class CheckSettlementService:
         progress.update(consequence_status="host_handled", handled_reason=body.reason)
         if body.damage is not None:
             await self.agents.combat.consequence_damage(
-                session, room, record, str(body.damage), body.armor_applies, body.reason,
+                session,
+                room,
+                record,
+                str(body.damage),
+                body.armor_applies,
+                body.reason,
             )
         record.document = check.model_dump(mode="json")
         self.event(session, room, record, "check.consequence_applied")

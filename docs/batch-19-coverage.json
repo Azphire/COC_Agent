@@ -1,0 +1,279 @@
+{
+  "batch": 19,
+  "baseline_head": "c572687caf4f17f6258ca8c0d92faed10bb05619",
+  "final_head": "c572687caf4f17f6258ca8c0d92faed10bb05619",
+  "branch": "main",
+  "worktree_changes_committed": false,
+  "runtime_complete": false,
+  "runtime_complete_scope": "Overall batch acceptance, including long-session memory and natural interaction, has not passed.",
+  "p0_targeted_passed": true,
+  "mp_item_runtime_verified_for_configured_scope": true,
+  "all_items_supported": false,
+  "all_module_routes_naturally_verified": false,
+  "source": {
+    "local_files_present": true,
+    "formal_package": "data/prepared/changan/batch-19/package-approved.json",
+    "formal_package_byte_sha256": "b47bf0fb5127e4bc46fdb1c5a97fd9b41fe358eea2595351b5e19d95411e6c87",
+    "formal_package_unchanged": true,
+    "numeric_approval_reused": "batch17-npc-values-v1-user-approval",
+    "provenance": "data/prepared/changan/batch-19/provenance.json",
+    "approval": "data/prepared/changan/batch-19/approval.json",
+    "supplement": "data/prepared/changan/batch-19/npc-supplement.json",
+    "mp_rule": {
+      "source": "data/prepared/changan/batch-19/mp-rule-source.json",
+      "physical_pdf_page": 148,
+      "printed_page": 147,
+      "rate": "1 + floor(POW / 100) MP per 60 game minutes; capped at derived maximum",
+      "hp_substitution_configured": false
+    },
+    "package_audits_are_static_not_live_acceptance": true
+  },
+  "final_version": {
+    "name": "C11",
+    "manifest": "data/prepared/changan/batch-19/candidate11-freeze.json",
+    "manifest_byte_sha256": "1172b28621e9b56f8d5022e71f8b22a9cd38f027bc4cc19fe7d832d6cc19d1e6",
+    "file_count": 241,
+    "final_integrity": "data/prepared/changan/batch-19/final-integrity.json",
+    "changes_during_long_run": [],
+    "model": {
+      "provider": "ollama",
+      "name": "qwen3:8b",
+      "context_limit": 8192,
+      "output_limit": 900,
+      "planning_output_limit": 1600,
+      "temperature": 0.3,
+      "think": false,
+      "keep_alive": "5m",
+      "summary_turn_threshold": 20,
+      "summary_context_threshold": 12000
+    }
+  },
+  "p0": {
+    "run": "p0-c1",
+    "origin": "Explicit clone of batch-18 real saved room; not a batch-19 natural opening",
+    "live_validation_version": "C9",
+    "final_code_regression_version": "C11",
+    "later_door_question_seq": 1116,
+    "restored_door_question_seq": 1147,
+    "confirmation_seq": 1153,
+    "ending_receipt_seq": 1171,
+    "new_unlocks": 0,
+    "new_checks": 0,
+    "same_request_replay_unchanged": true,
+    "evidence": "data/prepared/changan/batch-19/p0-c1/p0-verification.json"
+  },
+  "configured_effects": {
+    "scope": [
+      "MP cost",
+      "MP restoration",
+      "remaining uses",
+      "failure consumption policy",
+      "actual instance and holder selection",
+      "atomic resource and usage receipt",
+      "game-time recovery",
+      "existing-save migration",
+      "runtime cards"
+    ],
+    "unsupported_direct_effect_fields": [
+      "HP",
+      "SAN",
+      "Luck",
+      "injury",
+      "weapon ammo"
+    ],
+    "existing_rule_services_retained": true,
+    "example_package": "data/prepared/changan/batch-19/example-package.json",
+    "example_package_byte_sha256": "33ad128458c9ef16e6e300979e287d75e10f597c79af9841070750ff9eaa3bc6",
+    "example_is_original_module": false,
+    "example_source": "data/prepared/changan/batch-19/example-source/example.md",
+    "live_run": "example-v4",
+    "version_scope": "C5 initial use, C10 transfer and AI use, C11 time and restart; not a fixed-version long run",
+    "evidence": "data/prepared/changan/batch-19/example-v4/resource-verification.json",
+    "player_mp_path": [
+      10,
+      6,
+      2,
+      2,
+      7,
+      7,
+      8
+    ],
+    "ai_mp_path": [
+      10,
+      6,
+      10
+    ],
+    "failed_attempt": {
+      "roll": 100,
+      "threshold": 50,
+      "mp_before": 10,
+      "mp_after": 6,
+      "uses_before": 3,
+      "uses_after": 2
+    },
+    "insufficient_mp": {
+      "before": 2,
+      "after": 2,
+      "uses_before": 1,
+      "uses_after": 1,
+      "new_dice": 0
+    },
+    "game_minutes": [
+      0,
+      30,
+      60
+    ],
+    "restored_progress": 30,
+    "restored_item_counts": "Both exhausted (0); nonzero count restore covered by regression fixtures",
+    "same_type_instance_and_nonzero_restore": "Directed tests, not formal-module natural coverage"
+  },
+  "frontend": {
+    "lint_passed": true,
+    "build_passed": true,
+    "tested_version": "C9 frontend, unchanged through C11",
+    "lint_log": "data/prepared/changan/batch-19/frontend-lint-c9.txt",
+    "build_log": "data/prepared/changan/batch-19/frontend-build-c9.txt",
+    "browser_evidence": [
+      "data/prepared/changan/batch-19/example-v3/browser/mp-cost/verification.json",
+      "data/prepared/changan/batch-19/example-v4/browser/recovery-progress/verification.json"
+    ]
+  },
+  "tests": {
+    "groups_overlap_do_not_sum": true,
+    "groups": [
+      {
+        "evidence": "data/prepared/changan/batch-19/c11-directed.xml",
+        "version": "C11",
+        "tests": 152,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "seconds": 96.449
+      },
+      {
+        "evidence": "data/prepared/changan/batch-19/c9-regression.xml",
+        "version": "C9",
+        "tests": 194,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "seconds": 152.353
+      },
+      {
+        "evidence": "data/prepared/changan/batch-19/resources-final.xml",
+        "version": "before C11; subsequent changes were context/action matching",
+        "tests": 117,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "seconds": 135.427
+      }
+    ],
+    "early_failed_runs_preserved": true
+  },
+  "long_run": {
+    "run": "long-c1",
+    "room_id": "0b701394-4557-49bb-b7f8-49275b1dbce1",
+    "version": "C11",
+    "fresh_normal_opening": true,
+    "spliced_rooms_or_versions": false,
+    "dice_reset": false,
+    "host_resource_correction": false,
+    "idle_padding": false,
+    "player_visible_action_selection": true,
+    "start_utc": "2026-09-13T10:16:38.137602+00:00",
+    "last_interaction_end_utc": "2026-09-13T11:18:37.292075+00:00",
+    "gameplay_wall_seconds": 3719.154473,
+    "operational_pause_seconds": 17.61469,
+    "gameplay_minus_pause_seconds": 3701.539783,
+    "request_processing_seconds": 2585.234999999957,
+    "between_request_reading_and_decision_seconds": 1116.3047830000432,
+    "archive_end_excluded_from_gameplay": "2026-09-13T11:19:24.384785+00:00",
+    "player_inputs": 37,
+    "model_calls": 174,
+    "model_latency_seconds": 1349.9,
+    "summary_updates": 39,
+    "summary_source_ids_all_exist": true,
+    "active_summary_coverage": [
+      {
+        "profile_id": "358fa5ab-35d3-4ce8-85e4-616b9d34f60a",
+        "coverage_start": 19,
+        "coverage_end": 1179
+      },
+      {
+        "profile_id": "26920e55-57d3-46d4-abb2-e836ff10a665",
+        "coverage_start": 19,
+        "coverage_end": 1207
+      }
+    ],
+    "snapshot_restore_comparison": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "restore_snapshot": "1d2bf43c-35e2-4968-a082-1569433e6a75",
+    "final_snapshot": "e9dcfc02-a1d8-4f4a-8bcf-5c6953802c1f",
+    "pending_treatment_preserved": "8d7c7cc8-de92-4dec-b479-26a400c66a9c",
+    "actual_treatment": {
+      "before_hp": 3,
+      "after_hp": 4,
+      "hp_max": 11,
+      "roll": 1,
+      "threshold": 30,
+      "action_id": "8d7c7cc8-de92-4dec-b479-26a400c66a9c",
+      "receipt_seq": 611,
+      "major_wound_remains": true
+    },
+    "final_resources": {
+      "549e2508-e22f-41a4-a53b-ad01a1da055e": {
+        "hp": 12,
+        "hp_max": 12,
+        "mp": 10,
+        "mp_max": 10,
+        "mp_recovery_progress": 0,
+        "san": 50,
+        "luck": 60
+      },
+      "fce88704-74f5-4516-a3a9-093e5ae55e9e": {
+        "hp": 12,
+        "hp_max": 12,
+        "mp": 10,
+        "mp_max": 10,
+        "mp_recovery_progress": 0,
+        "san": 50,
+        "luck": 50
+      }
+    },
+    "game_minute": 0,
+    "outcome": null,
+    "natural_mp_effects_in_formal_module": false,
+    "duration_requirement_met": true,
+    "memory_acceptance_passed": false,
+    "npc_dialogue_passed": false,
+    "held_item_transfer_completed": false,
+    "full_continuous_acceptance_passed": false,
+    "failed_recall_events": [
+      978,
+      979,
+      1043,
+      1494
+    ],
+    "npc_speech_events": 0,
+    "natural_san_loss_combat_or_endings_claimed": false,
+    "evidence": "data/prepared/changan/batch-19/long-c1/metrics.json",
+    "stop_reason": "Normal pause after final recall, no natural terminal outcome or environment interruption."
+  },
+  "remaining": [
+    "Late recall and summary text confuse opening clues, NPC statements, item possession/use and current scene despite valid event IDs.",
+    "Natural NPC dialogue did not produce speech; formal-run held-item transfer was not completed.",
+    "Movement/stealth wording caused clarification loops and narration inconsistent with current scene; an existing sound operation still allowed progress.",
+    "Full continuous-session acceptance requires a new successful fixed-version run after relevant fixes; this run remains failed.",
+    "Complete occupation/skills/specializations/assets/equipment/background and sourced age-90-plus creation remain outside this batch."
+  ],
+  "private_evidence_excluded_from_git": true
+}

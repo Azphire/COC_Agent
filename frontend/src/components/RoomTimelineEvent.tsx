@@ -14,7 +14,7 @@ export default function RoomTimelineEvent({ event, room, debug = false }: { even
   const actor = String(p.actor_name || (isKP || teammate ? binding?.name : member?.display_name) || '系统')
   const role = event.type.startsWith('rules.') ? '规则问答' : event.type === 'npc.spoke' ? 'NPC' : event.type.startsWith('review.') ? '主机审阅' : event.type.startsWith('entity.') ? '线索' : event.type === 'scene.updated' ? '场景' : event.type.startsWith('check.') ? '检定' : event.type === 'agent.cycle_changed' ? 'Agent' : isKP ? 'KP' : teammate ? 'AI队友' : system ? '系统' : member?.controller_type === 'agent' ? 'AI队友' : member ? '真人' : '系统'
   const cycle = String(p.cycle_id || '').slice(0, 8)
-  const textTypes = ['rules.question', 'rules.answered', 'chat.message', 'action.submitted', 'keeper.narration', 'npc.spoke', 'agent.spoke', 'agent.action_proposed', 'module.completed', 'agent.needs_host_ruling']
+  const textTypes = ['rules.question', 'rules.answered', 'chat.message', 'action.submitted', 'keeper.narration', 'npc.spoke', 'agent.spoke', 'agent.action_proposed', 'module.completed', 'module.interaction', 'resource.item_used', 'agent.needs_host_ruling']
   const result = p.result as { total: number; level: string; passed: boolean } | undefined
   const labels: Record<string, string> = { running: '进行中', waiting_for_roll: '等待检定', completed: '完成', failed: '失败', cancelled: '已取消' }
   return <li data-event-seq={event.seq} data-actor-type={role} data-controller={isKP || teammate ? 'agent' : system ? 'system' : member?.controller_type || 'system'}>

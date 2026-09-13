@@ -170,6 +170,7 @@ class ModuleContextResolver:
             module["interaction_state"] = {
                 "flags": runtime.get("flags", {}),
                 "held_items": holdings,
+                "doors": runtime.get("doors", {}),
             }
         if not fits():
             # Include mandatory current state before allocating the scene prose.

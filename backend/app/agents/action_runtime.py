@@ -60,6 +60,7 @@ NARRATION_INSTRUCTION = (
     "answer_basis=improvise或旧unrecorded时，自然补全普通见闻、环境、可读文字或临时互动对象，不需主机审阅。"
     "以当前场景和已公开线索引导即兴，不强迫调查路线，不覆盖已有内容，不补写核心真相、隐藏答案或关键发现。"
     "incidental_memories保留了先前即兴的说话人和地点；追问时保持一致，历史地点不代表当前在场。"
+    "current_state是已执行的当前状态及原事件，优先于初始场景描述和旧即兴；不能把已执行结果说回初始状态。"
     "每轮最多两处简短即兴细节，先写入public_narration或npc_speech，再把原样短句列入incidental_details。"
     "临时对象仅作叙述互动，不创建可结算实体、出口或资源；检定结果、物品交接和行动成功以completed_results为准。"
     "询问是否还物品仍待玩家递出，提出建议仍待玩家决定，不能描述这些已经发生。"
@@ -97,6 +98,25 @@ def planning_prompt(context):
         or context.get("prepared_module")
         or context.get("module_context_audit")
     ):
+        # Recall targets and response candidates describe the same public facts.
+        # Carry each historical identity once, with its title and scope; keep
+        # the complete projections in run.context for server-side validation.
+        known = {e["id"]: e for e in context.get("known_targets", [])}
+        if known:
+            result["response_fact_candidates"] = [
+                {**known.get(e["id"], {}), **e}
+                for e in context.get("response_fact_candidates", [])
+            ]
+            selected_ids = {e["id"] for e in result["response_fact_candidates"]}
+            remaining = [e for eid, e in known.items() if eid not in selected_ids]
+            if remaining:
+                result["known_targets"] = remaining
+            else:
+                result.pop("known_targets", None)
+        result["characters"] = [
+            {k: v for k, v in c.items() if k not in {"slot_id", "occupation"}}
+            for c in context.get("characters", [])
+        ]
         # Visibility/scope is already carried by the actual fact candidates and
         # approved entity summaries; the full projection remains in the run audit.
         result.pop("public_entities", None)
@@ -1035,8 +1055,9 @@ class ActionRuntimeMixin:
                 import logging
 
                 logging.getLogger(__name__).warning(
-                    "Action context exceeds %s: %s",
+                    "Action context exceeds %s (%s actual): %s",
                     budget,
+                    context_size(),
                     {k: len(json.dumps(v, ensure_ascii=False)) for k, v in run.context.items()},
                 )
             require(
@@ -1938,6 +1959,9 @@ class ActionRuntimeMixin:
         except Exception as error:
             if "OOM" in str(error):
                 raise
+            import logging
+
+            logging.getLogger(__name__).exception("Keeper narration preparation/generation failed")
             latest = await self.current(state)
             if latest.get("status") != "running":
                 return latest

@@ -33,6 +33,9 @@ VERBS = {
     "release": r"挣脱|挣开|摆脱|\bescape\b|\bbreak free\b",
     "control": r"推|拉|加速|减速|停车|\b(?:push|pull|accelerate|stop)\b",
     "converse": r"问|告诉|说|询问|答|\b(?:ask|tell|say)\b",
+    "use": r"使用|启用|激活|饮用|喝|吃|服用|\b(?:use|activate|drink|eat)\b",
+    "settle": r"确认.{0,12}(?:结束|终幕|结算)|继续结算|结束调查",
+    "rest": r"休息|等候|等待|歇|\b(?:rest|wait)\b",
 }
 NON_ACTION = re.compile(
     r"是否|能否|可否|假如|如果|假设|建议|不如|要不要|(?:你|我们)(?:可以|应该)"
@@ -76,8 +79,20 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
     kinds = action_kinds(action) if action and action in raw and not request else []
     if plan.parsed_intent.type == "observe":
         kinds = [k for k in kinds if k in {"observe", "light"}]
-    held = {eid: instance for eid in entities if (instance := held_instance(runtime, eid, actor))}
+    explicit = [iid for iid in {*runtime.inventory, *runtime.dropped_items} if iid in action]
+    held = {}
+    for eid in entities:
+        named_instances = [iid for iid in explicit if runtime.item_instances.get(iid, iid) == eid]
+        if len(named_instances) > 1:
+            continue
+        instance = held_instance(
+            runtime, eid, actor, named_instances[0] if named_instances else None
+        )
+        if instance:
+            held[eid] = instance
     named = {eid for eid, e in entities.items() if any(a and a in action for a in aliases(e))}
+    named.update(runtime.item_instances.get(iid, iid) for iid in explicit)
+    named.intersection_update(entities)
     instances = {
         eid: instance
         for eid, instance in held.items()
@@ -103,10 +118,14 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
             if mid != actor and name in action and "give" in kinds
         ],
         "request_member_id": request,
+        "explicit_instance_ids": explicit,
+        "named_members": [mid for mid, name in members.items() if name in action],
     }
 
 
 def required_kinds(rule):
+    if rule.use_effect:
+        return {"use", "consume"}
     if rule.action_kinds:
         return set(rule.action_kinds)
     if rule.inventory_operation:
@@ -146,6 +165,13 @@ def selected_action_matches(authority, selected, rule):
     operation; an observation clause cannot borrow a different clause's throw.
     """
     allowed = required_kinds(rule)
+    terminal = authority.get("terminal_confirmation", {})
+    if (
+        rule.outcome
+        and terminal.get("outcome") == rule.outcome
+        and terminal.get("interaction_id") == rule.id
+    ):
+        return bool(selected and selected in authority.get("action", ""))
     return bool(
         selected
         and selected in authority.get("action", "")
@@ -156,7 +182,18 @@ def selected_action_matches(authority, selected, rule):
 
 
 def authority_error(
-    authority, rule, runtime, *, actor, seq, scene, item_id=None, recipient=None, check_facts=True
+    authority,
+    rule,
+    runtime,
+    *,
+    actor,
+    seq,
+    scene,
+    item_id=None,
+    recipient=None,
+    instance_id=None,
+    target=None,
+    check_facts=True,
 ):
     item_id = rule.sound_item_id or item_id
     if not authority or any(
@@ -170,8 +207,22 @@ def authority_error(
         return "行动授权与本次事件不一致"
     if authority.get("request_member_id"):
         return "队友请求须由队友自己的行动事件执行"
+    if (
+        rule.use_effect
+        and target
+        and target != actor
+        and target not in authority.get("named_members", [])
+    ):
+        return "效果目标与本次实际行动不一致"
     allowed = required_kinds(rule)
-    if allowed and not allowed.intersection(authority.get("kinds", [])):
+    terminal = authority.get("terminal_confirmation", {})
+    settling = bool(
+        rule.outcome
+        and rule.outcome == runtime.pending_outcome
+        and terminal.get("outcome") == rule.outcome
+        and terminal.get("interaction_id") == rule.id
+    )
+    if allowed and not settling and not allowed.intersection(authority.get("kinds", [])):
         return "实际动作不授权此操作"
     if (
         rule.inventory_operation in {"initial", "recover"}
@@ -190,16 +241,23 @@ def authority_error(
         # A possession prerequisite (e.g. keys while operating an unlocked
         # console) does not require reciting the item name on every action.
         frozen = authority.get("held_instances", authority.get("item_instances", {})).get(eid)
-        if not frozen or held_instance(runtime, eid, actor) != frozen:
+        if not frozen or held_instance(runtime, eid, actor, frozen) != frozen:
             return "所用物品实例与本次实际动作不一致"
     item_ids = set()
     if rule.inventory_operation in {"give", "drop", "consume"}:
+        item_ids.add(rule.item_id)
+    if rule.use_effect:
         item_ids.add(rule.item_id)
     if rule.encounter_operation == "sound_once" and item_id:
         item_ids.add(item_id)
     for eid in item_ids:
         frozen = authority.get("item_instances", {}).get(eid)
-        if not frozen or held_instance(runtime, eid, actor) != frozen:
+        if (
+            not frozen
+            or held_instance(runtime, eid, actor, frozen) != frozen
+            or instance_id is not None
+            and instance_id != frozen
+        ):
             return "所用物品实例与本次实际动作不一致"
     if rule.encounter_operation == "sound_once" and not item_id:
         if not rule.allow_worn_sound_item or not re.search(

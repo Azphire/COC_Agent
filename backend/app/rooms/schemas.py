@@ -22,6 +22,9 @@ class CharacterRuntimeV1(DomainModel):
     injury: Injury = Field(default_factory=Injury)
     weapons: list[Weapon] = Field(default_factory=list, max_length=20)
     mp: Resource = None
+    mp_max: Resource = None
+    mp_recovery_per_hour: Annotated[StrictInt, Field(ge=0, le=1000)] = 0
+    mp_recovery_progress: Annotated[StrictInt, Field(ge=0, lt=60)] = 0
     san: Resource = None
     luck: Resource = None
     san_max: Resource = None
@@ -32,6 +35,7 @@ class CharacterRuntimeV1(DomainModel):
 
 
 class SessionStateV1(DomainModel):
+    time_receipts: dict[str, dict] = Field(default_factory=dict)
     module_runtime: ModuleRuntimeState = Field(default_factory=ModuleRuntimeState)
     combat: CombatState = Field(default_factory=CombatState)
     luck_spending: StrictBool = False
