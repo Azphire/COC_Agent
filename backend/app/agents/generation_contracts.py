@@ -134,6 +134,7 @@ def generation_contract(schema, context):
                 },
                 "schema_version": 1,
                 "addressed_member_id": None,
+                "action_authority": {},
                 "target_entity_ids": [],
                 "target_node_ids": [],
                 "source_entity_ids": [],
@@ -165,6 +166,18 @@ def generation_contract(schema, context):
                         "x-explicit-output": True,
                     },
                 ),
+            ),
+            **(
+                {
+                    "proposed_transition_id": (
+                        Literal[
+                            tuple([e["transition_id"] for e in context["approved_exits"]] + [None])
+                        ],
+                        Field(default=None, json_schema_extra={"x-explicit-output": True}),
+                    )
+                }
+                if "approved_exits" in context
+                else {}
             ),
         )
     if schema is KeeperNarration:
@@ -215,6 +228,9 @@ def restore_output(output, schema, context):
     value = output.model_dump(mode="json")
     if schema is KeeperPlan:
         from app.agents.action_policy import READ_TOOLS, explicit_movement, named_move_exits
+
+        if value.get("proposed_transition_id") in {"null", "None", ""}:
+            value["proposed_transition_id"] = None
 
         raw = context["triggering_action"]["payload"]["text"]
         named = named_move_exits(raw, context.get("approved_exits", []))
@@ -293,6 +309,39 @@ def restore_output(output, schema, context):
                     else ""
                 )
         from app.agents.action_policy import named_move_exits
+        from app.preparation.action_authority import NON_ACTION, action_kinds
+
+        if (
+            value["parsed_intent"]["type"] == "move"
+            and not explicit_movement(raw)
+            and set(action_kinds(focus.get("action", "")))
+            & {"control", "open", "close", "give", "place", "take", "light", "sound_start"}
+            and any(
+                t["id"] == focus.get("action_target_id")
+                and t["type"] in {"item", "location", "clue"}
+                for t in context.get("current_targets", [])
+            )
+        ):
+            # Moving a lever/item is not an investigator scene transition.
+            # Keep the selected target and raw clauses, then use normal method
+            # adjudication; this repair cannot grant any world operation itself.
+            value["parsed_intent"]["type"] = "interact"
+            value["proposed_transition_id"] = None
+            value["proposed_tool_calls"] = [
+                t
+                for t in value["proposed_tool_calls"]
+                if t["name"] not in {"transition_scene", "update_scene"}
+            ]
+
+        if NON_ACTION.search(focus.get("action", "")) and not action_kinds(focus["action"]):
+            focus["question"] = focus.get("question") or focus["action"]
+            focus["action"] = ""
+            focus["action_target_id"] = None
+            value["parsed_intent"]["type"] = "converse" if focus.get("addressee_id") else "wait"
+            value["proposed_check"] = None
+            value["proposed_tool_calls"] = []
+            value["proposed_reveal_entity_ids"] = []
+            value["proposed_transition_id"] = None
 
         named = named_move_exits(
             context["triggering_action"]["payload"]["text"], context.get("approved_exits", [])
@@ -334,6 +383,15 @@ def restore_output(output, schema, context):
                         for c in clauses[min(movement_positions) : max(movement_positions) + 1]
                     )
         proposal = value.get("proposed_check")
+        from app.preparation.search import (
+            repair_control_target,
+            repair_observation_target,
+            repair_search_target,
+        )
+
+        repair_observation_target(value, context)
+        repair_search_target(value, context)
+        repair_control_target(value, context)
         named_requirements = [
             r
             for r in context.get("check_requirements", [])
@@ -367,9 +425,17 @@ def restore_output(output, schema, context):
             focus["obstacle"] = "模组已批准条件要求先完成检定，目标尚未确认。"
         if (
             required
-            and not proposal
             and focus.get("action")
             and value["parsed_intent"]["type"] in {"investigate", "observe", "interact"}
+            and (
+                not proposal
+                or proposal.get("target_entity_id") != required["entity_id"]
+                or not proposal.get("alternative_basis")
+                and any(
+                    proposal.get(k) != required["successful_check"][k]
+                    for k in ("kind", "name", "difficulty")
+                )
+            )
         ):
             # A source-approved mandatory search is a rule, not optional model
             # judgement. This requests a real roll; it never supplies its result.
@@ -392,6 +458,15 @@ def restore_output(output, schema, context):
                 t for t in value["proposed_tool_calls"] if t["name"] != "request_skill_check"
             ]
         elif proposal:
+            if required and proposal.get("target_entity_id") == required["entity_id"]:
+                # A model may propose the correct check but omit its discovery
+                # binding. Bind the existing proposal before method candidates
+                # and deferred acquisition are collected, just as for a new one.
+                proposal.update(
+                    clue_id=required["entity_id"],
+                    basis_entity_id=required["entity_id"],
+                    target_member_id=context["action_identifiers"]["actor_member_id"],
+                )
             actor = next(
                 (
                     c

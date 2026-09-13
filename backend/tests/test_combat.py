@@ -530,7 +530,7 @@ def test_natural_combat_uses_model_and_returns_to_human(client, battle, monkeypa
 
         context = json.loads(messages[-1]["content"])
         if kwargs["response_schema"].__name__ == "CombatNarration":
-            return {"text": "守卫挥拳逼近，交锋的结果已经确定。"}
+            return {"text": "不存在的毒素让另一个人受了重伤。"}
         return {
             "operation": "attack",
             "target_id": g["human"] if context["automatic"] else "guard",
@@ -563,6 +563,7 @@ def test_natural_combat_uses_model_and_returns_to_human(client, battle, monkeypa
         for e in events
     )
     assert any(e["type"] == "keeper.narration" and e["payload"].get("combat") for e in events)
+    assert not any("不存在的毒素" in e["payload"].get("text", "") for e in events)
 
 
 def test_confirmed_push_damage_waits_for_con_and_returns_to_narration(client, game, monkeypatch):  # noqa: F811

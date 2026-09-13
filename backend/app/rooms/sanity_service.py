@@ -177,10 +177,10 @@ class SanityService:
         if (
             effect.trigger == "action_target"
             or effect.kp_enabled
-            and source.type == "action.submitted"
+            and source.type in {"action.submitted", "agent.action_proposed"}
         ):
             require(
-                source.type == "action.submitted"
+                source.type in {"action.submitted", "agent.action_proposed"}
                 and (encounter or source.actor_member_id == member.id)
                 and (encounter or source.payload.get("target_entity_id") == args.entity_id),
                 "SAN 效果不匹配具体调查遭遇",
@@ -234,7 +234,17 @@ class SanityService:
             )
             require(
                 source.seq == cycle.state["triggering_event_seq"]
-                or source.payload.get("cycle_id") == cycle.id,
+                or source.payload.get("cycle_id") == cycle.id
+                or encounter
+                and any(
+                    item.get("status") == "approved"
+                    and item.get("source_event_seq") == source.seq
+                    and item.get("entity_id") == args.entity_id
+                    and item.get("effect_id") == args.effect_id
+                    and item.get("answer_event_seq") == cycle.state["triggering_event_seq"]
+                    and member.id in item.get("target_member_ids", [])
+                    for item in cycle.state.get("sanity_resumed", [])
+                ),
                 "SAN 遭遇不属于本回合",
                 403,
             )

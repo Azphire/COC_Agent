@@ -83,6 +83,8 @@ class TurnFocus(DomainModel):
 
 
 class KeeperPlan(DomainModel):
+    # Filled by the server before method selection; never authored by that model.
+    action_authority: dict = Field(default_factory=dict)
     focus: TurnFocus | None = None
     pending_action: Literal["independent", "defer", "replace", "withdraw"] = Field(
         default="independent", json_schema_extra={"x-explicit-output": True}
@@ -222,6 +224,8 @@ class TeammateDecision(DomainModel):
     def has_output(self):
         if self.mode != "pass" and not (self.action_text or self.speech_text):
             raise ValueError("non_pass_requires_output")
+        if self.mode in {"act", "assist"} and not (self.action_text or "").strip():
+            raise ValueError("action_mode_requires_actual_action_text")
         return self
 
 

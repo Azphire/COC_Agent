@@ -84,7 +84,11 @@ def audit(package):
                 *([r.sound_item_id] if r.sound_item_id else []),
                 *([r.npc_id] if r.npc_id else []),
                 *([r.door_id] if r.door_id else []),
+                *([r.observation_entity_id] if r.observation_entity_id else []),
             } <= entities.keys()
+            if r.observation_effect_id:
+                observed = entities[r.observation_entity_id or e["key"]]
+                assert r.observation_effect_id in {effect.id for effect in observed.sanity_effects}
             assert set(r.scene_node_ids) <= scene_nodes
             if r.failure_interaction_id:
                 assert r.failure_interaction_id in {other.id for other in fields.interactions}

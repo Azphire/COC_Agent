@@ -149,14 +149,29 @@ def apply_encounter(state, rule, args, actor, node, seq):
         sound_id = sound_id or actor
         old = runtime.sounds.get(sound_id, {})
         require(op != "sound_stop" or old.get("active"), "声源尚未开启")
+        ringing_throw = op == "sound_once" and old.get("active") and old.get("continuous")
         runtime.sounds[sound_id] = {
             "actor_id": None if op == "sound_once" else actor,
             "scene_node_id": node,
             "source_event_seq": seq,
             "active": op != "sound_stop",
-            "continuous": op == "sound_start",
-            "kind": "impact" if op == "sound_once" else "item",
+            "continuous": op == "sound_start" or bool(ringing_throw),
+            "kind": old.get("kind", "item")
+            if ringing_throw
+            else "impact"
+            if op == "sound_once"
+            else "item",
         }
+        if ringing_throw:
+            runtime.sounds[f"impact:{sound_id}:{seq}"] = {
+                "actor_id": None,
+                "scene_node_id": node,
+                "source_event_seq": seq,
+                "active": True,
+                "continuous": False,
+                "kind": "impact",
+                "item_instance_id": sound_id,
+            }
         if op == "sound_stop":
             end_transient_sound(state, node)
         else:

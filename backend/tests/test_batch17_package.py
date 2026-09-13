@@ -75,7 +75,7 @@ def test_actual_package_a_needs_unlocked_panel_actual_key_holder_and_replays_rew
 ):
     d, action, configure, state, _ = package_rules
     client.portal.call(configure)
-    with pytest.raises(RoomError, match="持有"):
+    with pytest.raises(RoomError, match="所用物品实例"):
         client.portal.call(action, "accelerate", d["player"], "我下推油门加速。")
     client.portal.call(lambda: configure(holder=d["player"]))
     with pytest.raises(RoomError, match="条件未满足"):

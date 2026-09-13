@@ -30,6 +30,11 @@ class RequiredSanitySettlement(DomainModel):
 
 
 class ModuleInteraction(DomainModel):
+    action_kinds: list[str] = Field(default_factory=list, max_length=8)
+    required_facts: list[str] = Field(default_factory=list, max_length=8)
+    observation_effect_id: str | None = None
+    observation_entity_id: str | None = None
+    visibility_any_flags: list[str] = Field(default_factory=list, max_length=8)
     id: str = Field(min_length=1, max_length=80)
     instruction: str = Field(min_length=1, max_length=600)
     source_block_ids: list[str] = Field(min_length=1, max_length=20)
@@ -107,6 +112,9 @@ class PreparedCheckAdjustment(DomainModel):
 
 
 class ModuleRuntimeState(DomainModel):
+    observations: dict[str, dict] = Field(default_factory=dict)
+    sanity_clarifications: dict[str, dict] = Field(default_factory=dict)
+    scene_facts: dict[str, dict] = Field(default_factory=dict)
     flags: dict[str, StrictBool] = Field(default_factory=dict)
     inventory: dict[str, str] = Field(default_factory=dict)
     dropped_items: dict[str, str] = Field(default_factory=dict)

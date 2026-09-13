@@ -32,9 +32,11 @@ class ContextSupplementService:
                 for n in snapshot.nodes
                 if n.node_id in linked and n.approved_type != "scene"
             }
-            allowed_entities = {
-                b.entity_id for b in snapshot.entity_bindings if b.node_id in allowed
-            }
+            from app.preparation.runtime import current_entity_ids
+
+            allowed_entities = current_entity_ids(
+                snapshot, allowed, room.session_state.get("module_runtime", {})
+            )
             for gap in gaps:
                 gap.allowed_supplement_scope = sorted(allowed)
                 if gap.missing_kind == "node" and gap.requested_target in allowed:
@@ -291,13 +293,13 @@ class ActionAdjudicationService:
         supplied = run.context.get("module", {})
         # A prepared search can target an undiscovered object without declaring
         # it present or revealing its contents. It never makes an NPC visible.
-        facts.searchable_entity_ids = {
-            eid
-            for eid, e in facts.approved_entities.items()
-            if eid in facts.local_entity_ids
-            and e.get("type") in {"item", "clue", "location"}
-            and e.get("reveal_conditions", {}).get("access_policy") == "requires_check"
-        }
+        from app.preparation.search import named_local_interaction_ids, searchable_entity_ids
+
+        facts.visible_entity_ids.update(named_local_interaction_ids(facts))
+
+        facts.searchable_entity_ids = searchable_entity_ids(
+            facts.approved_entities, facts.local_entity_ids, facts.scene_id
+        )
         supplement = run.context.get("context_supplement", {})
         facts.observed_entity_ids = {
             e["id"] for e in supplied.get("approved_entities", []) + supplement.get("entities", [])
@@ -388,7 +390,9 @@ class ActionAdjudicationService:
                         else {"scene_id": t["target_scene_node_id"]},
                     )
                 )
-        return actions
+        # Discovery must complete before a same-utterance acquisition. Every
+        # action is still independently validated before and after the real roll.
+        return sorted(actions, key=lambda t: t.name == "apply_module_action")
 
     async def validate(self, session, room, cycle, *, after_check=False):
         record = await session.get(ActionPlanRecord, cycle.id)

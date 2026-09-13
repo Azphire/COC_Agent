@@ -228,6 +228,7 @@ class AgentCycleState(TypedDict):
     encounters_scanned: bool
     ordinary_check_id: str | None
     sanity_restore: bool
+    sanity_resumed: list[dict]
     request_category: str
     schema_version: int
     requires_clarification: bool

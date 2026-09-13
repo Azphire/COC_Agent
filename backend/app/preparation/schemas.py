@@ -44,6 +44,9 @@ class RevealConditions(DomainModel):
 
 
 class EntityFields(DomainModel):
+    dialogue_topics: list[dict] = Field(default_factory=list, max_length=12)
+    aliases: list[str] = Field(default_factory=list, max_length=16)
+    search_aliases: list[str] = Field(default_factory=list, max_length=16)
     check_adjustments: list[PreparedCheckAdjustment] = Field(default_factory=list, max_length=12)
     interactions: list[ModuleInteraction] = Field(default_factory=list, max_length=20)
     combat_template: CombatTemplate | None = None
@@ -108,6 +111,9 @@ class HostEntityInput(EntityFields):
 
 
 class EntityPatch(DomainModel):
+    aliases: list[str] | None = Field(default=None, max_length=16)
+    search_aliases: list[str] | None = Field(default=None, max_length=16)
+    dialogue_topics: list[dict] | None = Field(default=None, max_length=12)
     check_adjustments: list[PreparedCheckAdjustment] | None = Field(default=None, max_length=12)
     interactions: list[ModuleInteraction] | None = Field(default=None, max_length=20)
     combat_template: CombatTemplate | None = None

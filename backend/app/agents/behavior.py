@@ -65,6 +65,9 @@ class TeammateBehaviorPolicy:
         action_seq,
         fingerprint,
         fact_scopes=None,
+        public_change_after_last_output=False,
+        explicit_action_request=False,
+        requested_operations=None,
     ):
         if decision.mode == "pass":
             return BehaviorRejection(accepted=True)
@@ -83,10 +86,23 @@ class TeammateBehaviorPolicy:
                 return BehaviorRejection(accepted=False, reason="target_not_current")
         if decision.action_type == "move" and decision.mode in {"act", "assist"}:
             return BehaviorRejection(accepted=False, reason="teammate_cannot_move_scene")
+        if decision.mode == "assist" and requested_operations:
+            from app.preparation.action_authority import action_kinds
+
+            if not set(action_kinds(decision.action_text or "")) & set(requested_operations):
+                return BehaviorRejection(
+                    accepted=False, reason="assistance_does_not_attempt_requested_operation"
+                )
         text = output_text(decision)
         if normalized(text) in {"继续调查", "四周很安静", "四周安静下来"}:
             return BehaviorRejection(accepted=False, reason="empty_template", repetition_score=1)
-        compared = [*recent_outputs[-3:], *other_outputs, player_text]
+        recent = recent_outputs[-3:]
+        if (public_change_after_last_output or explicit_action_request) and decision.mode in {
+            "act",
+            "assist",
+        }:
+            recent = []  # A changed world permits a new attempt through the normal KP/check gates.
+        compared = [*recent, *other_outputs, player_text]
         score = max((bigram_jaccard(text, old) for old in compared), default=0)
         if score >= self.threshold:
             return BehaviorRejection(

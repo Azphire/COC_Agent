@@ -574,3 +574,157 @@ def test_mythos_growth_cap_and_snapshot_preserved(client, san_game):
         ).status_code
         == 422
     )
+
+
+@pytest.mark.parametrize("kp_enabled", [True, False])
+def test_prepared_kp_symptom_uses_existing_service_and_fixed_dice(
+    client, san_game, monkeypatch, kp_enabled
+):
+    from app.agents import sanity_runtime
+    from app.persistence.agent_models import AgentCycle, CheckRecord
+
+    g = san_game
+    rng = FixedRandom(20, 30, 2, 3)
+    client.app.state.room_service.dice = DiceService(rng)
+    check = request(client, g, "five")
+    roll(client, g, check, "san")
+    roll(client, g, check, "int")
+    roll(client, g, check, "duration")
+    svc = client.app.state.agent_service
+
+    async def prepare_cycle():
+        async with svc.rooms.transaction() as session:
+            record = await session.get(CheckRecord, check["id"])
+            progress = dict(record.document["sanity"])
+            progress["effect"] = {**progress["effect"], "kp_enabled": kp_enabled}
+            record.document = {**record.document, "sanity": progress}
+            cycle = await session.get(AgentCycle, record.cycle_id)
+            cycle.state = {**cycle.state, "request_category": "investigation"}
+            return cycle.state
+
+    calls = []
+
+    async def choose(*args, **kwargs):
+        calls.append(True)
+        return sanity_runtime.SanitySymptom(
+            symptom="恐惧：对先前遭遇感到惊惧。", reason="已结算的实际遭遇"
+        )
+
+    monkeypatch.setattr(sanity_runtime, "call_model", choose)
+    state = client.portal.call(prepare_cycle)
+    result = client.portal.call(
+        sanity_runtime.resolve_keeper_symptom, svc.runtime, state, check["id"]
+    )
+    if not kp_enabled:
+        assert not result
+    else:
+        # The normal serial driver can win the race with this explicit wakeup.
+        # Both entry points must settle through a single symptom decision.
+        import time
+
+        for _ in range(100):
+            if current(client, g)["sanity"]["phase"] == "bout":
+                break
+            time.sleep(0.02)
+    character = current(client, g)
+    assert character["san"] == 45
+    assert character["sanity"]["phase"] == ("bout" if kp_enabled else "awaiting_symptom")
+    assert len(calls) == int(kp_enabled)
+    assert rng.used == ([20, 30, 2, 3] if kp_enabled else [20, 30, 2])
+    assert not client.portal.call(
+        sanity_runtime.resolve_keeper_symptom, svc.runtime, state, check["id"]
+    )
+    assert len(calls) == int(kp_enabled)
+
+
+@pytest.mark.parametrize("blocked", [None, "manual", "combat", "grapple", "injury", "summary"])
+def test_kp_bout_uses_fixed_rounds_then_returns_control_without_recovery(
+    client, san_game, monkeypatch, blocked
+):
+    from uuid import UUID
+
+    from app.agents import sanity_runtime
+    from app.persistence.agent_models import AgentCycle, CheckRecord
+    from app.rooms.combat_service import load_state, store_state
+
+    g, svc = san_game, client.app.state.agent_service
+    monkeypatch.setattr(svc.runtime, "schedule", lambda *_: None)
+    rng = FixedRandom(20, 30, 2, 3)
+    client.app.state.room_service.dice = DiceService(rng)
+    check = request(client, g, "five")
+    for stage in ("san", "int", "duration"):
+        roll(client, g, check, stage)
+
+    async def configure():
+        async with svc.rooms.transaction() as session:
+            record = await session.get(CheckRecord, check["id"])
+            progress = dict(record.document["sanity"])
+            progress.update(origin="kp_ruling", effect={**progress["effect"], "kp_enabled": True})
+            record.document = {**record.document, "sanity": progress}
+            cycle = await session.get(AgentCycle, record.cycle_id)
+            cycle.state = {**cycle.state, "request_category": "investigation"}
+            return cycle.state
+
+    state = client.portal.call(configure)
+
+    async def choose(*args, **kwargs):
+        return sanity_runtime.SanitySymptom(symptom="恐惧", reason="实际遭遇")
+
+    monkeypatch.setattr(sanity_runtime, "call_model", choose)
+    assert client.portal.call(
+        sanity_runtime.resolve_keeper_symptom, svc.runtime, state, check["id"]
+    )
+
+    async def settle():
+        async with svc.rooms.transaction() as session:
+            room = await svc.rooms.room(session, g["room"]["id"])
+            cycle = await session.get(AgentCycle, state["cycle_id"])
+            cycle.status = "completed"
+            data = load_state(room)
+            character = data.characters[UUID(g["slots"][0])]
+            if blocked == "manual":
+                svc.rooms.append(
+                    session,
+                    room,
+                    "sanity.managed",
+                    room.host_member_id,
+                    {
+                        "slot_id": g["slots"][0],
+                        "operation": "symptom",
+                        "reason": "manual scene ruling",
+                    },
+                    "host_only",
+                )
+            if blocked == "combat":
+                data.combat.active = True
+            if blocked == "grapple":
+                data.module_runtime.grapples[g["player"]] = ["npc:1"]
+            if blocked == "injury":
+                character.injury.con_pending = "wound"
+            if blocked == "summary":
+                character.sanity.bout_end_round = None
+                character.sanity.bout_end_minute = 180
+            store_state(room, data)
+            await session.flush()
+            before = load_state(room)
+            await sanity_runtime.complete_keeper_bouts(svc, session, room)
+            after = load_state(room)
+            assert after.module_runtime == before.module_runtime
+            c = after.characters[UUID(g["slots"][0])]
+            assert c.san == 45 and c.sanity.kind == "temporary" and c.sanity.ends_minute == 120
+            assert c.sanity.phase == ("underlying" if blocked is None else "bout")
+            assert after.game_round == (3 if blocked is None else 0)
+            assert after.game_minute == before.game_minute == 0
+            first = room.session_state
+            await sanity_runtime.complete_keeper_bouts(svc, session, room)
+            assert room.session_state == first
+
+    client.portal.call(settle)
+    assert rng.used == [20, 30, 2, 3]
+    if blocked is None:
+        response = client.post(
+            g["prefix"] + "/actions",
+            headers=headers(g["remote"]["member_token"]),
+            json={"text": "我留在原处观察。", "client_request_id": str(uuid4())},
+        )
+        assert response.status_code < 300, response.text

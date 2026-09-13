@@ -56,7 +56,7 @@ def responder(messages, kwargs):
         return {"tools": []}
     text = context["triggering_action"]["payload"]["text"]
     if "move" in text:
-        transition = context["module"]["outgoing_transitions"][0]
+        transition = context["approved_exits"][0]
         return {
             "tools": [
                 {

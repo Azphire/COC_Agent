@@ -6,6 +6,25 @@ from app.persistence.agent_models import AgentCycle
 from app.rooms.service import require
 
 
+def public_interaction_results(runtime, public_ids):
+    """Keep completed public results when the optional event history is trimmed.
+
+    These are historical receipts, not new facts inferred from player prose.
+    Only the latest result per visible entity is needed; private rulings and
+    inventory snapshots must not enter a teammate's context.
+    """
+    latest = {}
+    for receipt in sorted(
+        runtime.get("receipts", {}).values(), key=lambda r: r.get("source_event_seq", 0)
+    ):
+        if receipt.get("entity_id") in public_ids and receipt.get("text"):
+            latest[receipt["entity_id"]] = {
+                k: receipt.get(k)
+                for k in ("entity_id", "source_event_seq", "actor_member_id", "text")
+            }
+    return sorted(latest.values(), key=lambda r: r["source_event_seq"])[-8:]
+
+
 def scene_nodes(snapshot, current_id):
     nodes = {n.node_id: n for n in snapshot.nodes}
     selected = []
@@ -57,7 +76,13 @@ class ModuleContextResolver:
                     "scene": shell.document["scenes"][0],
                 },
                 "public_entities": public_entities,
-                "public_state": {"scene_id": shell.state["scene_id"]},
+                "public_state": {
+                    "scene_id": shell.state["scene_id"],
+                    "completed_interactions": public_interaction_results(
+                        room.session_state.get("module_runtime", {}),
+                        {e["id"] for e in public_entities},
+                    ),
+                },
                 "structure_navigation": True,
                 "item_holders": holdings,
             }
@@ -146,6 +171,13 @@ class ModuleContextResolver:
                 "flags": runtime.get("flags", {}),
                 "held_items": holdings,
             }
+        if not fits():
+            # Include mandatory current state before allocating the scene prose.
+            # The complete summary remains in the frozen snapshot and blocks.
+            summary = module["current_scene"]["summary"]
+            remaining = budget - len(json.dumps(module, ensure_ascii=False)) + len(summary) - 4
+            module["current_scene"]["summary"] = summary[: max(0, remaining)]
+            audit["scene_summary_truncated"] = True
         raw_size = sum(len(b.text) + 130 for b in candidate_blocks)
         long_scene = (
             len(json.dumps(module, ensure_ascii=False))
@@ -155,7 +187,12 @@ class ModuleContextResolver:
         ) > budget
         query_tokens = set(tokens(recent_action))
         matched_titles = [
-            e["title"] for e in entities if normalize(e["title"]) in normalize(recent_action)
+            e["title"]
+            for e in entities
+            if any(
+                alias and normalize(alias) in normalize(recent_action)
+                for alias in (e["title"], *e.get("aliases", []))
+            )
         ]
         important = {b for n in snapshot.nodes for b in n.important_block_ids}
         if long_scene:

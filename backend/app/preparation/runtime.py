@@ -109,9 +109,11 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             agents.adjudication.validator.validate_intent(intent, doc.plan, facts) is None,
             "交互行动未通过验证",
         )
+        from app.preparation.adjudication import matches_action_focus
+
         require(
-            intent.type in {"interact", "use_item", "investigate"}
-            and intent.target_id == args.entity_id,
+            intent.type in {"interact", "use_item", "investigate", "observe", "converse"}
+            and matches_action_focus(doc.plan, nav.current_scene_node_id, args.entity_id, rule),
             "交互目标不匹配玩家实际行动",
         )
         actual_action = doc.plan.focus.action if doc.plan.focus else ""
@@ -120,16 +122,40 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             actual_action and actual_action in event.payload.get("text", ""), "交互缺少实际行动片段"
         )
         if rule.kp_enabled:
+            from app.preparation.action_authority import authority_error, selected_action_matches
+
+            error = authority_error(
+                doc.plan.action_authority,
+                rule,
+                state.module_runtime,
+                actor=actor,
+                seq=seq,
+                scene=nav.current_scene_node_id,
+                item_id=args.used_item_id,
+                recipient=args.recipient_member_id,
+            )
+            require(not error, error or "动作不适用")
+            require(
+                doc.plan.action_authority.get("action") == actual_action,
+                "方法选择之后行动片段发生变化",
+            )
             require(
                 ruling
                 and ruling.get("action") == actual_action
                 and ruling.get("actor_member_id") == actor,
                 "缺少本次有界KP裁定",
             )
+            require(
+                selected_action_matches(
+                    doc.plan.action_authority,
+                    ruling.get("selected_action_quote", actual_action),
+                    rule,
+                ),
+                "所选分句不授权此操作",
+            )
             verification = ruling.get("current_action_verification") or {}
             require(
-                verification.get("matches")
-                and verification.get("action_quote") == actual_action,
+                verification.get("matches") and verification.get("action_quote") == actual_action,
                 "当前动作未授权此具体操作",
             )
         else:
@@ -188,6 +214,12 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         require(
             0 < len(state.module_runtime.grapples.get(actor, [])) <= rule.max_npc_count,
             "实际抓握人数不允许此逃脱方法",
+        )
+    if rule.observation_effect_id:
+        require(
+            not rule.visibility_any_flags
+            or any(state.module_runtime.flags.get(k) for k in rule.visibility_any_flags),
+            "尚无足够照明，不能结算实际目睹",
         )
     needs_check = bool(rule.check_name)
     if rule.carry_attribute:
@@ -294,6 +326,10 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
     receipt = {
         "entity_id": args.entity_id,
         "interaction_id": rule.id,
+        "scene_node_id": nav.current_scene_node_id,
+        "consequence_entity_ids": rule.reveal_entity_ids
+        if rule.prepare_outcome or rule.outcome
+        else [],
         "source_event_seq": seq,
         "actor_member_id": actor,
         "text": rule.public_result,
@@ -305,6 +341,21 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         "reason": args.reason if host else "批准玩家行动",
         "outcome": rule.outcome,
     }
+    if rule.observation_effect_id:
+        observation = {
+            "actor_member_id": actor,
+            "source_event_seq": seq,
+            "cycle_id": cycle.id if cycle else None,
+            "scene_node_id": nav.current_scene_node_id,
+            "entity_id": rule.observation_entity_id or args.entity_id,
+            "effect_id": rule.observation_effect_id,
+            "text": rule.public_result,
+            "source_block_ids": rule.source_block_ids,
+            "origin": "interaction_receipt",
+            "established": True,
+        }
+        state.module_runtime.observations[key] = observation
+        receipt["observation"] = observation
     if rule.outcome:
         awards = []
         all_survive = all(c.hp and not c.injury.dead for c in state.characters.values())
@@ -442,6 +493,15 @@ async def freeze_adjustment(agents, session, room, check, entity):
 
 def current_entity_ids(snapshot, node_ids, runtime):
     ids = {b.entity_id for b in snapshot.entity_bindings if b.node_id in node_ids}
+    # Actual terminal consequences belong to the scene where they happened,
+    # even when their source paragraphs live in a separate ending section.
+    # No pending flag or player assertion can introduce an unplayed ending.
+    ids |= {
+        eid
+        for receipt in runtime.get("receipts", {}).values()
+        if receipt.get("scene_node_id") in node_ids
+        for eid in receipt.get("consequence_entity_ids", [])
+    }
     instances = runtime.get("item_instances", {})
     ids |= {instances.get(key, key) for key in runtime.get("inventory", {})}
     ids |= {

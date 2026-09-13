@@ -584,6 +584,25 @@ async def build_context(
             context["events"].insert(0, event)
             chosen_seqs.add(event["seq"])
     context["events"].sort(key=lambda e: e["seq"])
+    # Completed public interactions and current holders outrank older optional
+    # improvisations. Pre-context rule routing can consume the space that was
+    # available when those memories were selected above.
+    while (
+        context.get("incidental_memories") and len(json.dumps(context, ensure_ascii=False)) > budget
+    ):
+        context["incidental_memories"] = context["incidental_memories"][:-1]
+    # Retrieval metadata is added after scene allocation. A duplicate source
+    # block must not make a valid action fail before the final planning budget.
+    while context.get("module", {}).get("blocks") and len(
+        json.dumps(context, ensure_ascii=False)
+    ) > budget:
+        module_context = dict(context["module"])
+        module_context["blocks"] = module_context["blocks"][:-1]
+        audit = dict(context.get("module_context_audit", {}))
+        audit["selected_block_ids"] = [b["block_id"] for b in module_context["blocks"]]
+        audit["omitted_block_count"] = audit.get("omitted_block_count", 0) + 1
+        audit["budget_used"] = len(json.dumps(module_context, ensure_ascii=False))
+        context = {**context, "module": module_context, "module_context_audit": audit}
     require(
         len(json.dumps(context, ensure_ascii=False)) <= budget,
         "当前模组和角色超过上下文预算，请提高上下文限制或减少席位",

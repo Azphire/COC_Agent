@@ -352,3 +352,47 @@ async def test_model_text_tools_timeout_cancel():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+def test_teammate_speech_is_public_but_cannot_become_its_executable_action(client, game):
+    from sqlalchemy import select
+
+    from app.persistence.room_models import RoomEvent
+
+    action, speech = "我检查入口附近的脚印。", "如果需要，我可以把手机扔出去。"
+
+    def respond(messages, kwargs):
+        context = json.loads(messages[-1]["content"])
+        if context.get("role") == "investigator" and context.get("phase") != "summary":
+            return {
+                "mode": "assist",
+                "action_text": action,
+                "speech_text": speech,
+                "action_type": "observe",
+                "reason_summary": "检查另一处线索",
+                "related_player_action_seq": context["triggering_action"]["seq"],
+                "confidence": 1,
+            }
+        return scenario(messages, kwargs)
+
+    game["adapter"].responder = respond
+    submit(client, game, "我查看公告。")
+    cycle = wait_cycle(client, game)
+    assert cycle["status"] == "completed", cycle
+
+    async def events():
+        async with client.app.state.agent_service.rooms.database.sessions() as session:
+            return [
+                (e.type, e.payload["text"])
+                for e in await session.scalars(
+                    select(RoomEvent).where(
+                        RoomEvent.room_id == game["room"]["id"],
+                        RoomEvent.type.in_(["agent.spoke", "agent.action_proposed"]),
+                    )
+                )
+            ]
+
+    messages = client.portal.call(events)
+    assert ("agent.spoke", speech) in messages
+    assert ("agent.action_proposed", action) in messages
+    assert all(speech not in text for kind, text in messages if kind == "agent.action_proposed")

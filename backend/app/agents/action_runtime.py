@@ -1,6 +1,7 @@
 """Two-stage keeper graph. Plans are private; only completed results reach narration."""
 
 import json
+from copy import deepcopy
 
 from sqlalchemy import select
 
@@ -78,6 +79,8 @@ TEAMMATE_INSTRUCTION = (
     "confidence 只能填0到1的小数，例如0.8，不能填写80。"
     "act/assist只描述自己的尝试，后续由KP裁决，不宣布成功或控制其他角色。集体移动先征询玩家。简短目标不能包含新事实。若有behavior_rejection只修复一次。"
     "speech_text只写自己说的话，action_text只写自己的具体尝试，不能在两处重复同一句话。"
+    "直接请求的协助应尝试requested_operations中的操作；不愿执行可说出理由或pass。"
+    "item_holders是实际持有者，public_state.completed_interactions是已完成的公开结果。"
 )
 
 
@@ -86,9 +89,14 @@ def planning_prompt(context):
     result = {
         k: v
         for k, v in context.items()
-        if k != "module_context_audit" and (v not in (None, [], {}) or k == "approved_exits")
+        if k not in {"module_context_audit", "search_targets"}
+        and (v not in (None, [], {}) or k == "approved_exits")
     }
-    if context.get("structure_navigation"):
+    if (
+        context.get("structure_navigation")
+        or context.get("prepared_module")
+        or context.get("module_context_audit")
+    ):
         # Visibility/scope is already carried by the actual fact candidates and
         # approved entity summaries; the full projection remains in the run audit.
         result.pop("public_entities", None)
@@ -111,12 +119,45 @@ def planning_prompt(context):
         result["module"] = {
             k: v
             for k, v in context.get("module", {}).items()
-            if k not in {"ancestors", "public_introduction"}
+            if k not in {"ancestors", "public_introduction", "recent_scenes"}
+            and (k != "outgoing_transitions" or "approved_exits" not in context)
         }
+        result["check_requirements"] = [
+            {
+                **{k: v for k, v in r.items() if k not in {"task_scope", "conditions"}},
+                "conditions": {
+                    k: v
+                    for k, v in r.get("conditions", {}).items()
+                    if v and k not in {"successful_check", "access_policy"}
+                },
+            }
+            for r in context.get("check_requirements", [])
+        ]
         if context.get("current_participants"):
             result["current_participants"] = {
                 k: v for k, v in context["current_participants"].items() if k != "assignments"
             }
+    return result
+
+
+def compact_planning_prose(context, budget):
+    """Reserve the final prompt for action identifiers, prerequisites and results."""
+    result = deepcopy(context)
+    module = result.get("module", {})
+    summaries = [(module.get("current_scene", {}), "summary")]
+    summaries += [
+        (entity, key)
+        for entity in module.get("approved_entities", [])
+        for key in ("keeper_summary", "public_summary")
+    ]
+    for container, key in summaries:
+        size = len(json.dumps(planning_prompt(result), ensure_ascii=False, separators=(",", ":")))
+        if size <= budget:
+            break
+        value = container.get(key)
+        if isinstance(value, str) and value:
+            container[key] = value[: max(0, len(value) - (size - budget) - 16)]
+            result.setdefault("module_context_audit", {})["prompt_prose_truncated"] = True
     return result
 
 
@@ -131,6 +172,10 @@ class ActionRuntimeMixin:
         ):
             return state
         async with self.rooms.database.sessions() as session:
+            room = await self.rooms.room(session, state["room_id"])
+            runtime = room.session_state.get("module_runtime", {})
+            if runtime.get("outcome") or runtime.get("pending_outcome"):
+                return state
             record = await session.get(ActionPlanRecord, state["cycle_id"])
             intent = AdjudicationRecord.model_validate(record.document).plan.parsed_intent
         if intent.type in {"unknown", "out_of_character"}:
@@ -207,25 +252,36 @@ class ActionRuntimeMixin:
                 if not public:
                     public_ids |= set(module.state["revealed_clues"])
                     public_ids |= {n["id"] for n in module.document["npcs"]}
+                last_change = max(
+                    (
+                        e.seq
+                        for e in events
+                        if e.type
+                        in {
+                            "check.resolved",
+                            "entity.revealed",
+                            "entity.corrected",
+                            "scene.updated",
+                            "clue.revealed",
+                            "module.interaction",
+                        }
+                    ),
+                    default=0,
+                )
+                last_output = max(
+                    (
+                        e.seq
+                        for e in events
+                        if e.actor_member_id == binding.member_id
+                        and e.type in {"agent.spoke", "agent.action_proposed"}
+                    ),
+                    default=0,
+                )
                 fingerprint = public_fingerprint(
                     {
                         "public_state": {
                             "scene": module.state["scene_id"],
-                            "last_change": max(
-                                (
-                                    e.seq
-                                    for e in events
-                                    if e.type
-                                    in {
-                                        "check.resolved",
-                                        "entity.revealed",
-                                        "entity.corrected",
-                                        "scene.updated",
-                                        "clue.revealed",
-                                    }
-                                ),
-                                default=0,
-                            ),
+                            "last_change": last_change,
                         },
                         "public_entities": public,
                     }
@@ -254,6 +310,19 @@ class ActionRuntimeMixin:
             )
             if addressed == binding.member_id:
                 eligibility = "direct_conversation"
+            from app.preparation.action_authority import action_kinds, teammate_request
+
+            requested_action = bool(
+                teammate_request(
+                    trigger.payload["text"],
+                    {binding.member_id: profile.document["name"]},
+                    trigger.actor_member_id,
+                )
+                == binding.member_id
+                and action_kinds(trigger.payload["text"])
+            )
+            requested_operations = action_kinds(trigger.payload["text"]) if requested_action else []
+            additions["requested_operations"] = requested_operations
             # One eligible teammate per cycle, including semantic/schema repairs.
             if current.get("teammate_model_called"):
                 eligibility = None
@@ -281,6 +350,11 @@ class ActionRuntimeMixin:
                         action_seq=trigger.seq,
                         fingerprint=fingerprint,
                         fact_scopes={e["id"]: e.get("fact_scope") for e in public},
+                        public_change_after_last_output=bool(
+                            last_output and last_change > last_output
+                        ),
+                        explicit_action_request=requested_action,
+                        requested_operations=requested_operations,
                     )
                     rejections.append(rejected)
                     if rejected.accepted:
@@ -352,13 +426,33 @@ class ActionRuntimeMixin:
                             confidence=1,
                         )
                 if chosen.mode != "pass":
+                    if (
+                        chosen.mode in {"act", "assist"}
+                        and chosen.speech_text
+                        and chosen.speech_text.strip() != (chosen.action_text or "").strip()
+                    ):
+                        self.rooms.append(
+                            session,
+                            room,
+                            "agent.spoke",
+                            binding.member_id,
+                            {
+                                "text": chosen.speech_text.strip(),
+                                "cycle_id": cycle.id,
+                                "actor_name": profile.document["name"],
+                                "controller_type": "agent",
+                            },
+                            request_id=cycle.id + ":" + binding.member_id + ":speech",
+                        )
                     event = self.rooms.append(
                         session,
                         room,
                         "agent.spoke" if chosen.mode == "speak" else "agent.action_proposed",
                         binding.member_id,
                         {
-                            "text": output_text(chosen),
+                            "text": (chosen.action_text or "").strip()
+                            if chosen.mode in {"act", "assist"}
+                            else output_text(chosen),
                             "cycle_id": cycle.id,
                             "actor_name": profile.document["name"],
                             "controller_type": "agent",
@@ -512,6 +606,8 @@ class ActionRuntimeMixin:
                         "entity_id": eid,
                         "title": e["title"],
                         "access_policy": entity_access(e),
+                        "aliases": e.get("aliases", []),
+                        "search_aliases": e.get("search_aliases", []),
                         "successful_check": e.get("reveal_conditions", {}).get("successful_check"),
                         "task_scope": "仅获取尚未公开的该实体内容时适用",
                         "conditions": e.get("reveal_conditions", {}),
@@ -520,6 +616,23 @@ class ActionRuntimeMixin:
                     if eid in facts.local_entity_ids
                     and eid not in facts.revealed_entity_ids
                     and entity_access(e) != "automatic"
+                ]
+                context["search_targets"] = [
+                    {"entity_id": eid, "title": e["title"], "aliases": e.get("aliases", [])}
+                    for eid, e in facts.approved_entities.items()
+                    if eid in facts.local_entity_ids and e["type"] == "item"
+                ]
+                observation_ids = {
+                    r.get("observation_entity_id")
+                    for eid, entity in facts.approved_entities.items()
+                    if eid in facts.local_entity_ids
+                    for r in entity.get("interactions", [])
+                    if r.get("observation_effect_id")
+                }
+                context["observation_targets"] = [
+                    {"aliases": [e["title"], *e.get("aliases", [])]}
+                    for eid, e in facts.approved_entities.items()
+                    if eid in observation_ids
                 ]
                 for character in context.get("characters", []):
                     if character.get("member_id") == facts.actor_member_id:
@@ -532,18 +645,39 @@ class ActionRuntimeMixin:
                 from app.knowledge.text import tokens
 
                 action_terms = set(tokens(facts.raw_text))
+
+                def interaction_score(entity):
+                    # Device operations are often named by their controls, not
+                    # by the preparation entity's title ("throttle" vs "instructions").
+                    return (
+                        3 * len(action_terms & set(tokens(entity["title"])))
+                        + len(action_terms & set(tokens(entity.get("public_summary", ""))))
+                        + max(
+                            (
+                                len(action_terms & set(tokens(r["instruction"])))
+                                for r in entity.get("interactions", [])
+                            ),
+                            default=0,
+                        )
+                    )
+
                 interaction_entities = [
                     (eid, e)
                     for eid, e in facts.approved_entities.items()
                     if eid in facts.local_entity_ids
-                    and eid in facts.revealed_entity_ids
+                    and (
+                        eid in facts.revealed_entity_ids
+                        or eid in facts.visible_entity_ids and not facts.reveal_errors.get(eid)
+                    )
                     and e.get("interactions")
-                    and action_terms & set(tokens(e["title"]))
+                    and interaction_score(e)
                 ]
-                interaction_entities.sort(
-                    key=lambda pair: -len(action_terms & set(tokens(pair[1]["title"])))
-                )
+                interaction_entities.sort(key=lambda pair: -interaction_score(pair[1]))
                 module_state = room.session_state.get("module_runtime", {})
+                from app.preparation.inventory import held_instance
+                from app.preparation.runtime_schemas import ModuleRuntimeState
+
+                inventory_state = ModuleRuntimeState.model_validate(module_state)
 
                 def relevant_interactions(entity):
                     rules = [
@@ -553,8 +687,10 @@ class ActionRuntimeMixin:
                             module_state.get("flags", {}).get(k, False) == v
                             for k, v in r.get("required_flags", {}).items()
                         )
-                        and set(r.get("required_item_ids", []))
-                        <= set(module_state.get("inventory", {}))
+                        and all(
+                            held_instance(inventory_state, eid, facts.actor_member_id)
+                            for eid in r.get("required_item_ids", [])
+                        )
                         and set(r.get("required_entity_ids", [])) <= facts.revealed_entity_ids
                     ]
                     return sorted(
@@ -570,6 +706,7 @@ class ActionRuntimeMixin:
                                 "id": r["id"],
                                 "instruction": r["instruction"][:160],
                                 "host_review": r["host_review"],
+                                "action_kinds": r.get("action_kinds", []),
                             }
                             for r in relevant_interactions(e)
                         ],
@@ -599,6 +736,7 @@ class ActionRuntimeMixin:
                     {"id": eid, "kind": "portrayal" if e.get("type") == "npc" else "fact"}
                     for eid, e in facts.approved_entities.items()
                     if eid in facts.revealed_entity_ids
+                    and (eid in facts.local_entity_ids or recalling(facts.raw_text))
                 ]
                 from app.agents.action_policy import explicit_movement
 
@@ -889,6 +1027,10 @@ class ActionRuntimeMixin:
             for key in ("incidental_memories", "recent_dialogue"):
                 while run.context.get(key) and context_size() > budget:
                     run.context = {**run.context, key: run.context[key][1:]}
+            if schema is KeeperPlan and context_size() > budget:
+                # Search/method/exit identifiers are added after scene selection.
+                # Allocate prose again against this final measured envelope.
+                run.context = compact_planning_prose(run.context, budget)
             if context_size() > budget:
                 import logging
 
@@ -1066,10 +1208,14 @@ class ActionRuntimeMixin:
 
         from app.agents.extended_runtime import clarify_extended
         from app.preparation.adjudication import adjudicate_prepared
+        from app.preparation.dialogue import prepare_dialogue
+        from app.preparation.sanity_adjudication import resume_sanity_clarification
 
-        await adjudicate_prepared(self, state, run_id)
-
-        await clarify_extended(self, state, run_id)
+        resumed = await resume_sanity_clarification(self, state, run_id)
+        if not resumed:
+            await prepare_dialogue(self, state, run_id)
+            await adjudicate_prepared(self, state, run_id)
+            await clarify_extended(self, state, run_id)
 
         async def persist(session, room):
             cycle = await session.get(AgentCycle, state["cycle_id"])
@@ -1655,7 +1801,19 @@ class ActionRuntimeMixin:
                 "NPC台词只写第一人称答话，动作另放旁白",
                 422,
             )
-        for row in await self.service.entities.rows(session, room.id):
+        rows = await self.service.entities.rows(session, room.id)
+        if run.context.get("intent_type") != "recall":
+            from app.preparation.observation import validate_lighting_prose
+            from app.rooms.combat_service import load_state
+
+            nav = await self.service.navigation.state(session, room.id)
+            validate_lighting_prose(
+                text,
+                [{**r.snapshot, "id": r.source_entity_id, "type": r.entity_type} for r in rows],
+                load_state(room).module_runtime,
+                nav.current_scene_node_id if nav else None,
+            )
+        for row in rows:
             private = row.snapshot.get("keeper_summary", "")
             if row.state == "hidden":
                 private += "\n" + row.snapshot.get("public_summary", "")
@@ -1746,6 +1904,18 @@ class ActionRuntimeMixin:
         if state.get("requires_clarification") or state.get("conversation_reply"):
             return state
         async with self.rooms.database.sessions() as session:
+            room = await self.rooms.room(session, state["room_id"])
+            if any(
+                receipt.get("source_event_seq") == state["triggering_event_seq"]
+                and receipt.get("consequence_entity_ids")
+                for receipt in room.session_state.get("module_runtime", {})
+                .get("receipts", {})
+                .values()
+            ):
+                # The terminal interaction already published its approved public
+                # result. SAN uses that same consequence; improvising another
+                # outcome here can contradict the actual settlement.
+                return state
             record = await session.get(ActionPlanRecord, state["cycle_id"])
             plan = AdjudicationRecord.model_validate(record.document).plan
             # Direct questions are answered by the existing serial teammate stage.

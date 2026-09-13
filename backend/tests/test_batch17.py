@@ -332,6 +332,19 @@ def interactions(client, module_battle, monkeypatch):  # noqa: F811
                     ),
                     focus=TurnFocus(action=quote if actual else "", action_target_id=d["item"]),
                 )
+                from app.preparation.action_authority import freeze_action
+
+                entity = await svc.entities.entity(session, room.id, d["item"])
+                plan.action_authority = freeze_action(
+                    plan,
+                    quote,
+                    actor,
+                    seq,
+                    nav.current_scene_node_id,
+                    {d["item"]: entity.snapshot},
+                    load_state(room).module_runtime,
+                    {},
+                )
                 session.add(
                     ActionPlanRecord(
                         cycle_id=cid,

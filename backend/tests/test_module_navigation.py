@@ -295,7 +295,7 @@ def test_missing_structure_preserves_public_and_blocks_context(client, navigatio
     assert ok(client.get(d["room_prefix"] + "/current-scene"))["title"] == "Opening"
 
 
-def test_host_global_fallback_and_local_budget(client, navigation_game):
+def test_host_global_fallback_and_local_budget(client, navigation_game, monkeypatch):
     d = navigation_game
     result = ok(
         client.post(
@@ -304,12 +304,27 @@ def test_host_global_fallback_and_local_budget(client, navigation_game):
     )
     assert result["result"]["context_mode"] == "global_fallback"
     svc = client.app.state.agent_service
+    original_snapshot = svc.navigation.snapshot
+
+    async def long_scene(session, state):
+        snapshot, ir = await original_snapshot(session, state)
+        current = next(n for n in snapshot.nodes if n.node_id == state.current_scene_node_id)
+        current.keeper_summary = "Current scene summary. " * 100
+        return snapshot, ir
+
+    monkeypatch.setattr(svc.navigation, "snapshot", long_scene)
 
     async def bounded():
         async with svc.rooms.transaction() as session:
             room = await svc.rooms.room(session, d["room"]["id"])
+            room.session_state = {
+                **room.session_state,
+                "module_runtime": {"flags": {"phone_light": True, "panel_open": True}},
+            }
             return await svc.module_context.resolve(session, room, "keeper", budget=900)
 
     context = client.portal.call(bounded)
     assert context["module_context_audit"]["budget_used"] <= 900
+    assert context["module_context_audit"]["scene_summary_truncated"]
+    assert context["module"]["interaction_state"]["flags"]["panel_open"]
     assert "FUTURE_SECRET" not in json.dumps(context)

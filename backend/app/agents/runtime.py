@@ -186,6 +186,11 @@ class AgentRuntime(ActionRuntimeMixin):
         cycle_id = None
         try:
             from app.agents.conversation import activate_next
+            from app.agents.sanity_runtime import complete_keeper_bouts
+
+            await self.service.mutate(
+                room_id, lambda session, room: complete_keeper_bouts(self.service, session, room)
+            )
 
             await self.service.mutate(
                 room_id, lambda session, room: activate_next(self.service, session, room)
@@ -216,6 +221,13 @@ class AgentRuntime(ActionRuntimeMixin):
                 await answer_rule_question(self, state)
                 self.schedule(room_id)
                 return
+            if pending and (pending.document.get("sanity") or {}).get("stage") == "symptom":
+                from app.agents.sanity_runtime import resolve_keeper_symptom
+
+                if await resolve_keeper_symptom(self, state, pending.id):
+                    async with self.rooms.database.sessions() as session:
+                        pending = await session.get(CheckRecord, pending.id)
+                        state = (await session.get(AgentCycle, cycle_id)).state
             if state.get("combat_flow"):
                 from app.agents.combat_runtime import drive_combat
 
@@ -1066,6 +1078,16 @@ class AgentRuntime(ActionRuntimeMixin):
                 current.update(participant_index=index, check_id=None)
                 if index >= len(current["target_member_ids"]):
                     current["status"] = "done"
+                    from app.rooms.combat_service import load_state, store_state
+
+                    data = load_state(room)
+                    for clarification in data.module_runtime.sanity_clarifications.values():
+                        if (clarification["entity_id"], clarification["effect_id"]) == (
+                            current["entity_id"],
+                            current["effect_id"],
+                        ) and clarification["status"] == "approved":
+                            clarification["status"] = "settled"
+                    store_state(room, data)
             cycle.state = {
                 **cycle.state,
                 "encounter_queue": queue,
@@ -1074,7 +1096,14 @@ class AgentRuntime(ActionRuntimeMixin):
                 "status": "running",
             }
             cycle.status = "running"
-            item = next((e for e in queue if e["status"] not in {"done", "rejected"}), None)
+            item = next(
+                (
+                    e
+                    for e in queue
+                    if e["status"] not in {"done", "rejected", "awaiting_clarification"}
+                ),
+                None,
+            )
             if not item:
                 cycle.state = {**cycle.state, "settlement_phase": "narration"}
             elif item["status"] == "review":
@@ -1161,6 +1190,9 @@ class AgentRuntime(ActionRuntimeMixin):
                 sanity = bool(record.document.get("sanity"))
             if sanity:
                 await self.resolve_sanity_automatic(state["room_id"], check_id)
+                from app.agents.sanity_runtime import resolve_keeper_symptom
+
+                await resolve_keeper_symptom(self, state, check_id)
                 async with self.rooms.database.sessions() as session:
                     record = await session.get(CheckRecord, check_id)
                     if record.status != "resolved":
@@ -1548,6 +1580,9 @@ class AgentRuntime(ActionRuntimeMixin):
             from app.agents.conversation import activate_next
 
             await session.flush()
+            from app.agents.sanity_runtime import complete_keeper_bouts
+
+            await complete_keeper_bouts(self.service, session, room)
             if cycle.state.get("combat_other_action"):
                 from app.rooms.combat_service import current_actor, load_state, store_state
 

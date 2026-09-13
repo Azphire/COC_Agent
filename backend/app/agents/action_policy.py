@@ -128,6 +128,8 @@ class ActionPolicyValidator:
             return "clarification_required", "行动依据不是玩家原文的真实子串"
         if plan.cycle_id != facts.cycle_id:
             return "rejected", "计划不属于当前回合"
+        if plan.action_authority.get("rejection_code") == "initial_choice_settled":
+            return "clarification_required", "起始随身物已经确定"
         if intent.requires_clarification or plan.needs_clarification or intent.type == "unknown":
             return "clarification_required", "行动意图不明确"
         if intent.type == "out_of_character":
@@ -234,6 +236,10 @@ class ActionPolicyValidator:
                 # KP free prose can contain unrevealed discoveries. A rejected
                 # plan cannot publish that prose through the clarification path.
                 result.clarification_question = {
+                    "起始随身物已经确定": (
+                        "你的起始随身物已由先前的幸运检定确定，不能重新选择或重骰。"
+                        "这次没有取得新的物品，可以继续调查现场或前往其他车厢。"
+                    ),
                     "行动依据不是玩家原文的真实子串": "这一步你想先尝试哪一个动作？",
                     "行动意图不明确": "这一步你准备实际做什么，还是先和谁说话？",
                     "玩家尚未明确表示移动": "你是现在过去，还是先在原地查看？",
@@ -435,14 +441,32 @@ class ActionPolicyValidator:
                     elif tool.name == "apply_module_action":
                         target = data["entity_id"]
                         entity = facts.approved_entities.get(target, {})
+                        from app.preparation.adjudication import matches_action_focus
+                        from app.preparation.runtime_schemas import ModuleInteraction
+
+                        method = next(
+                            (
+                                r
+                                for r in entity.get("interactions", [])
+                                if r["id"] == data["interaction_id"]
+                            ),
+                            None,
+                        )
                         if (
                             target not in facts.local_entity_ids
                             or target not in facts.observed_entity_ids
                         ):
                             code, reason = "context_missing", "交互目标不在当前可用实体中"
                         elif (
-                            intent.type not in {"interact", "use_item", "investigate"}
-                            or intent.target_id != target
+                            intent.type
+                            not in {"interact", "use_item", "investigate", "observe", "converse"}
+                            or not method
+                            or not matches_action_focus(
+                                plan,
+                                facts.scene_id,
+                                target,
+                                ModuleInteraction.model_validate(method),
+                            )
                         ):
                             code, reason = "precondition_failed", "交互必须匹配玩家当前行动及目标"
                         elif data["evidence_quote"] not in facts.raw_text:
@@ -460,7 +484,10 @@ class ActionPolicyValidator:
                             code, reason = "permission_denied", "实体不属于当前场景"
                         elif target not in facts.observed_entity_ids:
                             code, reason = "context_missing", "当前上下文省略了目标实体"
-                        elif facts.reveal_errors.get(target):
+                        elif (
+                            facts.reveal_errors.get(target)
+                            and target not in facts.revealed_entity_ids
+                        ):
                             if (
                                 not after_check
                                 and plan.proposed_check

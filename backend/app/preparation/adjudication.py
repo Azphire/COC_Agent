@@ -2,12 +2,13 @@
 
 import re
 import unicodedata
+from copy import deepcopy
 from typing import Literal
 
 from pydantic import Field, create_model
 from sqlalchemy import select
 
-from app.agents.adjudication_schemas import KeeperPlan, TurnFocus
+from app.agents.adjudication_schemas import KeeperPlan
 from app.agents.check_policy import CheckProposal
 from app.agents.combat_runtime import call_model
 from app.agents.generation_contracts import utterance_clauses
@@ -15,12 +16,19 @@ from app.agents.schemas import PlannedTool
 from app.domain.character import DomainModel
 from app.persistence.agent_models import AgentRun
 from app.persistence.room_models import RoomEvent
+from app.preparation.action_authority import (
+    action_kinds,
+    authority_error,
+    freeze_action,
+    selected_action_matches,
+)
 from app.preparation.inventory import held_instance, public_inventory
 from app.preparation.runtime_schemas import ModuleInteraction
 from app.rooms.combat_service import load_state, store_state
 
 
 class PreparedDecision(DomainModel):
+    scene_facts: dict[str, str] = Field(default_factory=dict)
     used_item_id: str | None = Field(default=None, json_schema_extra={"x-explicit-output": True})
     option: str | None = Field(default=None, json_schema_extra={"x-explicit-output": True})
     action_clause_ids: list[str] = Field(
@@ -75,6 +83,8 @@ async def verify_current_action(runtime, state, action, rule, *, selected_item=N
 
 
 INSTRUCTION = (
+    "scene_facts只裁定options的required_facts，用本次原话中的站位或实际靠近观察作为值；"
+    "无距离或站位依据就不填写，不能引用规则说明来证明实际事实。"
     "你是CoC的AI KP，裁定本次实际行动能否应用一个已批准方法。"
     "只选择options中的方法，不能批准新增数值或规则。"
     "只处理本轮clauses；问题、建议、假设、否定不是实际行动，action_clause_ids必须是本人正在做的动作。"
@@ -106,6 +116,18 @@ def matches_action_focus(plan, scene_id, entity_id, rule):
             and plan.proposed_check is not None
             and plan.proposed_check.name == "luck"
         )
+    if rule.encounter_operation == "sound_once" and scene_id in rule.scene_node_ids:
+        authority = getattr(plan, "action_authority", {})
+        if "throw" in authority.get("kinds", []) and focus in authority.get("item_instances", {}):
+            return True  # A local sound effect can use the actually focused carried item.
+    if (
+        focus in rule.required_item_ids
+        and entity_id in plan.action_authority.get("named_entity_ids", [])
+        and selected_action_matches(
+            plan.action_authority, plan.action_authority.get("action", ""), rule
+        )
+    ):
+        return True  # Focus may name the tool; capability and actual holder still gate its use.
     return (
         not focus
         or focus in {entity_id, rule.item_id, rule.npc_id}
@@ -144,26 +166,103 @@ def decision_contract(context, candidates):
     )
 
 
-def action_evidence(decision, clauses, raw_text, known_quotes):
+def repair_interaction_transition(plan, facts):
+    """An approved method ID in the transition slot grants no party movement."""
+    method_id = plan.proposed_transition_id
+    if not method_id or method_id in facts.transitions or plan.parsed_intent.type == "move":
+        return
+    for eid, entity in facts.approved_entities.items():
+        if eid not in facts.local_entity_ids:
+            continue
+        for raw in entity.get("interactions", []):
+            rule = ModuleInteraction.model_validate(raw)
+            if (
+                rule.id == method_id
+                and rule.kp_enabled
+                and selected_action_matches(
+                    plan.action_authority, plan.action_authority["action"], rule
+                )
+                and matches_action_focus(plan, facts.scene_id, eid, rule)
+            ):
+                plan.proposed_transition_id = None
+                # State changes still require the normal candidate selection,
+                # actual holder checks and executor receipt below.
+                return
+
+
+def action_evidence(decision, clauses, raw_text, known_quotes, *, state_verified=False):
     """Resolve current-event clause IDs; model quotations only support extra facts."""
-    action = "".join(c["text"] for c in clauses if c["id"] in decision.action_clause_ids)
-    if (
-        not action
-        or action not in raw_text
-        or not all(
-            quote_text(q) and any(quote_text(q) in quote_text(text) for text in known_quotes)
-            for q in decision.evidence_quotes
-        )
-        or re.search(r"是否|能否|可否|假如|假设|不要|并未|没有|[?？]", action)
-    ):
+    positions = [i for i, c in enumerate(clauses) if c["id"] in decision.action_clause_ids]
+    span = clauses[min(positions) : max(positions) + 1] if positions else []
+    # Clause splitting may produce a standalone newline between an action and
+    # speech. Preserve those source bytes; never bridge an unselected text clause.
+    if any(c["text"].strip() and c["id"] not in decision.action_clause_ids for c in span):
         return None
-    return action, list(dict.fromkeys([action, *decision.evidence_quotes]))
+    action = "".join(c["text"] for c in span)
+    supported = [
+        q
+        for q in decision.evidence_quotes
+        if quote_text(q) and any(quote_text(q) in quote_text(text) for text in known_quotes)
+    ]
+    if not action or action not in raw_text or not action_kinds(action):
+        return None
+    if len(supported) != len(decision.evidence_quotes) and not state_verified:
+        return None
+    # Inventory and sound throws have server-owned action, possession, location
+    # and distance/check gates. Discarded quotes cannot add authority or facts.
+    return action, list(dict.fromkeys([action, *supported]))
+
+
+def state_verified_method(raw):
+    """Mechanical operations rely on current clauses and executor prerequisites."""
+    return bool(
+        raw.get("inventory_operation")
+        or raw.get("acquire_item_ids")
+        or raw.get("encounter_operation") == "sound_once"
+        or raw.get("required_item_ids")
+        and (raw.get("encounter_operation") == "open_door" or raw.get("action_kinds") == ["open"])
+    )
 
 
 def quote_text(value):
     # Typography is not a fact change. Keep words, names, negations and numbers.
     text = unicodedata.normalize("NFKC", value).translate(str.maketrans("", "", "\"'“”‘’"))
     return re.sub(r"\s+", " ", text).strip()
+
+
+def prefer_established_sound_methods(candidates, runtime, authority):
+    """Do not select an unproved automatic-distance branch over a legal throw."""
+    from app.preparation.action_authority import establish_scene_facts
+
+    preview = deepcopy(runtime)
+    establish_scene_facts(
+        preview,
+        authority,
+        {key: authority["action"] for c in candidates for key in c["rule"]["required_facts"]},
+    )
+
+    def established(candidate):
+        return all(
+            (fact := preview.scene_facts.get(key, {})).get("established")
+            and fact.get("scene_node_id") == authority["scene_node_id"]
+            and fact.get("actor_member_id") == authority["actor_member_id"]
+            and fact.get("source_event_seq")
+            and fact.get("origin") in {"scene_adjudication", "interaction_receipt"}
+            for key in candidate["rule"]["required_facts"]
+        )
+
+    available = {
+        c["entity_id"]
+        for c in candidates
+        if c["rule"]["encounter_operation"] == "sound_once" and established(c)
+    }
+    return [
+        c
+        for c in candidates
+        if c["rule"]["encounter_operation"] != "sound_once"
+        or c["entity_id"] not in available
+        or established(c)
+    ]
 
 
 async def adjudicate_prepared(runtime, state, plan_run_id):
@@ -177,15 +276,77 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
         cycle = await session.get(AgentCycle, state["cycle_id"])
         facts = await agents.adjudication.facts(session, room, cycle, run)
         data = load_state(room)
+        members = {
+            m.id: m.display_name
+            for m in await agents.rooms.members(session, room)
+            if m.active and m.role == "player"
+        }
+        from app.preparation.search import repair_local_interaction_target
+
+        repair_local_interaction_target(plan, facts, members)
+        plan.action_authority = freeze_action(
+            plan,
+            facts.raw_text,
+            facts.actor_member_id,
+            state["triggering_event_seq"],
+            facts.scene_id,
+            facts.approved_entities,
+            data.module_runtime,
+            members,
+        )
+        plan.proposed_tool_calls = [
+            t for t in plan.proposed_tool_calls if t.name != "apply_module_action"
+        ]
+        repair_interaction_transition(plan, facts)
+        run.structured_output = plan.model_dump(mode="json")
+        if plan.action_authority.get("request_member_id"):
+            return None
+        from app.preparation.search import guard_initial_reselection
+
+        if guard_initial_reselection(plan, facts, data.module_runtime):
+            run.structured_output = plan.model_dump(mode="json")
+            return None
         candidates = []
         for eid, entity in facts.approved_entities.items():
-            if eid not in facts.local_entity_ids or eid not in facts.revealed_entity_ids:
+            searching = bool(plan.proposed_check and str(plan.proposed_check.clue_id) == eid)
+            revealing = (
+                eid in plan.proposed_reveal_entity_ids
+                and eid in facts.visible_entity_ids
+                and entity.get("reveal_conditions", {}).get("access_policy") == "automatic"
+                and not facts.reveal_errors.get(eid)
+            )
+            if eid not in facts.local_entity_ids or (
+                eid not in facts.revealed_entity_ids and not searching and not revealing
+            ):
                 continue
             for raw in entity.get("interactions", []):
                 rule = ModuleInteraction.model_validate(raw)
+                if (
+                    eid not in facts.revealed_entity_ids
+                    and not revealing
+                    and not rule.acquire_item_ids
+                ):
+                    continue
                 if not rule.kp_enabled or not rule.check_passed:
                     continue
                 if not matches_action_focus(plan, facts.scene_id, eid, rule):
+                    continue
+                # Item selection is checked once the option supplies it. Every
+                # other capability is checked before showing a method candidate.
+                if rule.encounter_operation != "sound_once" and authority_error(
+                    plan.action_authority,
+                    rule,
+                    data.module_runtime,
+                    actor=facts.actor_member_id,
+                    seq=state["triggering_event_seq"],
+                    scene=facts.scene_id,
+                    check_facts=False,
+                ):
+                    continue
+                if (
+                    rule.encounter_operation == "sound_once"
+                    and "throw" not in plan.action_authority["kinds"]
+                ):
                     continue
                 if rule.scene_node_ids and facts.scene_id not in rule.scene_node_ids:
                     continue
@@ -239,6 +400,9 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 )
         if not candidates:
             return None
+        candidates = prefer_established_sound_methods(
+            candidates, data.module_runtime, plan.action_authority
+        )
         # Rank by the actual focus plus lexical relevance, without excluding synonyms.
         from app.knowledge.text import tokens
 
@@ -277,6 +441,7 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
         quotes = [facts.raw_text, *[e.payload.get("text", "") for e in events]]
         context = {
             "actor": facts.actor_member_id,
+            "action_authority": plan.action_authority,
             "declared_focus": plan.focus.model_dump() if plan.focus else None,
             "clauses": utterance_clauses(facts.raw_text),
             "scene": facts.scene_id,
@@ -290,6 +455,7 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                     "source_block_ids": c["rule"]["source_block_ids"],
                     "uses_sound_item": c["rule"]["encounter_operation"] == "sound_once",
                     "allows_worn_item": c["rule"]["allow_worn_sound_item"],
+                    "required_facts": c["rule"]["required_facts"],
                 }
                 for c in candidates
             ],
@@ -321,7 +487,9 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
         # The KP may cite the same approved public facts/rules that it was given,
         # in addition to event dialogue. They do not supply action authority.
         quotes.extend(value for fact in context["facts"] for value in fact.values())
-        quotes.extend(c["rule"][key] for c in candidates for key in ("instruction", "situation"))
+        # The model may quote a fact as "title: summary". Both fields already
+        # came from the same approved entity; this adds no invented evidence.
+        quotes.extend(f"{fact['title']}：{fact['summary']}" for fact in context["facts"])
         return context, candidates, quotes
 
     prepared = await agents.mutate(state["room_id"], prepare)
@@ -333,21 +501,21 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
     chosen = next((c for c in candidates if c["option"] == decision.option), None)
     verification = None
     if chosen and decision.applicable:
-        evidence = action_evidence(decision, context["clauses"], quotes[0], quotes)
+        evidence = action_evidence(
+            decision,
+            context["clauses"],
+            quotes[0],
+            quotes,
+            state_verified=state_verified_method(chosen["rule"]),
+        )
         if evidence:
-            rule = ModuleInteraction.model_validate(chosen["rule"])
-            selected_id = (
-                decision.used_item_id
-                if rule.encounter_operation == "sound_once"
-                else rule.item_id
-                if rule.inventory_operation in {"give", "drop", "consume"}
-                else None
-            )
-            selected_item = next(
-                (i["title"] for i in context["items"] if i["item_id"] == selected_id), None
-            )
-            verification = await verify_current_action(
-                runtime, state, evidence[0], rule, selected_item=selected_item
+            # Action capabilities and item identity are checked deterministically
+            # below and again at execution. A second model cannot add authority
+            # and used to reject valid aliases after the method had been selected.
+            verification = CurrentActionMatch(
+                matches=True,
+                action_quote=evidence[0],
+                reason="执行层核对冻结动作和所用物品实例",
             )
 
     async def persist(session, room):
@@ -358,15 +526,44 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
         ]
         chosen = next((c for c in candidates if c["option"] == decision.option), None)
         if chosen and decision.applicable:
-            evidence = action_evidence(decision, context["clauses"], quotes[0], quotes)
-            if not evidence or not verification:
-                plan.proposed_check = None
-                plan.proposed_reveal_entity_ids = []
-                plan.proposed_transition_id = None
-                plan.needs_clarification = plan.parsed_intent.requires_clarification = True
-                plan.parsed_intent.clarification_question = (
-                    decision.clarification or "你这次具体要操作哪件物品、做什么动作？"
-                )
+            evidence = action_evidence(
+                decision,
+                context["clauses"],
+                quotes[0],
+                quotes,
+                state_verified=state_verified_method(chosen["rule"]),
+            )
+            rule = ModuleInteraction.model_validate(chosen["rule"])
+            data = load_state(room)
+            from app.preparation.action_authority import establish_scene_facts
+
+            establish_scene_facts(data.module_runtime, plan.action_authority, decision.scene_facts)
+            error = authority_error(
+                plan.action_authority,
+                rule,
+                data.module_runtime,
+                actor=context["actor"],
+                seq=state["triggering_event_seq"],
+                scene=context["scene"],
+                item_id=decision.used_item_id,
+                recipient=decision.recipient_member_id,
+            )
+            if (
+                not evidence
+                or not verification
+                or error
+                or not selected_action_matches(plan.action_authority, evidence[0], rule)
+            ):
+                # Reject only the unrelated method. Preserve the original valid
+                # observation/dialogue and any source-required search check.
+                if error and error.startswith("尚缺已裁定"):
+                    plan.next_decision = decision.clarification or "请说明你的站位和目标的位置。"
+                    if "throw" in plan.action_authority["kinds"]:
+                        # Publish the unresolved choice through the existing
+                        # clarification path; do not narrate an unexecuted throw.
+                        plan.needs_clarification = True
+                        plan.parsed_intent.requires_clarification = True
+                        plan.parsed_intent.clarification_question = plan.next_decision
                 run.structured_output = plan.model_dump(mode="json")
                 agents.rooms.append(
                     session,
@@ -374,22 +571,17 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                     "module.ruling_rejected",
                     room.host_member_id,
                     {
-                        "reason": "实际动作与拟执行操作不一致"
-                        if evidence
-                        else "实际行动或事实引用无效",
+                        "reason": error or "实际动作与拟执行操作或引用不一致",
                         "decision": decision.model_dump(),
                         "source_event_seq": state["triggering_event_seq"],
                     },
                     "host_only",
                 )
                 return
-            action, evidence_quotes = evidence
+            selected_action, evidence_quotes = evidence
+            action = plan.action_authority["action"]
+            verification.action_quote = action
             rule = ModuleInteraction.model_validate(chosen["rule"])
-            plan.focus = plan.focus or TurnFocus()
-            plan.focus.action, plan.focus.action_target_id = action, chosen["entity_id"]
-            plan.parsed_intent.type = "use_item" if rule.inventory_operation else "interact"
-            plan.parsed_intent.target_id = chosen["entity_id"]
-            plan.parsed_intent.evidence_quote = action
             plan.needs_host_review = plan.needs_clarification = False
             plan.parsed_intent.requires_clarification = False
             plan.proposed_transition_id = None
@@ -397,12 +589,13 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 "entity_id": chosen["entity_id"],
                 "interaction_id": rule.id,
                 "evidence_quote": action,
-                "recipient_member_id": decision.recipient_member_id,
+                "recipient_member_id": decision.recipient_member_id
+                if rule.inventory_operation == "give"
+                else None,
                 "npc_instance_id": decision.npc_instance_id,
                 "used_item_id": decision.used_item_id,
             }
             plan.proposed_tool_calls.append(PlannedTool(name="apply_module_action", arguments=args))
-            data = load_state(room)
             needs_check = bool(rule.check_name)
             if rule.carry_attribute:
                 slot = next(
@@ -427,6 +620,13 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
             ):
                 needs_check = False
             if needs_check:
+                possession_check = rule.inventory_operation in {"initial", "recover"}
+                check_target = rule.item_id if possession_check else chosen["entity_id"]
+                check_entity = (
+                    await agents.entities.entity(session, room.id, check_target)
+                    if possession_check
+                    else None
+                )
                 plan.focus.obstacle = rule.situation or rule.instruction
                 plan.proposed_check = CheckProposal(
                     target_member_id=context["actor"],
@@ -438,12 +638,18 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                     reason=rule.instruction,
                     purpose=rule.instruction,
                     method=action[:240],
-                    target_entity_id=chosen["entity_id"],
+                    target_entity_id=check_target,
+                    clue_id=check_target
+                    if check_entity
+                    and check_entity.state == "hidden"
+                    and check_entity.snapshot.get("reveal_conditions", {}).get("access_policy")
+                    == "requires_check"
+                    else None,
                     necessity="required",
                     uncertainty=rule.situation or rule.instruction,
                     success_effect=rule.public_result[:240],
                     failure_consequence="本次尝试未成功，按已配置失败分支结算。",
-                    basis_entity_id=chosen["entity_id"],
+                    basis_entity_id=check_target,
                     rule_topic_id="coc7.opposed_check"
                     if rule.opposed_npc_id
                     else "coc7.skill_check",
@@ -455,11 +661,14 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                     if rule.opposed_npc_id
                     else None,
                 )
-            else:
+            elif not (
+                plan.proposed_check and str(plan.proposed_check.clue_id) == chosen["entity_id"]
+            ):
                 plan.proposed_check = None
             key = f"{state['triggering_event_seq']}:{chosen['entity_id']}:{rule.id}"
             data.module_runtime.rulings[key] = {
                 "action": action,
+                "selected_action_quote": selected_action,
                 "actor_member_id": context["actor"],
                 "source_event_seq": state["triggering_event_seq"],
                 "source_block_ids": rule.source_block_ids,
@@ -469,6 +678,7 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 "authority": "game_situation_only",
                 "numeric_approval": False,
                 "current_action_verification": verification.model_dump(),
+                "action_authority": plan.action_authority,
             }
             store_state(room, data)
         elif chosen and decision.clarification:

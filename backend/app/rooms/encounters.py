@@ -11,6 +11,21 @@ from app.rooms.sanity_schemas import SanityEffect
 from app.rooms.service import require
 
 
+def interaction_revealed_consequence(runtime, facts, entity_id, source_seq):
+    return any(
+        receipt.get("source_event_seq") == source_seq
+        and receipt.get("entity_id") in facts.local_entity_ids
+        and any(
+            rule["id"] == receipt.get("interaction_id")
+            and entity_id in rule.get("reveal_entity_ids", [])
+            for rule in facts.approved_entities.get(receipt.get("entity_id"), {}).get(
+                "interactions", []
+            )
+        )
+        for receipt in runtime.get("receipts", {}).values()
+    )
+
+
 class EncounterService:
     def __init__(self, sanity):
         self.sanity, self.agents, self.rooms = sanity, sanity.agents, sanity.rooms
@@ -40,6 +55,9 @@ class EncounterService:
             "settlement_phase": "sanity",
             "pending_check_id": None,
         }
+        if cycle.state.get("sanity_resumed"):
+            cycle.state = {**cycle.state, "encounter_queue": cycle.state["sanity_resumed"]}
+            return
         record = await session.get(ActionPlanRecord, cycle.id)
         if not record or cycle.state.get("request_category") not in {"investigation", "dialogue"}:
             return
@@ -83,6 +101,21 @@ class EncounterService:
         )
         ambiguous_target = not target and len(matches) > 1
         sources = []
+        from app.preparation.action_authority import action_kinds, aliases
+
+        action = doc.plan.focus.action if doc.plan.focus else ""
+        if "observe" in action_kinds(action):
+            for eid in facts.local_entity_ids:
+                entity = facts.approved_entities.get(eid, {})
+                if entity.get("sanity_effects") and any(a and a in action for a in aliases(entity)):
+                    sources.append((eid, "action_target", cycle.state["triggering_event_seq"]))
+        for observation in (
+            room.session_state.get("module_runtime", {}).get("observations", {}).values()
+        ):
+            if observation.get("cycle_id") == cycle.id and observation.get("established"):
+                sources.append(
+                    (observation["entity_id"], "entity_revealed", observation["source_event_seq"])
+                )
         for candidate in [target] if target else matches if ambiguous_target else []:
             if not (
                 candidate in visible
@@ -105,7 +138,21 @@ class EncounterService:
         ):
             if event.payload.get("cycle_id") == cycle.id:
                 eid = event.payload.get("entity_id", event.payload.get("id"))
-                if eid in facts.local_entity_ids and not facts.reveal_errors.get(eid):
+                # An executed local interaction can reveal its configured
+                # consequence in another source section (e.g. an ending).
+                # That actual receipt establishes the encounter's origin;
+                # merely knowing a remote entity still does not.
+                consequence = interaction_revealed_consequence(
+                    room.session_state.get("module_runtime", {}),
+                    facts,
+                    eid,
+                    cycle.state["triggering_event_seq"],
+                )
+                if (
+                    eid in facts.approved_entities
+                    and (eid in facts.local_entity_ids or consequence)
+                    and (not facts.reveal_errors.get(eid) or consequence)
+                ):
                     sources.append((eid, "entity_revealed", event.seq))
         queue = []
         for eid, trigger, seq in sources:
@@ -123,6 +170,8 @@ class EncounterService:
                 )
             ]
             for effect in effects:
+                if any(e["entity_id"] == eid and e["effect_id"] == effect.id for e in queue):
+                    continue
                 if trigger == "action_target" and intent.type not in effect.action_types:
                     continue
                 prior = await self.previous(session, room, eid, effect.id, facts.actor_member_id)

@@ -1,7 +1,11 @@
 """Compact combat decisions using the existing model, run ledger and serial cycle queue."""
 
 import json
+import re
+from typing import Literal
 from uuid import uuid4
+
+from pydantic import ValidationError, create_model, model_validator
 
 from app.domain.character import utc_now
 from app.persistence.agent_models import AgentCycle, AgentRun, ProfileRecord
@@ -15,12 +19,73 @@ DECISION = (
     "attack是真实攻击意图；询问、假设、谈话用talk，调查用investigate。"
     "目标和武器ID只复制候选，不能创造数值或替真人选择。近战选已有近战武器，普通单发射击选已有枪械。"
     "攻击目标只能选attack_targets，不能攻击已经脱离本次战斗的角色；追逐属于后续场景裁定。"
+    "没有可攻击目标时可用pass继续侦听或追踪现有声源，不能发明一个可攻击目标。"
     "range_band按场景距离选base/long/extreme/point_blank，不明确距离用base。"
     "first_aid急救；medicine医学；reload装填；pass主动等待或站起等占用行动；end仅表示自己脱离战斗。"
     "急救和医学的目标选treatment_targets；不要将原话中的NPC替换成队友。没有对应目标时用talk说明。"
     "不因聊天自动结束战斗。自动角色结合自己的队伍、伤势和武器选行动，攻击对方，受伤严重可以脱离。"
     "无需主机审批普通合法行动。reason简短描述尝试，不宣布伤害或成败。"
 )
+
+
+def automatic_decision_contract(context):
+    """Constrain autonomous choices to actual capabilities and perceived targets."""
+    attacks = set(context["attack_targets"])
+    treatments = {t["id"] for t in context["treatment_targets"]}
+    own = context.get("own") or {}
+    skills = own.get("skills", {})
+    if not any(skills.get(skill, 0) > 0 for skill in ("first_aid", "medicine")):
+        treatments = set()
+    operations = ["pass", "end", "talk", "investigate"]
+    if attacks:
+        operations.append("attack")
+    for operation in ("first_aid", "medicine"):
+        if treatments and skills.get(operation, 0) > 0:
+            operations.append(operation)
+    if any(w.get("capacity", 0) and w.get("reserve", 0) for w in own.get("weapons", [])):
+        operations.append("reload")
+
+    def target_matches_operation(decision):
+        allowed = attacks if decision.operation == "attack" else treatments
+        if (
+            decision.operation in {"attack", "first_aid", "medicine"}
+            and decision.target_id not in allowed
+        ):
+            raise ValueError("目标不在本次操作的真实候选中")
+        return decision
+
+    return create_model(
+        "AutomaticCombatDecision",
+        __base__=CombatDecision,
+        __validators__={
+            "target_matches_operation": model_validator(mode="after")(target_matches_operation)
+        },
+        operation=(Literal[tuple(operations)], ...),
+        target_id=(Literal[tuple(sorted(attacks | treatments) + [None])], None),
+        weapon_id=(Literal[tuple([w["id"] for w in own.get("weapons", [])] + [None])], None),
+    )
+
+
+def human_decision_contract(context):
+    """Keep an explicitly named opponent from becoming a different character."""
+    raw = re.sub(r"\s+", "", context["input"])
+    participants = context.get("combat", {}).get("participants", {})
+    exact, groups = set(), set()
+    for pid, participant in participants.items():
+        label = re.sub(r"\s+", "", participant.get("label", ""))
+        if label and label in raw:
+            exact.add(pid)
+        base = re.sub(r"\d+$", "", label)
+        if base and base != label and base in raw:
+            groups.add(pid)
+    named = exact or groups
+    if not named:
+        return CombatDecision
+    return create_model(
+        "HumanCombatDecision",
+        __base__=CombatDecision,
+        target_id=(Literal[tuple(sorted(named) + [None])], None),
+    )
 
 
 async def call_model(runtime, state, schema, instruction, context, node):
@@ -201,17 +266,27 @@ async def drive_combat(runtime, state):
     if state.get("combat_action_id") and state["status"] == "waiting_for_roll":
         return True
     if not state.get("combat_action_id") and not state.get("combat_started_only"):
-        decision = (
-            CombatDecision.model_validate(state["combat_decision"])
-            if state.get("combat_decision")
-            else await call_model(
-                runtime, state, CombatDecision, DECISION, context, "combat_decide"
-            )
+        schema = (
+            automatic_decision_contract(context)
+            if state.get("combat_automatic")
+            else human_decision_contract(context)
         )
+        decision = None
+        if state.get("combat_decision"):
+            try:
+                decision = schema.model_validate(state["combat_decision"])
+            except ValidationError:
+                pass  # A rejected automatic proposal is not an executable cached action.
+        if decision is None:
+            decision = await call_model(runtime, state, schema, DECISION, context, "combat_decide")
 
         async def decide(session, room):
             cycle = await session.get(AgentCycle, state["cycle_id"])
-            cycle.state = {**cycle.state, "combat_decision": decision.model_dump(mode="json")}
+            cycle.state = {
+                **cycle.state,
+                "combat_decision": decision.model_dump(mode="json"),
+                "combat_rejection": None,
+            }
             if decision.operation in {"investigate", "talk"} and not state.get("combat_automatic"):
                 data = load_state(room)
                 require(
@@ -269,26 +344,19 @@ async def drive_combat(runtime, state):
             .get("label"),
             "scene": context["scene"],
         }
-    output = (
-        CombatNarration(
-            text=(
-                state.get("combat_rejection")
-                or (
-                    f"冲突开始，按行动顺序由{narrative_context['current_actor']}先行动。"
-                    "发起者的攻击尚未掷骰，请等待自己的行动次序。"
-                )
+    # The reducer already supplies a public result for each settled operation.
+    # Appending unchecked model prose used to contradict the same receipt with
+    # invented poison, wounds or a different victim. Dialogue and investigation
+    # still return to the normal narration graph above.
+    output = CombatNarration(
+        text=(
+            action["summary"]
+            if action
+            else state.get("combat_rejection")
+            or (
+                f"冲突开始，按行动顺序由{narrative_context['current_actor']}先行动。"
+                "发起者的攻击尚未掷骰，请等待自己的行动次序。"
             )
-        )
-        if action is None
-        else await call_model(
-            runtime,
-            state,
-            CombatNarration,
-            "你是中文跑团KP。按服务端result简短解释发生的攻防和可见后果，再交回当前行动者。"
-            "只描述已结算结果；rejection是尚未执行的原因，started只表示开始战斗。"
-            "不得补写数值、死亡、额外攻击或替玩家作决定。隐藏数值不推测。用角色名，不输出内部ID。",
-            narrative_context,
-            "combat_narration",
         )
     )
 

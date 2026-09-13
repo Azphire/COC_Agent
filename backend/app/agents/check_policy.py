@@ -160,7 +160,12 @@ class CheckPolicyEvaluator:
             from app.agents.behavior import bigram_jaccard
 
             same_task = (
-                p.continues_check_id == old.get("id")
+                access == "requires_check"
+                and p.clue_id == target
+                and old.get("kind") == p.kind
+                and old.get("name") == p.name
+                and not p.alternative_basis.strip()
+                or p.continues_check_id == old.get("id")
                 or (p.purpose and p.purpose == old.get("attempt_purpose"))
                 or bigram_jaccard(p.purpose, old.get("attempt_purpose", "")) >= 0.45
                 or (

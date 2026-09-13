@@ -10,6 +10,8 @@ Number = Annotated[StrictInt, Field(ge=0, le=1_000_000)]
 
 
 class SanityEffect(DomainModel):
+    perception: Literal["visual", "other"] = "other"
+    visibility_any_flags: list[str] = Field(default_factory=list, max_length=8)
     id: str = Field(min_length=1, max_length=80)
     encounter: str = Field(min_length=1, max_length=200)
     trigger: Literal["action_target", "entity_revealed"] = "action_target"

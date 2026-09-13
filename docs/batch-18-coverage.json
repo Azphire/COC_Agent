@@ -1,0 +1,407 @@
+{
+  "batch": 18,
+  "baseline_head": "42dc22869cc38dbeebcb0d6a2a37d838b11a3fbd",
+  "source_accounting_complete": true,
+  "runtime_complete": true,
+  "summary": {
+    "source_hash": "a72e88d5a4cb08831bb4ab6719094447b6c995932b4760945a1abb871cad57c8",
+    "file_hashes": [
+      "af1033fc931f85b53109856e7bbb9695313a3adb90008e6615cc2c091c85c1d8"
+    ],
+    "pages": 17,
+    "blocks_accounted": 243,
+    "playable_scenes": 7,
+    "entities": 44,
+    "transitions": 12,
+    "outcomes": [
+      "A",
+      "B",
+      "C"
+    ],
+    "coverage_entries": 58,
+    "coverage_status": {
+      "prepared": 46,
+      "context": 6,
+      "host_ruling": 4,
+      "blocked": 2
+    },
+    "source_accounting_complete": true,
+    "runtime_complete": true
+  },
+  "numeric_approval": {
+    "status": "approved",
+    "user_approved": true,
+    "proposal": "docs/batch-17-npc-supplement.md",
+    "configuration": "data/prepared/changan/batch-17/approved-v1/npc-supplement.json",
+    "record": "data/prepared/changan/batch-17/approved-v1/approval.json",
+    "evidence": {
+      "id": "batch17-npc-values-v1-user-approval",
+      "status": "approved",
+      "user_approved": true,
+      "recorded_at_utc": "2026-09-12T16:14:29.968722+00:00",
+      "authority": "explicit_user_message_in_this_conversation",
+      "user_message": "批准",
+      "approved_proposal_id": "batch17-npc-values-v1",
+      "approved_proposal_sha256": "8960244f32db91551efd83710677db38d2121bdb4ee950d2bb65bd0bdc2a3cc1",
+      "basis": "用户对上一轮正式启用确认的明确回复；不是由测试结果推定批准。",
+      "scope": "方案v1逐字段列出的新增值、由新增值派生的值及伤势初始化选择。",
+      "runtime_complete": false,
+      "runtime_acceptance": "final-v14自然复演未通过，批准数值不改变其历史结论。"
+    }
+  },
+  "source_dimension": {
+    "status": "complete",
+    "inherited_report": "docs/batch-17-coverage.json",
+    "approved_input": "data/prepared/changan/batch-17/approved-v1/package-supplement-approved.json",
+    "input_byte_sha256": "f885a9313c80dd67141ea1bacf049e0e8ed8d37109349af4f8b6a2f7c58315b8",
+    "source_counts_unchanged": true,
+    "numeric_values_unchanged": true,
+    "roundtrip_evidence": "data/prepared/changan/batch-18/roundtrip-verification.json"
+  },
+  "runtime_dimension": {
+    "status": "passed_for_declared_p0_scope",
+    "evidence_root": "data/prepared/changan/batch-18/",
+    "main_route": {
+      "run": "final-v8",
+      "room_id": "4cae89f4-59ee-4e63-9551-38fcf711fce5",
+      "completed": true,
+      "code": "candidate45-freeze.json",
+      "all_actions_same_version": true,
+      "no_fixture": true,
+      "luck_spending_predeclared": true,
+      "dice_reset": false,
+      "host_state_repair": false,
+      "outcome": "B",
+      "acceptance": {
+        "room_id": "4cae89f4-59ee-4e63-9551-38fcf711fce5",
+        "npc_events": [
+          197,
+          226
+        ],
+        "key_check_id": "25318f81-1f5e-42cc-9d99-c5a20a56a8cc",
+        "take_event": 333,
+        "give_event": 390,
+        "ai_lock_events": [
+          768,
+          825
+        ],
+        "san_check_ids": [
+          "764cdcf6-b8cc-5caa-b08c-af261acdd141",
+          "9b24d6e4-b46e-5de1-80a0-1194c780e9e4",
+          "a1bc8c05-a60a-5527-9d3b-a6b2e3b6affd"
+        ],
+        "outcome": "B",
+        "completed_event": 992,
+        "restore_equal": true,
+        "repeat_deduplicated": true,
+        "no_fixture": true,
+        "no_host_effect_execution": true,
+        "no_dice_reset": true
+      },
+      "model": {
+        "count": 113,
+        "latency_ms_total": 950061,
+        "latency_ms_max": 29890,
+        "max_input_tokens": 3779,
+        "max_output_tokens": 732,
+        "validation_issue_calls": [
+          "f59afd1a-b14a-4311-9112-a44e2a833489",
+          "a11ba3e6-114a-4253-9c7f-01d52ac5473e"
+        ],
+        "providers": [
+          "ollama"
+        ],
+        "models": [
+          "qwen3:8b"
+        ]
+      },
+      "resources": {
+        "周岚": {
+          "hp": 12,
+          "san": 46,
+          "luck": 66,
+          "mp": 10,
+          "san_max": 96,
+          "mythos_gain": 3,
+          "insanity_kind": "none",
+          "insanity_phase": "none",
+          "symptom": ""
+        },
+        "沈砚": {
+          "hp": 12,
+          "san": 49,
+          "luck": 30,
+          "mp": 10,
+          "san_max": 96,
+          "mythos_gain": 3,
+          "insanity_kind": "none",
+          "insanity_phase": "none",
+          "symptom": ""
+        }
+      },
+      "sanity_checks": [
+        {
+          "id": "9b24d6e4-b46e-5de1-80a0-1194c780e9e4",
+          "actor": "周岚",
+          "effect": "clicker_seen",
+          "before": 50,
+          "after": 48,
+          "loss": 2,
+          "roll": 72,
+          "threshold": 50,
+          "passed": false,
+          "stage": "done"
+        },
+        {
+          "id": "a1bc8c05-a60a-5527-9d3b-a6b2e3b6affd",
+          "actor": "周岚",
+          "effect": "bad_end",
+          "before": 48,
+          "after": 46,
+          "loss": 2,
+          "roll": 33,
+          "threshold": 48,
+          "passed": true,
+          "stage": "done"
+        },
+        {
+          "id": "764cdcf6-b8cc-5caa-b08c-af261acdd141",
+          "actor": "沈砚",
+          "effect": "bad_end",
+          "before": 50,
+          "after": 49,
+          "loss": 1,
+          "roll": 48,
+          "threshold": 50,
+          "passed": true,
+          "stage": "done"
+        }
+      ],
+      "snapshots": "final-v8/snapshot-index-c45.json",
+      "browser": "final-v8/browser/",
+      "restore_comparisons": [
+        "clarification-restore-c45-comparison.json",
+        "restore-c45-comparison.json",
+        "reward-restore-c45-comparison.json"
+      ],
+      "actual_successful_first_aid": true,
+      "ordinary_followups": [
+        {
+          "source_event": 836,
+          "result": "Return request produced no actual transfer; current holder later operated controls."
+        },
+        {
+          "source_event": 943,
+          "rejection_event": 948,
+          "result": "Selected clause lacked converse capability; no outcome/reward change. Continued with clearer normal input."
+        }
+      ],
+      "nonblocking_narrative_drift": {
+        "events": [
+          966,
+          997
+        ],
+        "issue": "Incidental narration called the opened cab door closed; actual cab_open remained true. Final terminal response uses authoritative receipt."
+      }
+    },
+    "combat_treatment": {
+      "combat_run": "combat-c45",
+      "room_id": "0d683adc-e8db-44fc-96f6-944c7632c85c",
+      "code": "candidate45-freeze.json",
+      "whole_room_same_version": true,
+      "actual_attack_defense_and_new_injury": true,
+      "treatment_in_this_combat": false,
+      "reason": "Both investigators incapacitated by actual random results; no reroll or repaired wounds. Separate C45 normal main-room first aid treats source-injured staff.",
+      "snapshot_id": "b86229d7-e4f4-4e89-87ff-7b73b7a38737",
+      "model_calls": 3,
+      "latency_ms_total": 22748,
+      "restore_equal": true,
+      "treatment_run": "final-v8",
+      "treatment_action_id": "cbdf8097-47ee-4925-ad58-5a62440eb83d",
+      "treatment_result": {
+        "roll": 18,
+        "threshold": 30,
+        "passed": true,
+        "hp_before": 3,
+        "hp_after": 4
+      },
+      "therapy_same_battle": false
+    },
+    "final_code_manifest": "data/prepared/changan/batch-18/candidate45-freeze.json",
+    "development_short_tests": {
+      "keys": true,
+      "observation_throw": true,
+      "sanity_resume": true,
+      "teammate_transfer_use": true,
+      "whole_chain_same_version": false,
+      "version_note": "Per-room version segments preserved. C44 key/observation/restore/locks short validation preceded the C44 main; C45 required bout-resume/repeat short validation and regression preceded fresh final-v8. C45 lock continuation was also retained separately."
+    },
+    "final_acceptance": "final-acceptance-c45.json",
+    "room_index": "rooms-index-final-c45.json",
+    "code_files_verified": 231
+  },
+  "regression_evidence": {
+    "broad_candidate3": {
+      "passed": 390,
+      "junit": "final-candidate3-regression.xml"
+    },
+    "candidate5_context_and_recovery": {
+      "passed": 67,
+      "junit": "context-c5-run2-regression.xml"
+    },
+    "candidate6_combat": {
+      "passed": 95,
+      "junit": "combat-c6-regression.xml"
+    },
+    "candidate7_binding": {
+      "passed": 105,
+      "junit": "binding-c7-regression.xml"
+    },
+    "candidate8_clauses": {
+      "passed": 134,
+      "junit": "clause-c8-regression.xml"
+    },
+    "candidate9_evidence": {
+      "passed": 75,
+      "junit": "evidence-c9-regression.xml"
+    },
+    "candidate10_initial_binding": {
+      "passed": 138,
+      "junit": "initial-c10-regression.xml"
+    },
+    "candidate11_searchable": {
+      "passed": 142,
+      "junit": "searchable-c11-regression.xml"
+    },
+    "candidate12_prompt": {
+      "passed": 112,
+      "junit": "prompt-c12-regression.xml"
+    },
+    "candidate13_combat_choices": {
+      "passed": 107,
+      "junit": "combat-choice-c13-regression.xml"
+    },
+    "candidate14_possession": {
+      "passed": 117,
+      "junit": "possession-c14-regression.xml"
+    },
+    "candidate14b_reselection": {
+      "passed": 83,
+      "junit": "reselection-c14b-regression.xml"
+    },
+    "candidate15_budget": {
+      "passed": 87,
+      "junit": "budget-c15-regression.xml"
+    },
+    "candidate16_lighting": {
+      "passed": 88,
+      "junit": "lighting-c16-regression.xml"
+    },
+    "c18_key_use": {
+      "passed": 95,
+      "junit": "key-use-c18-run2-regression.xml"
+    },
+    "c18_agents": {
+      "passed": 81,
+      "junit": "agents-c18-regression.xml"
+    },
+    "c19_key_evidence": {
+      "passed": 90,
+      "junit": "key-evidence-c19-regression.xml"
+    },
+    "c20_regression": {
+      "passed": 124,
+      "junit": "final-c20-regression.xml"
+    },
+    "c21_teammate": {
+      "passed": 125,
+      "junit": "teammate-c21-regression.xml"
+    },
+    "c35_broad": {
+      "passed": 313,
+      "junit": "broad-c35b-regression.xml",
+      "seconds": 321.61
+    },
+    "c36_methods": {
+      "passed": 198,
+      "junit": "final-c36-regression.xml",
+      "seconds": 165.05
+    },
+    "c37_final_envelope": {
+      "passed": 232,
+      "junit": "final-c37-regression.xml",
+      "seconds": 197.29
+    },
+    "c44_final": {
+      "passed": 339,
+      "seconds": 411.33,
+      "junit": "final-c44-regression.xml",
+      "ruff": "passed"
+    },
+    "c45_final": {
+      "passed": 294,
+      "seconds": 306.62,
+      "junit": "final-c45-regression.xml",
+      "ruff": "passed"
+    }
+  },
+  "prior_failure_preserved": {
+    "run": "batch-17/final-v14",
+    "model_calls": 83,
+    "natural_route_passed": false
+  },
+  "p1": {
+    "mp_automatic_effects": false,
+    "generic_item_effects": false,
+    "complete_character_creation": false,
+    "dedicated_60_90_minute_acceptance": false
+  },
+  "p0": {
+    "action_execution_authority": {
+      "regression_passed": true,
+      "scope": "Frozen actual action, current actor/item instance, required facts, wrong affirmative model, transactional rejection",
+      "final_main_verified": true
+    },
+    "required_search_checks": {
+      "regression_passed": true,
+      "final_main_verified": true
+    },
+    "sanity_obligation_and_resume": {
+      "regression_passed": true,
+      "final_main_verified": true
+    },
+    "npc_and_teammate": {
+      "regression_passed": true,
+      "final_main_key_use_verified": true
+    },
+    "combat_and_treatment": {
+      "actual_final_version_attack_defense": true,
+      "combat_run": "combat-c45",
+      "treatment_verified": true,
+      "investigator_major_wound_occurred": true,
+      "investigator_unconsciousness_occurred": true,
+      "investigator_dying_occurred": true,
+      "treatment_run": "final-v8",
+      "therapy_same_battle": false
+    },
+    "continuous_module_route": {
+      "completed": true,
+      "run": "final-v8",
+      "outcome": "B"
+    },
+    "expanded_checks": {
+      "existing_service_preserved": true,
+      "actual_luck_spending": 19,
+      "actual_opposed_combat": true,
+      "push_and_combined": "regression/fixture coverage, not claimed as final main events"
+    }
+  },
+  "unplayed_final_branches": {
+    "A": "not played on final C45; older ending-a-c32 is a declared development fixture",
+    "C": "fixture/regression coverage only",
+    "medicine": "fixture/regression coverage only",
+    "grappling": "fixture/regression coverage only",
+    "successful_combat_aftercare": "C45 battle incapacitated both investigators; successful C45 first aid instead occurred on source-injured staff in main room"
+  },
+  "runtime_acceptance_scope": "Batch18 declared P0 main route B, final-version attack/defense/injury and separate source-NPC first aid; not every branch, victory, battle aftercare, or P1 long test."
+}
