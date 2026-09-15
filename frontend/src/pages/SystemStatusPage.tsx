@@ -1,17 +1,12 @@
+import ModelSettingsPanel from '../components/ModelSettingsPanel'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { authHeaders, hostToken, socketUrl } from '../api/session'
+import { hostToken, socketUrl } from '../api/session'
 
 type Health = {
   status: string
   database: string
   model_provider: string
-}
-
-type ModelStatus = {
-  provider: string
-  model: string
-  available: boolean
 }
 
 type ConnectionStatus = '连接中' | '已连接' | '已断开' | '连接失败'
@@ -22,42 +17,11 @@ const wsUrl = socketUrl('/ws')
 function SystemStatusPage() {
   const [health, setHealth] = useState<Health | null>(null)
   const [healthError, setHealthError] = useState('')
-  const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null)
-  const [modelError, setModelError] = useState('')
   const [connection, setConnection] = useState<ConnectionStatus>('连接中')
   const [message, setMessage] = useState('')
   const [echo, setEcho] = useState<unknown>(null)
   const [messageError, setMessageError] = useState('')
   const socketRef = useRef<WebSocket | null>(null)
-
-  useEffect(() => {
-    let active = true
-    const controller = new AbortController()
-    const timeout = window.setTimeout(() => controller.abort(), 4000)
-
-    async function checkModel() {
-      try {
-        const response = await fetch(`${apiBaseUrl}/api/model/status`, {
-          headers: authHeaders(),
-          signal: controller.signal,
-        })
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const result: ModelStatus = await response.json()
-        if (active) setModelStatus(result)
-      } catch {
-        if (active) setModelError('无法取得模型状态')
-      } finally {
-        window.clearTimeout(timeout)
-      }
-    }
-
-    void checkModel()
-    return () => {
-      active = false
-      controller.abort()
-      window.clearTimeout(timeout)
-    }
-  }, [])
 
   useEffect(() => {
     let active = true
@@ -161,13 +125,10 @@ function SystemStatusPage() {
           <p>后端健康状态：{healthError || (health ? health.status : '检查中')}</p>
           {health && <p>SQLite：{health.database}</p>}
           <p>WebSocket：{connection}</p>
-          <p>模型状态：{modelError || (modelStatus
-            ? `${modelStatus.provider} / ${modelStatus.model} · ${modelStatus.available ? '可用' : '未就绪'}`
-            : '检查中')}</p>
         </div>
-        <p className="hint">模型状态仅检查服务连接和模型是否已下载。</p>
-        <p className="hint">启动后端或修改连接配置后，刷新页面重新连接。</p>
       </section>
+
+      <ModelSettingsPanel />
 
       <form onSubmit={sendMessage}>
         <label htmlFor="test-message">测试消息</label>

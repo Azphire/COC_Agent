@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -36,6 +37,8 @@ class Settings(BaseSettings):
     model_output_limit: int = Field(default=900, ge=128, le=4096)
     model_keep_alive: str = "5m"
     model_think: bool = False
+    model_output_mode: Literal["json_schema", "json_object"] = "json_object"
+    model_settings_path: Path | None = None
     summary_event_threshold: int = Field(default=20, ge=1, le=200)
     summary_context_threshold: int = Field(default=12000, ge=2000, le=100000)
     agent_max_calls: int = Field(default=12, ge=1, le=24)
@@ -50,7 +53,9 @@ class Settings(BaseSettings):
     knowledge_db_path: Path | None = None
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
-    @field_validator("data_dir", "checkpoint_db_path", "knowledge_db_path", mode="before")
+    @field_validator(
+        "data_dir", "checkpoint_db_path", "knowledge_db_path", "model_settings_path", mode="before"
+    )
     @classmethod
     def resolve_paths(cls, value: str | Path | None) -> Path | None:
         return resolve_backend_path(value) if value is not None else None

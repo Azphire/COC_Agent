@@ -43,11 +43,12 @@ def test_status_checks_catalogue_without_inference(monkeypatch, tmp_path: Path, 
     ) as client:
         response = client.get("/api/model/status")
         assert response.status_code == 200
-        assert response.json() == {
-            "provider": "ollama",
-            "model": "qwen3:8b",
-            "available": state == "present",
-        }
+        status = response.json()
+        assert status["provider"] == "ollama" and status["model"] == "qwen3:8b"
+        assert status["state"] == ("unverified" if state == "present" else "failed")
+        assert status["available"] is False
+        assert status["busy"] == []
+        assert "test-secret-not-for-output" not in response.text
         # Health still works independently and must not even query the model catalogue.
         assert client.get("/api/health").json()["status"] == "ok"
     assert len(requests) == 1

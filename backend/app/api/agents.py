@@ -107,8 +107,8 @@ async def draft(body: s.DraftRequest, svc: Service):
             "latency_ms": latency,
             "requires_confirmation": True,
         }
-    except ModelError:
-        raise RoomError("档案生成失败，输入已保留；可编辑后手动创建", 422) from None
+    except ModelError as error:
+        raise RoomError(f"档案生成失败：{error}；输入已保留，可手动创建", 422) from None
 
 
 @router.post("/agent-profiles", dependencies=host, status_code=201)

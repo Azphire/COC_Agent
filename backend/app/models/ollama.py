@@ -8,14 +8,7 @@ import json
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from app.models.base import ModelError, ModelResponse, ToolCall
-from app.models.factory import local_ollama_origin
-
-
-class ModelFormatError(ModelError):
-    def __init__(self, message, issues=None):
-        super().__init__(message)
-        self.issues = issues or []
+from app.models.base import ModelError, ModelFormatError, ModelResponse, ToolCall
 
 
 def schema_issues(error, schema):
@@ -85,6 +78,8 @@ def generation_schema(value):
 
 class OllamaAgentAdapter:
     def __init__(self, settings):
+        from app.models.factory import local_ollama_origin
+
         self.settings = settings
         self.client = httpx.AsyncClient(
             base_url=local_ollama_origin(settings.model_base_url),
@@ -138,6 +133,8 @@ class OllamaAgentAdapter:
             raise ModelError("本地模型请求失败，请检查 Ollama 状态") from None
         except (httpx.HTTPError, ValueError):
             raise ModelError("本地模型请求失败，请检查 Ollama 状态") from None
+        usage = {"input": data.get("prompt_eval_count"), "output": data.get("eval_count")}
+        usage = usage if any(v is not None for v in usage.values()) else None
         try:
             message = data["message"]
             content = message.get("content", "")
@@ -163,17 +160,14 @@ class OllamaAgentAdapter:
                     for i, c in enumerate(message.get("tool_calls", []))
                 ],
                 finish_reason=data.get("done_reason"),
-                token_usage={
-                    "input": data.get("prompt_eval_count"),
-                    "output": data.get("eval_count"),
-                },
+                token_usage=usage,
             )
         except ValidationError as error:
             raise ModelFormatError(
-                "模型输出格式无效", schema_issues(error, response_schema)
+                "模型输出格式无效", schema_issues(error, response_schema), usage
             ) from None
         except (KeyError, TypeError, ValueError):
-            raise ModelFormatError("模型输出格式无效") from None
+            raise ModelFormatError("模型输出格式无效", token_usage=usage) from None
 
     async def close(self):
         await self.client.aclose()

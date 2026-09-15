@@ -55,7 +55,7 @@ export default function AgentProfilesPage() {
       }}>
         <label>名称<input id="profile-name" value={form.name} maxLength={120} required onChange={e => setForm({ ...form, name: e.target.value })} /></label>
         <div className="field-grid">{fields.map(({ key, label, max }) => <label key={key}>{label}<textarea value={form[key]} maxLength={max} onChange={e => setForm({ ...form, [key]: e.target.value })} /></label>)}</div>
-        <label>模型预设<select value={form.model_preset} onChange={() => {}}><option value="default">default · {modelLabel}</option></select></label>
+        <p>共用模型 default · {modelLabel} · <a href="#/status">配置并切换模型</a></p>
         <button disabled={busy || !form.name.trim()}>{busy ? '处理中…' : '确认保存档案'}</button>
       </form>
     </section>

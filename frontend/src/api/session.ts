@@ -23,11 +23,11 @@ export async function api<T>(path: string, token: string, method = 'GET', body?:
   const response = await fetch(`/api${path}`, {
     method, headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(path.endsWith('/structure/build') ? 180000 : 15000),
+    signal: AbortSignal.timeout(path === '/model/test' || path.endsWith('/generate-draft') ? 600000 : path.endsWith('/structure/build') ? 180000 : 15000),
   })
   if (!response.ok) {
     const data = await response.json().catch(() => ({}))
-    throw new ApiError(data.detail?.message || `请求失败（${response.status}），请检查输入`, response.status)
+    throw new ApiError(data.detail?.message || (typeof data.detail === 'string' ? data.detail : '') || `请求失败（${response.status}），请检查输入`, response.status)
   }
   return response.json()
 }

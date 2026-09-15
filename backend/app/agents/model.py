@@ -4,13 +4,14 @@ import asyncio
 import json
 import time
 from collections import deque
+from contextlib import nullcontext
 from weakref import WeakKeyDictionary
 
 from pydantic import BaseModel, ValidationError
 
-from app.models.base import ModelError, ModelResponse
+from app.models.base import ModelError, ModelFormatError, ModelResponse
 from app.models.factory import create_model
-from app.models.ollama import ModelFormatError, OllamaAgentAdapter, schema_issues
+from app.models.ollama import OllamaAgentAdapter, schema_issues
 
 _semaphores = WeakKeyDictionary()
 
@@ -26,6 +27,7 @@ class AgentModelClient:
     def __init__(self, settings, adapter=None):
         self.settings, self.adapter = settings, adapter
         self.calls = []
+        self.configuration = None
 
     async def generate(
         self,
@@ -37,6 +39,42 @@ class AgentModelClient:
         output_limit=None,
         validate_output=None,
         max_attempts=2,
+    ):
+        guard = (
+            self.configuration.operation("模型生成（含排队及格式修复）")
+            if self.configuration
+            else nullcontext()
+        )
+        with guard:
+            if self.configuration and not self.configuration.ready():
+                raise ModelError("模型未配置，请打开系统状态完成模型设置")
+            try:
+                return await self._generate(
+                    messages,
+                    response_schema,
+                    tools,
+                    on_call,
+                    on_result,
+                    output_limit,
+                    validate_output,
+                    max_attempts,
+                )
+            except ModelError as error:
+                if self.configuration:
+                    self.configuration.error = str(error)
+                    self.configuration.verification = "failed"
+                raise
+
+    async def _generate(
+        self,
+        messages,
+        response_schema,
+        tools,
+        on_call,
+        on_result,
+        output_limit,
+        validate_output,
+        max_attempts,
     ):
         started = time.monotonic()
         if self.adapter is None:
@@ -89,8 +127,12 @@ class AgentModelClient:
                         raise ModelFormatError("模型输出包含不支持的字段")
                     if validate_output:
                         await validate_output(result.structured)
+                    if self.configuration:
+                        self.configuration.error = None
+                        self.configuration.verification = "available"
                     return result, int((time.monotonic() - started) * 1000)
                 except (ValidationError, ValueError, ModelFormatError) as error:
+                    usage = usage or getattr(error, "token_usage", None)
                     issues = (
                         schema_issues(error, response_schema)
                         if isinstance(error, ValidationError)
@@ -111,12 +153,16 @@ class AgentModelClient:
                             ),
                         }
                     ]
+                except ModelError as error:
+                    usage = usage or getattr(error, "token_usage", None)
+                    raise
                 except TimeoutError:
                     raise ModelError("模型请求超时") from None
                 finally:
                     call = {
                         "provider": self.settings.model_provider,
                         "model": self.settings.model_name,
+                        "config_revision": self.configuration.revision if self.configuration else 0,
                         "latency_ms": int((time.monotonic() - call_started) * 1000),
                         "attempt": attempt + 1,
                         "token_usage": usage,
@@ -130,8 +176,9 @@ class AgentModelClient:
                         await on_result(call)
 
     async def close(self):
-        if self.adapter:
-            await self.adapter.close()
+        adapter, self.adapter = self.adapter, None
+        if adapter:
+            await adapter.close()
 
 
 class FakeModelAdapter:

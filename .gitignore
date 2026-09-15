@@ -20,6 +20,7 @@ data/saves/*
 data/logs/*
 data/extension/*
 data/knowledge/
+**/host-model-settings.json
 data/prepared/
 !data/rules/.gitkeep
 !data/modules/.gitkeep

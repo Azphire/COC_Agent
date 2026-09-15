@@ -26,6 +26,7 @@ from app.auth import require_host
 from app.character.repository import VersionConflict
 from app.character.service import CharacterError
 from app.config import Settings
+from app.models.settings import ModelSettings
 from app.persistence.database import Database
 from app.rooms.realtime import RoomHub
 from app.rooms.service import RoomError, RoomService
@@ -34,6 +35,7 @@ from app.rules.loader import load_rulesets
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings if settings is not None else Settings()
+    model_settings = ModelSettings(settings)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -51,6 +53,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 AgentModelClient(settings, getattr(application.state, "agent_model_adapter", None)),
             )
             application.state.agent_service = agent_service
+            model_settings.service = agent_service
+            agent_service.model.configuration = model_settings
+            application.state.room_service.model_configuration = model_settings
             application.state.room_service.agent_service = agent_service
             await agent_service.preparation.initialize()
             agent_service.runtime = AgentRuntime(agent_service)
@@ -64,6 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(title="CoC Agent", version="0.1.0", lifespan=lifespan)
     application.state.settings = settings
+    application.state.model_settings = model_settings
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
@@ -94,7 +100,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 require_host(request)
             except HTTPException as error:
                 return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
-        response = await call_next(request)
+        if request.method in {"POST", "PATCH", "DELETE"} and path != "/api/model/config":
+            try:
+                with model_settings.operation("主机/玩家请求处理中"):
+                    response = await call_next(request)
+            except RoomError as error:
+                return JSONResponse(status_code=error.status, content={"detail": error.message})
+        else:
+            response = await call_next(request)
         if path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         return response

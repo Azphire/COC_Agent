@@ -12,6 +12,13 @@ class ModelError(Exception):
     """A short, provider-independent configuration or model request failure."""
 
 
+class ModelFormatError(ModelError):
+    def __init__(self, message, issues=None, token_usage=None):
+        super().__init__(message)
+        self.issues = issues or []
+        self.token_usage = token_usage
+
+
 class ToolCall(BaseModel):
     id: str
     name: str

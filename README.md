@@ -10,7 +10,7 @@ Windows 原生运行的本地主机型 CoC 第七版跑团 Agent。目标是由�
 
 ## 开始一局 Agent 调查
 
-1. 确认本机 Ollama 已运行、`ollama list` 中已有 `qwen3:8b`。在“系统状态”查看模型是否可用。此步骤不下载模型。
+1. 运行根目录 `start.cmd`，主机解锁后在“系统状态”选择本机 Ollama 或 OpenAI 兼容 API，保存并试运行。模型未就绪时仍能车卡和配置模型；启动不会推理或下载。
 2. 主机解锁后打开“Agent 档案”，手工创建一个 **AI KP** 和一个 **AI 调查员**。也可输入概念生成结构化草稿；检查、修改并点击“确认保存档案”后才会保存。编辑已绑定档案前先解除绑定。
 3. 创建房间并发布最终确认的角色。至少准备真人及 AI 队友各一张角色卡；给 AI 调查员席位分配角色。主机自己扮演调查员时，要另建“本地真人”席位，管理身份本身不绑定角色。
 4. 在“AI 与模组设置”选择原创 **停摆的钟楼**，绑定 AI KP 档案和 AI 队友档案。远程玩家加入并自己准备；主机给本地真人和 AI 席位设置准备，然后开始游戏。
@@ -104,17 +104,13 @@ uv run --directory backend python scripts/host_key.py
 
 若 uv 没有可用的 Python 3.12，先执行 `uv python install 3.12`。无需修改系统 Python 或使用全局 pip。
 
-分别在两个终端启动：
+以后只需双击根目录 `start.cmd`，或在 PowerShell 中执行：
 
 ```powershell
-uv run --directory backend python -m app.main
+.\start.cmd
 ```
 
-```powershell
-npm.cmd --prefix frontend run dev
-```
-
-Windows PowerShell 使用 `npm.cmd` 启动前端，避免本机 `npm.ps1` 丢失转发给 Vite 的参数。本机地址和端口已在前端配置中固定，不必再传 `--host`。
+启动器从自身位置定位仓库，检查 uv、Node/npm、依赖、主机密钥和端口。缺少依赖时显示一次性安装命令，不自动安装或改写环境。HTTP 代理实际就绪后才显示访问地址；端口占用会报错，不接管已有服务。
 
 运行以下命令在本机查看主机管理密钥，并在页面“主机解锁”中输入（不要向远程玩家分享）：
 
@@ -122,9 +118,9 @@ Windows PowerShell 使用 `npm.cmd` 启动前端，避免本机 `npm.ps1` 丢失
 uv run --directory backend python scripts/host_key.py --show
 ```
 
-打开 `http://127.0.0.1:5173` 创建角色，或切换到“系统状态”查看后端 `ok`、SQLite `ok`、WebSocket 已连接。输入文本并点击“发送测试消息”，即可查看 echo JSON。使用 `Ctrl+C` 分别停止两端。仅本机开发模式下，前后端均默认监听 `127.0.0.1`。
+打开启动器显示的地址创建角色，或在“系统状态”查看后端、SQLite 和 WebSocket。输入测试消息可查看 echo JSON。启动窗口按一次 `Ctrl+C` 统一停止本次服务，等待“Launcher services stopped”；启动失败也会清理。本机模式默认监听 `127.0.0.1`。启动器只管理其 Windows Job Object 内创建的进程，保留已有 Ollama 和其他服务。
 
-后端默认地址为 `http://127.0.0.1:8000`；`python -m app.main` 会读取 `.env` 的 `APP_HOST` 和 `APP_PORT`。修改配置后重启对应服务并刷新页面。前端固定使用 5173 端口，端口占用时会报错，避免自动切换后与 CORS 配置不一致。
+后端默认端口 8000，读取根 `.env` 的 `APP_HOST` / `APP_PORT`。启动器将实际端口传给 Vite 的 HTTP 与 WebSocket 代理。前端默认 5173，也可运行 `start.cmd --frontend-port 5174`。修改监听端口后重启启动器。始终使用单个后端进程和一个 Uvicorn worker。
 
 ## 配置与模型模式
 
@@ -148,11 +144,19 @@ MODEL_NAME=your-model-name
 MODEL_API_KEY=
 ```
 
-外部服务以后也通过同一适配层调用，使用时填写实际地址、模型名和密钥；示例域名和模型名只是占位。本轮不调用外部 API，本地检查脚本会拒绝外部 provider。
+上述 `.env` 仅作首次模型配置的初始值。推荐在“系统状态 → 当前模型设置”保存：Ollama 从本机列表选择模型；API 填写平台 Chat Completions 兼容地址、模型名、密钥。示例域名和模型名只是占位，不能用于真实验收。
 
-前端 API 使用同源 `/api`，WebSocket 从 `window.location` 推导 `/ws` 和 `/ws/rooms/{id}`。`frontend/vite.config.ts` 将 HTTP 和 WebSocket 转发到主机本机的 8000 端口。旧 `frontend/.env` 中的 `VITE_API_BASE_URL` 和 `VITE_WS_URL` 不再使用，无需为每台玩家设备配置地址。生产构建若另行托管，也必须提供相同路径的反向代理。
+当前配置保存在 `DATA_DIR/host-model-settings.json`（可用 `MODEL_SETTINGS_PATH` 指定隔离路径），保存后优先于 `.env` 中的模型连接字段，重启恢复。非模型配置仍来自原环境；文件不会改写 `.env`。前端只收到脱敏配置和“密钥已设置”状态；空白密钥保留该 provider 的已有密钥，从 API 切回 Ollama 也不会清除 API 凭据。该文件含本地密钥，已加入 Git 忽略，不应分享。
 
-根 `.env` 的 `HOST_ADMIN_TOKEN` 由 `scripts/host_key.py` 初始化：保留其他配置，仅缺少密钥时生成至少 32 字节随机值，默认不打印。主机密钥最多保存在浏览器 sessionStorage。模型 API Key 仅放在后端 `.env`，不得写入任何 `VITE_` 变量。两份 `.env` 都已忽略，`.env.example` 可提交。
+KP、队友、档案、准备生成及摘要统一使用当前 `default`。全部生成任务和回合空闲时才能保存切换；等待检定、主持审阅、摘要、排队及失败待恢复回合都会列出。失败回合须先用原配置重试完成或取消，再切换；已有骰点、物品回执、角色和记忆保留。切换不会重做行动或自动改换 provider。
+
+状态分为“未配置／未验证／可用／失败”。刷新只读取后端状态，Ollama 额外查询本机列表；不请求外部 API 或推理。保存后显示未验证；点击“试运行已保存模型”才发送游戏动态 KeeperNarration schema 的隔离生成，最多一次格式修复，不执行工具或掷骰。API 可能计费。试运行通过仅证明该结构可调用，完整游戏短测结果另见[第二十二批报告](docs/batch-22-report.md)。
+
+兼容 API 默认使用 JSON 模式，并附游戏生成 schema，所有输出仍由后端完整校验。严格 JSON Schema 模式需要平台支持；游戏工具参数包含开放字典时会明确要求改用 JSON 模式，不偷偷删去规则或自动重发。平台认证、额度、超时和参数错误均脱敏；返回的 token usage 原样计入调用记录，未返回时为 null。结构化输出区别见 [OpenAI 官方文档](https://developers.openai.com/api/docs/guides/structured-outputs)。
+
+前端 API 使用同源 `/api`，WebSocket 从 `window.location` 推导 `/ws` 和 `/ws/rooms/{id}`。Vite 使用启动器传入的实际后端端口。旧 `frontend/.env` 中的 `VITE_API_BASE_URL` 和 `VITE_WS_URL` 不再使用。生产构建若另行托管，也必须提供相同路径的反向代理。
+
+根 `.env` 的 `HOST_ADMIN_TOKEN` 由 `scripts/host_key.py` 初始化：保留其他配置，仅缺少密钥时生成至少 32 字节随机值，默认不打印。主机密钥最多保存在浏览器 sessionStorage。模型 API Key 仅保存在后端，不能写入任何 `VITE_` 变量。
 
 ## 本地模型
 
@@ -168,11 +172,11 @@ Invoke-RestMethod http://127.0.0.1:11434/api/version
 
 若新安装后当前终端尚未刷新 PATH，可使用默认位置 `$env:LOCALAPPDATA\Programs\Ollama\ollama.exe`，或重新打开终端。安装后优先使用 Ollama 后台程序，不在已有实例运行时再次启动 `ollama serve`。详见 [Ollama Windows 安装说明](https://docs.ollama.com/windows)。
 
-模型默认存储在用户目录 `%USERPROFILE%\.ollama\models`，不放入仓库，不修改全局 `OLLAMA_MODELS`。下载前确认该磁盘至少有 15GB 空闲空间。示例为 `qwen3:8b`；更换模型时只需下载目标模型并修改根目录 `.env` 中的 `MODEL_NAME`，随后重启后端。
+模型默认存储在用户目录 `%USERPROFILE%\.ollama\models`，不放入仓库，不修改全局 `OLLAMA_MODELS`。模型下载由用户自行执行；本批启动器和设置界面都不下载。在模型设置刷新列表，选择已安装模型后保存即可切换。
 
 根目录 `.env` 使用上一节的 Ollama 配置。`MODEL_API_KEY=ollama` 是 SDK 所需的非空占位值，Ollama 会忽略它，参见[官方兼容接口说明](https://docs.ollama.com/api/openai-compatibility)。可选 `MODEL_TIMEOUT_SECONDS=120` 用于限制请求等待时间。
 
-Ollama 保持默认的 `127.0.0.1:11434` 本机监听，不将其改为 `0.0.0.0`，也不开放该端口的入站规则。访问顺序为：玩家浏览器 → FastAPI → 模型适配层 → 本机 Ollama。浏览器只请求后端 `/api/model/status`，只收到 `provider`、`model`、`available`；状态接口读取模型列表，不提交 Prompt，不返回 Ollama 地址、目录或密钥。外部 provider 当前报告未就绪，不进行外部连通测试。
+Ollama 保持默认的 `127.0.0.1:11434` 本机监听，不开放该端口的入站规则。浏览器通过后端使用模型，模型配置和状态接口仅允许主机访问。Ollama 未启动时仍可进入车卡及模型设置，切换到 API；API 模式的启动不检查 Ollama。
 
 在后端目录运行一次真实检查：
 
@@ -188,17 +192,13 @@ ollama ps
 
 ## 局域网主机模式
 
-首版只支持 **一个 Uvicorn worker**。在仓库根目录分别打开两个终端：
+使用同一个启动器开放前端供局域网玩家加入：
 
 ```powershell
-uv run --directory backend uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+start.cmd --lan
 ```
 
-```powershell
-npm.cmd --prefix frontend run dev -- --host 0.0.0.0
-```
-
-只有这个显式的前端启动命令监听 `0.0.0.0`；后端继续在回环地址，由 Vite 统一转发玩家请求。无需对局域网直接开放 8000，也无需逐个添加玩家 CORS 地址。后端自定义端口时同步修改 Vite 代理目标。
+此模式前端监听 `0.0.0.0`，后端沿用 `APP_HOST`（默认回环地址），由 Vite 统一转发玩家请求。已有 `APP_HOST=0.0.0.0` 配置也会启用局域网前端。启动器显示可用 IPv4 玩家地址；无需逐个配置玩家地址或手动修改代理。
 
 在主机运行 `ipconfig`，查看正在使用的以太网／无线网卡 IPv4；也可运行：
 
@@ -214,7 +214,7 @@ Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -ne '127.0.0.
 4. 主机运行中或暂停时可存档，仅暂停时可读档。载入前有确认框；恢复场景、资源和分配，保留后续历史事件和当前凭据，房间继续暂停。已离开的成员不会被读档复活。
 5. 网络断开自动重连并补发遗漏事件；刷新后从持久化房间恢复。远程重连 token 按房间存在浏览器 localStorage，离开时清除。主机可下载全部日志，玩家只能下载有权限的日志。
 
-停止时在两个服务终端分别按 `Ctrl+C`；只关闭浏览器不会停止服务。验证脚本的临时 Chrome、Vite、FastAPI 均由脚本在 finally 中关闭，端口随后检查释放。不要批量终止用户其他 Python／Node／Chrome 进程。
+停止时在启动器窗口按 `Ctrl+C`；只关闭浏览器不会停止服务。验证脚本只清理其创建的临时 Chrome、Vite、FastAPI，随后核对端口释放。
 
 Ollama 始终保持 `127.0.0.1:11434`，不向局域网或公网直接开放。公网联机、Tailscale、Cloudflare Tunnel 和远程角色上传留到后续批次。
 

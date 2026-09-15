@@ -389,6 +389,12 @@ class RoomService:
             await self.hub.broadcast(str(room_id), events)
 
     async def command(self, room_id, token, action, body=None, target=None):
+        from contextlib import nullcontext
+        config = getattr(self, "model_configuration", None)
+        with config.operation("房间操作") if config else nullcontext():
+            return await self._command(room_id, token, action, body, target)
+
+    async def _command(self, room_id, token, action, body=None, target=None):
         stopped_task = None
         async with self.lock(room_id):
             async with self.transaction() as session:
