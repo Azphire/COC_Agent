@@ -96,12 +96,30 @@ class SkillDefinition(DomainModel):
     category: str
     base_rule: CalculationRule | None = None
     allocatable: bool = True
+    specialization_group: Key | None = None
+    eras: list[Literal["1920s", "modern"]] = Field(default_factory=lambda: ["1920s", "modern"])
 
     @model_validator(mode="after")
     def check_base(self) -> Self:
         if self.base_value > self.maximum:
             raise ValueError("技能基础值不能超过上限")
         return self
+
+
+class OccupationSkillGroup(DomainModel):
+    key: Key
+    display_name: str
+    count: Annotated[StrictInt, Field(ge=1, le=8)] = 1
+    skills: list[Key] = Field(default_factory=list)
+    specialization_groups: list[Key] = Field(default_factory=list)
+    any_skill: bool = False
+
+
+class OccupationPointFormula(DomainModel):
+    fixed: dict[Key, Annotated[StrictInt, Field(ge=1, le=4)]]
+    choice_attributes: list[Key] = Field(default_factory=list)
+    choice_multiplier: Annotated[StrictInt, Field(ge=1, le=4)] = 2
+    display: str
 
 
 class OccupationDefinition(DomainModel):
@@ -112,6 +130,12 @@ class OccupationDefinition(DomainModel):
     required_selection_count: Annotated[StrictInt, Field(ge=0)] = 0
     credit_rating_minimum: Annotated[StrictInt, Field(ge=0, le=99)] | None = None
     credit_rating_maximum: Annotated[StrictInt, Field(ge=0, le=99)] | None = None
+    point_formula: OccupationPointFormula | None = None
+    skill_groups: list[OccupationSkillGroup] = Field(default_factory=list)
+    eras: list[Literal["1920s", "modern"]] = Field(default_factory=lambda: ["1920s", "modern"])
+    source: str = ""
+    legacy_selection_group: Key | None = None
+    legacy_group_defaults: dict[Key, list[Key]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def check_selection(self) -> Self:
@@ -120,6 +144,8 @@ class OccupationDefinition(DomainModel):
             raise ValueError("职业技能不能重复或同时固定和可选")
         if self.required_selection_count > len(self.selectable_skills):
             raise ValueError("可选技能不足")
+        if len({g.key for g in self.skill_groups}) != len(self.skill_groups):
+            raise ValueError("职业技能分组ID重复")
         if (self.credit_rating_minimum is None) != (self.credit_rating_maximum is None):
             raise ValueError("信用评级上下限必须同时指定")
         if (
@@ -182,7 +208,7 @@ class RuleSet(DomainModel):
     attributes: list[AttributeDefinition] = Field(default_factory=list, max_length=100)
     derived_values: list[DerivedDefinition] = Field(default_factory=list, max_length=100)
     points: PointConfiguration | None = None
-    skills: list[SkillDefinition] = Field(default_factory=list, max_length=100)
+    skills: list[SkillDefinition] = Field(default_factory=list, max_length=300)
     occupations: list[OccupationDefinition] = Field(default_factory=list, max_length=100)
     age_rules: AgeConfiguration | None = None
 
@@ -225,6 +251,19 @@ class RuleSet(DomainModel):
                 raise ValueError("职业引用了不存在的技能")
             if occupation.credit_rating_minimum is not None and "credit_rating" not in skills:
                 raise ValueError("职业的信用评级缺少技能定义")
+            if occupation.point_formula:
+                formula = occupation.point_formula
+                if not (set(formula.fixed) | set(formula.choice_attributes)) <= numeric:
+                    raise ValueError("职业点数公式引用不存在")
+            groups = {s.specialization_group for s in self.skills if s.specialization_group}
+            for group in occupation.skill_groups:
+                if (
+                    not set(group.skills) <= skills
+                    or not set(group.specialization_groups) <= groups
+                ):
+                    raise ValueError("职业分组引用不存在的技能或专业")
+                if not (group.skills or group.specialization_groups or group.any_skill):
+                    raise ValueError("职业技能分组为空")
         for skill in self.skills:
             if skill.base_rule and not set(skill.base_rule.input_keys()) <= numeric:
                 raise ValueError("技能基础值公式引用不存在")

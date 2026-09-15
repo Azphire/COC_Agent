@@ -161,11 +161,13 @@ async def build_context(
         if narrator:
             cards.append({"member_id": slot.member_id, **slot.public_summary})
         elif keeper or slot.member_id == binding.member_id:
-            from app.rules.checks import available_skills
+            from app.rules.checks import prompt_skills
 
             card = {
                 **slot.character_snapshot,
-                "skill_values": available_skills(slot.character_snapshot),
+                "skill_values": prompt_skills(slot.character_snapshot, next(
+                    (e.get('payload', {}).get('text', '') for e in all_events
+                     if e['seq'] == cycle.state['triggering_event_seq']), '')),
             }
             cards.append(
                 {

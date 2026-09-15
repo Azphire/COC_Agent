@@ -227,6 +227,7 @@ def test_publish_only_finalized_and_immutable(client, character_settings):
         for k, v in room["session_state"]["characters"][slot["id"]].items()
         if k not in {"san_max", "sanity", "hp_max", "armor", "injury", "weapons"}
     } == {
+        "equipment_settlement": "unsettled",
         "hp": 12,
         "mp": 10,
         "mp_max": 10,

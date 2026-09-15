@@ -215,47 +215,25 @@ def test_transition_scopes_multiscene_and_restored_projection(client, running_na
     assert all("node_id" not in e and "bindings" not in e for e in public)
     from test_action_adjudication import modern_response
 
-    narration_attempts = 0
+    recall_evidence = []
 
     def unqualified_history(messages, kwargs):
-        nonlocal narration_attempts
+        if kwargs["response_schema"].__name__ == "KeeperNarration":
+            # Batch 20 renders retrieved original facts for read-only recall;
+            # its compact prompt intentionally has no PUBLIC_CLAIM_OPTIONS.
+            context = json.loads(messages[-1]["content"])
+            recall_evidence.extend(context["fact_evidence"])
+            assert context["readonly_recall"]
+            return {
+                "public_narration": "Notice is here now; inspect it again.",
+                "grounded_claims": [],
+                "fact_ids": [r["id"] for r in context["fact_evidence"]],
+            }
         result = modern_response(messages, kwargs)
         if kwargs["response_schema"].__name__ == "KeeperPlan":
             # Reproduce the actual local model's classification of a pure recall
             # as an investigation. The server must retain a read-only boundary.
             result["parsed_intent"].update(type="investigate", target_id=by_title["Notice"]["id"])
-        if kwargs["response_schema"].__name__ == "KeeperNarration":
-            narration_attempts += 1
-            statement = by_title["Notice"]["public_summary"]
-            result.update(
-                public_narration=statement,
-                grounded_claims=[
-                    {
-                        "claim_id": "old_as_new",
-                        "category": "module_fact",
-                        "statement": statement,
-                        "entity_ids": [by_title["Notice"]["id"]],
-                    }
-                ],
-            )
-            if narration_attempts > 1:
-                # Reproduce the later real repair: valid history plus an unrelated
-                # current scene arrival description must still fail the recall scope.
-                scene = json.loads(messages[-1]["content"])["module"]["scene"]
-                result["grounded_claims"][0]["statement"] = scoped_statement(
-                    by_title["Notice"], statement
-                )
-                result["grounded_claims"].append(
-                    {
-                        "claim_id": "unrelated_scene",
-                        "category": "module_fact",
-                        "statement": scene["public_description"],
-                        "entity_ids": [scene["id"]],
-                    }
-                )
-                result["public_narration"] = "\n".join(
-                    c["statement"] for c in result["grounded_claims"]
-                )
         return result
 
     svc.model.adapter = FakeModelAdapter(responder=unqualified_history)
@@ -265,10 +243,12 @@ def test_transition_scopes_multiscene_and_restored_projection(client, running_na
         e for e in public_events(client, prefix) if e["payload"].get("cycle_id") == recalled["id"]
     ]
     narration = next(e["payload"] for e in recall_events if e["type"] == "keeper.narration")
-    assert narration["safe_fallback"] and "先前获知（当前位置未确认）" in narration["text"]
-    assert narration["text"] == scoped_statement(
-        by_title["Notice"], by_title["Notice"]["public_summary"]
-    )
+    from app.memory.facts import render_facts
+
+    assert recall_evidence
+    assert narration["text"] == render_facts(recall_evidence)
+    assert by_title["Notice"]["public_summary"] in narration["text"]
+    assert "here now" not in narration["text"]
     assert not any(
         e["type"] in {"check.requested", "entity.revealed", "scene.updated", "npc.spoke"}
         for e in recall_events

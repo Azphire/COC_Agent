@@ -145,6 +145,8 @@ class PreparedCheckAdjustment(DomainModel):
 
 
 class ModuleRuntimeState(DomainModel):
+    equipment_weapons: dict[str, dict] = Field(default_factory=dict)
+    equipment_slots: dict[str, str] = Field(default_factory=dict)
     observations: dict[str, dict] = Field(default_factory=dict)
     sanity_clarifications: dict[str, dict] = Field(default_factory=dict)
     scene_facts: dict[str, dict] = Field(default_factory=dict)

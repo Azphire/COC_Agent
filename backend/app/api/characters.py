@@ -27,14 +27,21 @@ def character_service(request: Request) -> CharacterService:
 Service = Annotated[CharacterService, Depends(character_service)]
 
 
+@router.get('/character-equipment')
+async def equipment_catalog():
+    from app.rules.equipment import CATALOG
+
+    return CATALOG
+
+
 @router.get("/character-rulesets", response_model=list[RuleSet])
 async def list_rulesets(service: Service):
     return list(service.rulesets.values())
 
 
 @router.get("/character-rulesets/{ruleset_id}", response_model=RuleSet)
-async def get_ruleset(ruleset_id: str, service: Service):
-    return service.ruleset(ruleset_id, require_enabled=False)
+async def get_ruleset(ruleset_id: str, service: Service, version: str | None = None):
+    return service.ruleset(ruleset_id, version, require_enabled=False)
 
 
 @router.get("/characters", response_model=list[Character])

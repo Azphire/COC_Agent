@@ -113,7 +113,20 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
             return 0
         return int(result)
 
+    occupation = next((o for o in ruleset.occupations if o.key == character.occupation), None)
     occupation_pool = pool(points.occupation_skill_pool_rule, "occupation_skills")
+    if occupation and occupation.point_formula:
+        formula = occupation.point_formula
+        occupation_pool = sum(values.get(k, 0) * v for k, v in formula.fixed.items())
+        if formula.choice_attributes:
+            if character.occupation_attribute not in formula.choice_attributes:
+                issue("occupation_attribute", "required", "请选择职业点数使用的属性")
+            else:
+                occupation_pool += (
+                    values.get(character.occupation_attribute, 0) * formula.choice_multiplier
+                )
+        elif character.occupation_attribute is not None:
+            issue("occupation_attribute", "selection", "此职业没有可选点数属性")
     interest_pool = pool(points.interest_skill_pool_rule, "interest_skills")
     attribute_balance = None
     if character.creation_mode == "point_buy":
@@ -149,27 +162,47 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
     if occupation is None:
         issue("occupation", "required", "请选择规则集中存在的职业")
     else:
+        if character.era not in occupation.eras:
+            issue("occupation", "era", "此职业不适用于所选年代")
         selected = character.selected_occupation_skills
         if len(selected) != len(set(selected)):
             issue("selected_occupation_skills", "duplicate", "可选职业技能不能重复")
-        if len(selected) != occupation.required_selection_count:
+        if not occupation.point_formula and len(selected) != occupation.required_selection_count:
             issue(
                 "selected_occupation_skills",
                 "selection_count",
                 f"请选择 {occupation.required_selection_count} 项可选职业技能",
             )
-        if not set(selected) <= set(occupation.selectable_skills):
+        if not occupation.point_formula and not set(selected) <= set(occupation.selectable_skills):
             issue("selected_occupation_skills", "selection", "所选技能不在此职业可选范围内")
         allowed = set(occupation.fixed_skills) | (set(selected) & set(occupation.selectable_skills))
         if occupation.credit_rating_minimum is not None:
             allowed.add("credit_rating")
+        if occupation.skill_groups or occupation.point_formula:
+            from app.rules.character_options import occupation_choices
+
+            allowed = occupation_choices(character, ruleset, occupation, issue) | {"credit_rating"}
     definitions = {item.key: item for item in ruleset.skills}
+    selected = character.selected_specializations
+    if len(selected) != len(set(selected)) or any(
+        k not in definitions or not definitions[k].specialization_group for k in selected
+    ):
+        issue("selected_specializations", "selection", "专业必须唯一且来自支持目录")
+    active_specializations = set(selected) | allowed
     for field in ("occupation_skills", "interest_skills"):
         for key, allocation in getattr(character, field).items():
             if key not in definitions:
                 issue(f"{field}.{key}", "unknown", "规则集中不存在此技能")
             elif allocation.points and not definitions[key].allocatable:
                 issue(f"{field}.{key}", "forbidden", "创建角色时不能给此技能分配点数")
+            elif allocation.points and character.era not in definitions[key].eras:
+                issue(f"{field}.{key}", "era", "该技能不适用于所选年代")
+            elif (
+                allocation.points
+                and definitions[key].specialization_group
+                and key not in active_specializations
+            ):
+                issue(f"{field}.{key}", "specialization", "请先选择此专业")
             if allocation.points < 0:
                 issue(f"{field}.{key}", "negative", "技能点不能为负数")
             if field == "occupation_skills" and allocation.points and key not in allowed:
@@ -199,6 +232,24 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
             )
 
     character.skill_half_values = {key: value // 2 for key, value in character.skill_values.items()}
+    from app.rules.character_options import credit_finances
+
+    character.finances = credit_finances(
+        character.skill_values.get("credit_rating", 0), character.era
+    )
+    if (
+        character.background.key_connection
+        and not getattr(character.background, character.background.key_connection).strip()
+    ):
+        issue("background.key_connection", "required", "关键背景联系须指向已填写的背景条目")
+    if (
+        not character.finances.assets_lower_bound
+        and sum(a.value for a in character.asset_details) > character.finances.assets
+    ):
+        issue("asset_details", "overspent", "资产明细合计超过信用档位的资产总额")
+    from app.rules.equipment import validate_equipment
+
+    validate_equipment(character, issue)
     character.skill_fifth_values = {
         key: value // 5 for key, value in character.skill_values.items()
     }

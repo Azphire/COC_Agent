@@ -21,10 +21,21 @@ export default function RuntimeCards({ room }: { room: Room }) {
         <p>{conditions.join('、') || '无已记录伤势'}{injury.con_pending ? ' · 待体质检定' : ''}</p>
         <p>武器：{weapons.filter(w => w.quantity > 0).map(w => `${w.name}${w.kind === 'firearm' ? `（弹药 ${w.ammo}，备用 ${w.reserve}${w.jammed ? '，卡壳' : ''}）` : ''}`).join('、') || '无已配置武器'}</p>
         <p>实际持有物：{items.length ? '' : '无'}</p>
+        {runtime.equipment_settlement === 'module_pending' && <p>起始随身物尚待模组检定结算。</p>}
+        {runtime.equipment_settlement === 'module_settled' && <p>已按模组起始规则结算；当前可用物品见实际持有物。</p>}
         {items.length > 0 && <ul>{items.map(item => <li key={item.instance_id}>
           {item.title}{item.remaining_uses != null ? ` · 剩余 ${item.remaining_uses} 次` : ''}
           <small>（实例：{item.instance_id}）</small>
         </li>)}</ul>}
+        {slot?.character_snapshot && <details><summary>原始角色资料</summary>
+          <p>原有装备：{slot.character_snapshot.equipment?.map(e => `${e.name} ×${e.quantity}${e.notes ? `（${e.notes}）` : ''}`).join('、') || '未记载'}</p>
+          {slot.character_snapshot.finances && <p>车卡资产：{slot.character_snapshot.finances.currency} {slot.character_snapshot.finances.assets.toLocaleString()} · 现金 {slot.character_snapshot.finances.cash.toLocaleString()}</p>}
+          {slot.character_snapshot.background && Object.entries({ appearance: '外貌', beliefs: '信念', people: '重要之人', places: '地点', possessions: '宝贵之物', traits: '特质' }).map(([key, label]) => {
+            const background = slot.character_snapshot!.background
+            const text = background[key as keyof typeof background]
+            return text ? <p key={key}>{label}{background.key_connection === key ? ' ★' : ''}：{text}</p> : null
+          })}
+        </details>}
       </article>
     })}
     <p className="muted">在行动输入中描述使用物品和目标；同名物品可附上实例编号。使用结果见下方行动记录。</p>

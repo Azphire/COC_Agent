@@ -15,7 +15,10 @@ VERBS = {
         r"|\bgive\b|\bhand\b"
     ),
     "place": r"放(?:下|在|到|置)|搁|摆在|\b(?:place|drop|put)\b",
-    "take": r"拿(?:起|走|取|好|回)|取(?:走|下|回)|拾|捡|收起|带走|\b(?:take|pick|collect)\b",
+    "take": (
+        r"拿(?:起|走|取|好|回)|取(?:走|下|回)|拾|捡|收(?:起|好|进)|带走|装进"
+        r"|\b(?:take|pick|collect)\b"
+    ),
     "consume": r"吃|喝|吞|用掉|耗用|消耗|\b(?:eat|drink|consume)\b",
     "search": (
         r"寻找|找|搜|翻(?:找|查|开|看|过|转)|揭下|检查|查看.{0,8}(?:包|袋|背面|反面|正反面)"
@@ -86,7 +89,7 @@ def action_kinds(text):
     ]
     # A completed-state modifier identifies an object; it is not a new attempt
     # to perform that operation (e.g. operating an already-open panel).
-    clauses = [re.sub(r"(?:已经|早已|已)[^，。；,;.!\n]{0,16}?的", "", c) for c in clauses]
+    clauses = [re.sub(r"(?:已经|早已|已|刚刚|刚)[^，。；,;.!\n]{0,16}?的", "", c) for c in clauses]
     return [
         kind for kind, pattern in VERBS.items() if any(re.search(pattern, c, re.I) for c in clauses)
     ]
@@ -161,6 +164,13 @@ def teammate_request(raw, members, actor, *, action=None):
         if mid == actor:
             continue
         if re.search(
+            r"^\s*我(?:对|向)"
+            + re.escape(name)
+            + r"(?:说道?|表示)[：:]\s*(?:请|麻烦你|劳驾|你|把)",
+            raw,
+        ):
+            return mid
+        if re.search(
             r"^\s*"
             + re.escape(name)
             + r"[，,:：]\s*(?:(?:现在|这就|马上|接着|随后|先|再)\s*)*"
@@ -205,6 +215,16 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
         for eid, instance in held.items()
         if eid in named or not named and eid == target
     }
+    if "take" in kinds:
+        for eid in named:
+            dropped = [
+                iid
+                for iid in explicit
+                if runtime.item_instances.get(iid, iid) == eid
+                and runtime.dropped_items.get(iid) == scene
+            ]
+            if len(dropped) == 1:
+                instances[eid] = dropped[0]
     return {
         "actor_member_id": actor,
         "source_event_seq": seq,
@@ -366,6 +386,14 @@ def authority_error(
             and instance_id != frozen
         ):
             return "所用物品实例与本次实际动作不一致"
+    if rule.inventory_operation == "pickup":
+        frozen = authority.get("item_instances", {}).get(rule.item_id)
+        if frozen and (
+            runtime.dropped_items.get(frozen) != scene
+            or instance_id is not None
+            and instance_id != frozen
+        ):
+            return "拾回实例与本次指定的物品不一致"
     if rule.encounter_operation == "sound_once" and not item_id:
         if not rule.allow_worn_sound_item or not re.search(
             r"鞋|衣|帽|\b(?:shoe|coat|hat)\b", authority["action"], re.I

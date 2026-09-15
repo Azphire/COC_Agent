@@ -19,6 +19,9 @@ from app.rules.combat import apply_injury, damage_bounds, damage_plan, melee_res
 
 def load_state(room):
     state = SessionStateV1.model_validate(room.session_state)
+    from app.preparation.character_equipment import sync_equipment_weapons
+
+    sync_equipment_weapons(state)
     for p in state.combat.participants.values():
         if p.slot_id and UUID(p.slot_id) in state.characters:
             c = state.characters[UUID(p.slot_id)]
@@ -31,6 +34,9 @@ def store_state(room, state):
     from app.preparation.encounters import clear_inactive_grips
 
     clear_inactive_grips(state)
+    from app.preparation.character_equipment import sync_equipment_weapons
+
+    sync_equipment_weapons(state)
     for p in state.combat.participants.values():
         if p.slot_id and UUID(p.slot_id) in state.characters:
             c = state.characters[UUID(p.slot_id)]

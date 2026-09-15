@@ -1,5 +1,7 @@
 """Resolve approved local search tasks before generating their required checks."""
 
+import re
+
 from app.preparation.action_authority import action_kinds
 
 
@@ -22,7 +24,6 @@ def unrelated_item_focus(action, target, context):
 
 def search_instrument(action, target, inventory, actor):
     """An actually held tool used to inspect a place is not the search target."""
-    import re
 
     if re.search(r"如果|假如|不用|不要|不借助", action):
         return False
@@ -87,9 +88,16 @@ def validate_search_plan(plan, context):
     )
     # The existing bounded retry sends issues, not exception prose. Keep the
     # server-authored repair instruction in that actual transmitted envelope.
-    raise ModelFormatError(instruction, [{
-        "field": "proposed_check", "code": "search_plan_missing", "instruction": instruction,
-    }])
+    raise ModelFormatError(
+        instruction,
+        [
+            {
+                "field": "proposed_check",
+                "code": "search_plan_missing",
+                "instruction": instruction,
+            }
+        ],
+    )
 
 
 def named_check_requirement(
@@ -101,15 +109,13 @@ def named_check_requirement(
         return True
     proposed_detail = bool(
         proposal
-        and requirement["entity_id"]
-        in {proposal.get("target_entity_id"), proposal.get("clue_id")}
+        and requirement["entity_id"] in {proposal.get("target_entity_id"), proposal.get("clue_id")}
     )
     if requirement["entity_id"] not in selected_reveals and not proposed_detail:
         return False
     # The planner already selected this approved detail. Allow "报纸的报头，
     # 确认印刷日期" to identify "报纸日期", without revealing its contents or
     # treating a generic inspection of the parent as a request for every detail.
-    import re
 
     if any(
         re.search(re.escape(name[:i]) + r".{0,24}" + re.escape(name[i:]), action)
@@ -127,8 +133,10 @@ def named_check_requirement(
     parent_names = [parent.get("title", ""), *parent.get("aliases", [])]
     if any(
         name[:i] in parent_name and name[i:] in action
-        for name in names for i in range(2, len(name) - 1)
-        for parent_name in parent_names if parent_name
+        for name in names
+        for i in range(2, len(name) - 1)
+        for parent_name in parent_names
+        if parent_name
     ):
         return True
     # A real KP check can identify a detail whose wording the player paraphrased.
@@ -143,8 +151,10 @@ def named_check_requirement(
         and set(action_kinds(action)) & {"search", "observe"}
         and any(
             name[:i] in parent_name
-            for name in names for i in range(2, len(name) - 1)
-            for parent_name in parent_names if parent_name
+            for name in names
+            for i in range(2, len(name) - 1)
+            for parent_name in parent_names
+            if parent_name
         )
     )
 
@@ -200,7 +210,52 @@ def named_local_interaction_ids(facts, action=None):
 
 def repair_local_interaction_target(plan, facts, members):
     """Revalidate a uniquely named operation target before freezing authority."""
-    from app.preparation.action_authority import teammate_request
+    # A new, explicit transfer of a discovered physical object supersedes a
+    # stale investigation detail. Only this clause is repaired; gates and
+    # possession are still checked by the normal interaction service.
+    from app.agents.adjudication_schemas import TurnFocus
+    from app.agents.generation_contracts import utterance_clauses
+    from app.memory.facts import readonly_recall
+    from app.preparation.action_authority import aliases, mentions_alias, teammate_request
+
+    clauses = [c["text"] for c in utterance_clauses(facts.raw_text) if c["text"].strip()]
+    transfers = [
+        c
+        for c in clauses
+        if set(action_kinds(c)) & {"take", "give", "place"}
+        and not set(action_kinds(c)) - {"take", "give", "place"}
+    ]
+    if (
+        len(transfers) == 1
+        and not readonly_recall(facts.raw_text)
+        and not teammate_request(
+            facts.raw_text, members, facts.actor_member_id, action=transfers[0]
+        )
+    ):
+        action = transfers[0]
+        objects = {
+            eid
+            for eid, entity in facts.approved_entities.items()
+            if eid in facts.local_entity_ids & facts.revealed_entity_ids
+            and entity.get("type") == "item"
+            and any(mentions_alias(action, a) for a in aliases(entity))
+        }
+        if len(objects) == 1:
+            target = objects.pop()
+            plan.focus = TurnFocus(action=action, action_target_id=target)
+            plan.parsed_intent.type = "interact"
+            plan.parsed_intent.target_id = target
+            plan.parsed_intent.target_kind = "item"
+            plan.parsed_intent.requires_clarification = False
+            plan.parsed_intent.clarification_question = None
+            plan.proposed_check = None
+            plan.proposed_reveal_entity_ids = []
+            plan.proposed_transition_id = None
+            plan.proposed_tool_calls = []
+            plan.needs_host_review = plan.needs_clarification = False
+            plan.target_entity_ids = [target]
+            plan.target_node_ids = []
+            plan.expected_next_phase = "narration"
 
     focus = plan.focus
     if (
@@ -314,7 +369,6 @@ def repair_observation_target(value, context):
 
 def repair_belongings_action(value, context):
     """Keep an explicit self-inspection when the selected span only says why."""
-    import re
 
     from app.agents.generation_contracts import utterance_clauses
     from app.preparation.action_authority import declared_action, teammate_request
@@ -326,18 +380,22 @@ def repair_belongings_action(value, context):
     trigger = context.get("triggering_action", {})
     raw = trigger.get("payload", {}).get("text", "")
     if context.get("readonly_recall") or teammate_request(
-        raw, context.get("current_participants", {}).get("members", {}),
+        raw,
+        context.get("current_participants", {}).get("members", {}),
         trigger.get("actor_member_id"),
     ):
         return
     probes = [
-        c["text"] for c in utterance_clauses(raw)
-        if inventory_probe(c["text"]) and declared_action(c["text"])
+        c["text"]
+        for c in utterance_clauses(raw)
+        if inventory_probe(c["text"])
+        and declared_action(c["text"])
         and "search" in action_kinds(c["text"])
         and re.search(r"我|自己", c["text"])
     ]
     if (
-        len(probes) == 1 and focus.get("action")
+        len(probes) == 1
+        and focus.get("action")
         and re.search(r"随身|口袋|衣袋|保留|留下", focus["action"])
         and not set(action_kinds(focus["action"])) - {"observe", "converse"}
     ):
@@ -400,7 +458,8 @@ def repair_search_target(value, context):
             # player to name the undiscovered property. Ties stay with the KP.
             matched += [
                 name[:size]
-                for name in names if name
+                for name in names
+                if name
                 for size in range(3, len(name))
                 if all("\u4e00" <= char <= "\u9fff" for char in name[:size])
                 if name[:size] in action

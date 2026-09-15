@@ -45,7 +45,11 @@ class CharacterService:
         if require_enabled and not ruleset.enabled:
             raise CharacterError(422, f"规则集未启用：{ruleset.notice}")
         if version is not None and ruleset.version != version:
-            raise CharacterError(422, "规则集版本不匹配，不能使用当前配置修改或导入此角色")
+            from app.rules.loader import archived_ruleset
+
+            ruleset = archived_ruleset(ruleset_id, version)
+            if ruleset is None:
+                raise CharacterError(422, "规则集版本不匹配，不能使用当前配置修改或导入此角色")
         return ruleset
 
     async def get(self, character_id: UUID) -> Character:
@@ -139,7 +143,12 @@ class CharacterService:
 
     def prepare_rolls(self, character: CharacterDraft, ruleset: RuleSet) -> None:
         if ruleset.age_rules and age_band(character, ruleset) is None:
-            raise CharacterError(422, "第七版创建前须选择 15–89 岁年龄；生成后年龄锁定")
+            bands = ruleset.age_rules.bands
+            raise CharacterError(
+                422,
+                f"须选择 {bands[0].minimum}–{bands[-1].maximum} 岁；"
+                "本地条款未覆盖90岁及以上调整，生成后年龄锁定",
+            )
         for key, purpose, formula, multiplier in expected_rolls(character, ruleset):
             record = self.dice.roll(formula, key)
             record.purpose = purpose
@@ -193,6 +202,17 @@ class CharacterService:
                     {"fields": sorted(changes.keys() & {"occupation_skills", "interest_skills"})},
                 )
             )
+        details = changes.keys() & {
+            "era",
+            "background",
+            "asset_details",
+            "equipment",
+            "occupation_attribute",
+            "occupation_group_choices",
+            "selected_specializations",
+        }
+        if details:
+            events.append(("character_details_updated", {"fields": sorted(details)}))
         await self.repository.save(candidate, events, expected_version=request.version)
         return candidate
 

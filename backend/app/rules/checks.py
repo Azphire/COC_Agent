@@ -13,6 +13,43 @@ def available_skills(snapshot):
     return values
 
 
+def prompt_skills(snapshot, action=""):
+    """Keep the expanded catalogue from crowding out facts in an 8192 context.
+
+    Full values stay in the immutable snapshot and check validator and are
+    available through inspect_character. Show the established common skills
+    plus chosen, trained, occupational or explicitly named new skills.
+    """
+    values = available_skills(snapshot)
+    if snapshot.get("ruleset_version") != "1.1.0":
+        return values
+    from app.rules.loader import archived_ruleset, load_rulesets
+
+    rules = load_rulesets().get(snapshot.get("ruleset_id"))
+    if not rules:
+        return values
+    common = {s.key for s in archived_ruleset(rules.id, "1.0.0").skills}
+    chosen = set(snapshot.get("selected_specializations", []))
+    for keys in snapshot.get("occupation_group_choices", {}).values():
+        chosen.update(keys)
+    occupation = next((o for o in rules.occupations if o.key == snapshot.get("occupation")), None)
+    if occupation:
+        chosen.update(occupation.fixed_skills)
+    for field in ("occupation_skills", "interest_skills"):
+        chosen.update(k for k, v in snapshot.get(field, {}).items() if v.get("points"))
+    return {
+        s.key: values[s.key]
+        for s in rules.skills
+        if s.key in values
+        and (
+            s.key in common
+            or s.key in chosen
+            or s.key in action
+            or s.display_name.split("（")[-1].rstrip("）") in action
+        )
+    }
+
+
 def check_value(snapshot: dict, kind: str, name: str) -> int:
     if snapshot.get("ruleset_id") != "coc7-character-creation":
         raise ValueError("检定仅支持已核对的第七版角色")

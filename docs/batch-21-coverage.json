@@ -1,0 +1,195 @@
+{
+  "evidence_root": "data/prepared/changan/batch-21",
+  "packages": {
+    "original_sha256": "b47bf0fb5127e4bc46fdb1c5a97fd9b41fe358eea2595351b5e19d95411e6c87",
+    "new_sha256": "93dee39824e41a0d9544fc5e869845c0ffcaeb43dd54603aec1eae840372ddd4",
+    "changed_entities": [
+      "note_front",
+      "newspaper"
+    ]
+  },
+  "model": {
+    "model_provider": "ollama",
+    "model_name": "qwen3:8b",
+    "model_context_limit": 8192,
+    "model_output_limit": 900,
+    "model_temperature": 0.3,
+    "model_think": false,
+    "model_keep_alive": "5m",
+    "summary_event_threshold": 20,
+    "summary_context_threshold": 12000,
+    "agent_context_chars": 12000,
+    "agent_event_window": 25
+  },
+  "historical_databases_unchanged": {
+    "short-c1": {
+      "game.db": true,
+      "knowledge.db": true,
+      "checkpoint.db": true
+    },
+    "short-c2": {
+      "game.db": true,
+      "knowledge.db": true,
+      "checkpoint.db": true
+    }
+  },
+  "tests": {
+    "all-c1": {
+      "tests": "1373",
+      "failures": "4",
+      "errors": "0",
+      "skipped": "1",
+      "time": "1104.496"
+    },
+    "final": {
+      "tests": "744",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "324.857"
+    },
+    "final-items": {
+      "tests": "530",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "64.990"
+    }
+  },
+  "browser": {
+    "status": "passed",
+    "model": "catalogue fixture only; no model generation",
+    "cards": [
+      {
+        "mode": "random",
+        "occupation": "doctor",
+        "id": "c1051836-0102-449a-9d07-820a9ca65b5b",
+        "imported_id": "637fad7d-383c-4779-afdf-2e9ef4cf8ef7",
+        "skill": 41
+      },
+      {
+        "mode": "point_buy",
+        "occupation": "musician",
+        "id": "7398c636-0d8b-4d36-bbd1-fd8c2a9b785e",
+        "imported_id": "e8750c8c-d372-46d4-bde7-912d9871bb3d",
+        "skill": 41
+      }
+    ],
+    "process_restart": true,
+    "browser_errors": []
+  },
+  "short-c1": {
+    "model_calls_in_export": 233,
+    "inventory": [
+      {
+        "instance_id": "679b7134-97f1-492e-b5a8-ce279e09b462",
+        "item_id": "679b7134-97f1-492e-b5a8-ce279e09b462",
+        "title": "黑色包里的两把钥匙",
+        "holder_id": "1b04c6ad-7848-4291-a31b-94486d2b3a09",
+        "holder_name": "周衡",
+        "remaining_uses": null
+      }
+    ],
+    "outcome": "B",
+    "recalls": [],
+    "inherited_model_calls": 203,
+    "new_model_calls": 30
+  },
+  "short-c2": {
+    "model_calls_in_export": 269,
+    "inventory": [
+      {
+        "instance_id": "714ba467-8615-4d67-9f73-6f90de16cd35",
+        "item_id": "714ba467-8615-4d67-9f73-6f90de16cd35",
+        "title": "遗留报纸",
+        "holder_id": "1b04c6ad-7848-4291-a31b-94486d2b3a09",
+        "holder_name": "周衡",
+        "remaining_uses": null
+      },
+      {
+        "instance_id": "cc294502-4d9b-42c4-8134-a9a0a69916ab",
+        "item_id": "cc294502-4d9b-42c4-8134-a9a0a69916ab",
+        "title": "门上便签正面",
+        "holder_id": "1b04c6ad-7848-4291-a31b-94486d2b3a09",
+        "holder_name": "周衡",
+        "remaining_uses": null
+      }
+    ],
+    "outcome": null,
+    "recalls": [
+      {
+        "action_seq": 2298,
+        "operations": [],
+        "narration_seqs": [
+          2319
+        ]
+      }
+    ],
+    "inherited_model_calls": 203,
+    "new_model_calls": 66,
+    "restore": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "character_snapshots_preserved": true,
+    "new_checks": [],
+    "newspaper_date_still_hidden": true,
+    "newspaper_instance_count": 1
+  },
+  "new-card-c2": {
+    "model_calls_in_export": 13,
+    "inventory": [
+      {
+        "instance_id": "f952c36b-2c50-5ed4-b1a4-94bda2a2205b",
+        "item_id": "d771634e-31b7-5f66-a746-f84adfe9e7c9",
+        "title": "家书",
+        "holder_id": "f126150f-45bf-4410-83c8-f7f3aacfcb16",
+        "holder_name": "新卡调查员",
+        "remaining_uses": null
+      },
+      {
+        "instance_id": "ea1aaa92-e3aa-535d-8a2f-5aafe9c6ccf1",
+        "item_id": "e96827d1-0b1a-53b8-b1fd-e57deb990c82",
+        "title": "小刀",
+        "holder_id": "f126150f-45bf-4410-83c8-f7f3aacfcb16",
+        "holder_name": "新卡调查员",
+        "remaining_uses": null
+      }
+    ],
+    "outcome": null,
+    "recalls": [
+      {
+        "action_seq": 165,
+        "operations": [],
+        "narration_seqs": [
+          185
+        ]
+      }
+    ],
+    "new_model_calls": 13,
+    "restore": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "character_snapshots_preserved": true
+  },
+  "inherited_long_test": {
+    "source": "batch-20/long-c39",
+    "active_seconds": 4678.1,
+    "summary_rebuilds": 47,
+    "stale_event_seq": 1196,
+    "scope": "historical conclusion, not rerun or combined"
+  }
+}

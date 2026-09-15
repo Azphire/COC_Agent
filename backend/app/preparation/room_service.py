@@ -754,7 +754,8 @@ class RoomEntityService:
 
     async def save(self, session, room, snapshot):
         binding = await self.binding(session, room.id)
-        if not binding:
+        rows = await self.rows(session, room.id)
+        if not binding and not rows:
             return
         reviews = list(
             await session.scalars(
@@ -765,8 +766,8 @@ class RoomEntityService:
             PreparationSaveState(
                 snapshot_id=snapshot.id,
                 document={
-                    "binding": row_view(binding),
-                    "entities": [row_view(e) for e in await self.rows(session, room.id)],
+                    "binding": row_view(binding) if binding else None,
+                    "entities": [row_view(e) for e in rows],
                     "reviews": [row_view(r) for r in reviews],
                 },
             )
@@ -780,7 +781,7 @@ class RoomEntityService:
             return
         from datetime import datetime
 
-        for key, value in saved.document["binding"].items():
+        for key, value in (saved.document["binding"] or {}).items():
             setattr(binding, key, datetime.fromisoformat(value) if key == "bound_at" else value)
         # Reveals/corrections are monotonic: players already received newer public facts.
         for doc in saved.document["entities"]:

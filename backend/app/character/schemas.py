@@ -1,8 +1,9 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, StrictInt, model_validator
 
 from app.domain.character import BoundedInt, CharacteristicValue, DomainModel, SkillAllocation
+from app.domain.character_details import AssetDetail, Background, EquipmentEntry
 
 
 class CreateCharacterRequest(DomainModel):
@@ -29,6 +30,13 @@ class PatchCharacterRequest(DomainModel):
     interest_skills: dict[str, SkillAllocation] | None = None
     derived_values: dict[str, int | float | str] | None = None
     age_deductions: dict[str, BoundedInt] | None = None
+    occupation_attribute: str | None = Field(default=None, max_length=64)
+    occupation_group_choices: dict[str, list[str]] | None = None
+    selected_specializations: list[str] | None = Field(default=None, max_length=200)
+    era: Literal["1920s", "modern"] | None = None
+    background: Background | None = None
+    asset_details: list[AssetDetail] | None = Field(default=None, max_length=100)
+    equipment: list[EquipmentEntry] | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
     def forbid_null_collections(self):
@@ -39,6 +47,12 @@ class PatchCharacterRequest(DomainModel):
             "occupation_skills",
             "interest_skills",
             "age_deductions",
+            "occupation_group_choices",
+            "selected_specializations",
+            "era",
+            "background",
+            "asset_details",
+            "equipment",
         ):
             if field in self.model_fields_set and getattr(self, field) is None:
                 raise ValueError(f"{field} 不能为 null")

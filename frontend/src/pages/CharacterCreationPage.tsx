@@ -6,10 +6,14 @@ import CharacteristicEditor from '../components/character/CharacteristicEditor'
 import SkillAllocator from '../components/character/SkillAllocator'
 import ValidationSummary from '../components/character/ValidationSummary'
 import JsonTransfer from '../components/character/JsonTransfer'
+import CharacterDetails from '../components/character/CharacterDetails'
 
 const empty: EditableFields = {
   name: '', player_name: null, age: 25, occupation: null, selected_occupation_skills: [],
   attributes: {}, occupation_skills: {}, interest_skills: {}, age_deductions: {},
+  occupation_attribute: null, occupation_group_choices: {}, selected_specializations: [], era: '1920s',
+  background: { appearance: '', beliefs: '', people: '', places: '', possessions: '', traits: '', key_connection: null },
+  asset_details: [], equipment: [],
 }
 
 function obviousInvalid(form: EditableFields, ruleset: RuleSet, saved: Character): boolean {
@@ -50,7 +54,11 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
   useEffect(() => {
     let active = true
     Promise.all([charactersApi.rulesets(), characterId ? charactersApi.get(characterId) : Promise.resolve(null)])
-      .then(([rules, character]) => {
+      .then(async ([rules, character]) => {
+        if (character && !rules.some(r => r.id === character.ruleset_id && r.version === character.ruleset_version)) {
+          const archived = await charactersApi.rulesetVersion(character.ruleset_id, character.ruleset_version)
+          rules = rules.map(r => r.id === archived.id ? archived : r)
+        }
         if (!active) return
         setRulesets(rules)
         setRulesetId(character?.ruleset_id || rules.find(item => item.enabled && item.edition === 'coc7')?.id || rules.find(item => item.enabled)?.id || '')
@@ -98,6 +106,9 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
         occupation: form.occupation, selected_occupation_skills: form.selected_occupation_skills,
         occupation_skills: form.occupation_skills, interest_skills: form.interest_skills,
         age_deductions: form.age_deductions,
+        occupation_attribute: form.occupation_attribute, occupation_group_choices: form.occupation_group_choices,
+        selected_specializations: form.selected_specializations, era: form.era, background: form.background,
+        asset_details: form.asset_details, equipment: form.equipment,
       }
       if (saved.creation_mode === 'point_buy') body.attributes = form.attributes
       accept(await charactersApi.patch(saved.id, body), '草稿已保存，已重新计算并校验。')
@@ -134,7 +145,7 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
       {!saved && <button type="button" onClick={create} disabled={busy || !ruleset?.enabled || (!!ruleset.age_rules && !band)}>
         {mode === 'random' ? '随机生成整组属性并保存草稿' : '创建购点草稿'}
       </button>}
-      {!saved && ruleset?.age_rules && <p className="hint">请先填写15–89岁年龄；创建时生成幸运与教育检定并锁定年龄。购点采用460点可选规则。</p>}
+      {!saved && ruleset?.age_rules && <p className="hint">创建时生成幸运与教育检定并锁定年龄。90岁及以上缺少本地完整调整条款，尚不支持；购点采用460点可选规则。</p>}
       {saved && ruleset && <>
         <CharacteristicEditor character={saved} ruleset={ruleset} values={form.attributes}
           onChange={attributes => update({ ...form, attributes })} />
@@ -148,6 +159,7 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
           </label>)}</div>
         </section>}
         <SkillAllocator character={saved} ruleset={ruleset} value={form} onChange={update} />
+        <CharacterDetails character={saved} value={form} onChange={update} />
       </>}
     </fieldset>
     {saved && <>

@@ -4,6 +4,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
+from app.domain.character_details import AssetDetail, Background, EquipmentEntry, Finances
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -64,6 +66,14 @@ class CharacterData(DomainModel):
     age: Annotated[StrictInt, Field(ge=1, le=150)] | None = None
     occupation: str | None = None
     selected_occupation_skills: list[str] = Field(default_factory=list, max_length=100)
+    occupation_attribute: str | None = None
+    occupation_group_choices: dict[str, list[str]] = Field(default_factory=dict)
+    selected_specializations: list[str] = Field(default_factory=list, max_length=200)
+    era: Literal["1920s", "modern"] = "1920s"
+    background: Background = Field(default_factory=Background)
+    asset_details: list[AssetDetail] = Field(default_factory=list, max_length=100)
+    finances: Finances = Field(default_factory=Finances)
+    equipment: list[EquipmentEntry] = Field(default_factory=list, max_length=100)
     attributes: dict[str, CharacteristicValue] = Field(default_factory=dict)
     effective_attributes: dict[str, int] = Field(default_factory=dict)
     age_deductions: dict[str, BoundedInt] = Field(default_factory=dict)

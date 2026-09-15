@@ -673,6 +673,10 @@ class RoomService:
                     "所有活动玩家必须分配角色并 ready",
                 )
             room.status = destination
+            if action == 'start' and self.agent_service:
+                from app.preparation.character_equipment import initialize_equipment
+
+                await initialize_equipment(self.agent_service, session, room)
             self.append(session, room, event_type, actor, {"status": destination})
         elif action == "state.patch":
             require(room.status in ("running", "paused"), "游戏开始后才能修改会话状态")

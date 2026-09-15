@@ -16,18 +16,88 @@ def held_instance(runtime, entity_id, actor, instance_id=None):
     return matches[0] if len(matches) == 1 else None
 
 
+def acquisition_error(runtime, eid, actor):
+    """First acquisition cannot recreate an instance that moved or was consumed."""
+    instances = {key for key, value in runtime.item_instances.items() if value == eid} | {eid}
+    if instances & runtime.consumed_items.keys():
+        return "物品已经消耗，不能重新取得"
+    if instances & runtime.dropped_items.keys():
+        return "放下的物品须在实际位置拾回"
+    holders = {runtime.inventory[i] for i in instances if i in runtime.inventory}
+    if holders - {actor}:
+        return "物品已有持有者，需要由持有者实际交接"
+    if holders:
+        return "你已经持有这件物品"
+    return None
+
+
+def acquire_instance(runtime, eid, actor):
+    from app.rooms.service import require
+
+    error = acquisition_error(runtime, eid, actor)
+    # Same holder repeating a request is a no-op, never a second instance.
+    if held_instance(runtime, eid, actor):
+        return
+    require(not error, error or "无法取得物品")
+    runtime.item_instances[eid] = eid
+    runtime.inventory[eid] = actor
+
+
+def guard_unavailable_transfer(plan, facts, runtime, members):
+    """Explain known possession without reopening an unrelated investigation."""
+    authority = plan.action_authority
+    target = authority.get("target_id")
+    entity = facts.approved_entities.get(target, {})
+    if (
+        authority.get("request_member_id")
+        or entity.get("type") != "item"
+        or target not in facts.revealed_entity_ids
+        or not set(authority.get("kinds", [])) & {"take", "give", "place"}
+    ):
+        return False
+    instances = {i for i, eid in runtime.item_instances.items() if eid == target} | {target}
+    actor = facts.actor_member_id
+    holders = {runtime.inventory[i] for i in instances if i in runtime.inventory}
+    local_drop = any(runtime.dropped_items.get(i) == facts.scene_id for i in instances)
+    reason = None
+    if "take" in authority["kinds"] and actor in holders and not local_drop:
+        reason = f"你已经持有{entity['title']}，无需再次拿取。"
+    elif holders and actor not in holders and not local_drop:
+        names = "、".join(members.get(h, "其他人") for h in sorted(holders))
+        reason = f"{entity['title']}目前由{names}持有，需要持有者实际交接。"
+    elif instances & runtime.consumed_items.keys() and not holders and not local_drop:
+        reason = f"{entity['title']}已经消耗，不能再次拿取。"
+    elif instances & runtime.dropped_items.keys() and not holders and not local_drop:
+        reason = f"{entity['title']}放在其他场景，需要回到放下的位置拾取。"
+    if not reason:
+        return False
+    plan.focus.obstacle = reason
+    plan.needs_clarification = plan.parsed_intent.requires_clarification = True
+    plan.parsed_intent.clarification_question = reason
+    plan.proposed_check = None
+    plan.proposed_tool_calls = []
+    plan.proposed_reveal_entity_ids = []
+    plan.proposed_transition_id = None
+    authority["rejection_code"] = "inventory_state"
+    authority["rejection_message"] = reason
+    return True
+
+
 def light_state(entity, flags):
     """Public device state derived from existing approved operation flags."""
     rules = [
-        rule for rule in entity.get("interactions", [])
+        rule
+        for rule in entity.get("interactions", [])
         if "light" in rule.get("action_kinds", []) and any(rule.get("set_flags", {}).values())
     ]
     if not rules:
         return {}
-    return {"light_active": any(
-        all(flags.get(key, False) == value for key, value in rule["set_flags"].items())
-        for rule in rules
-    )}
+    return {
+        "light_active": any(
+            all(flags.get(key, False) == value for key, value in rule["set_flags"].items())
+            for rule in rules
+        )
+    }
 
 
 def instance_light_state(entity_id, instance, runtime, definitions):
@@ -35,7 +105,8 @@ def instance_light_state(entity_id, instance, runtime, definitions):
     entity = definitions.get(entity_id, {})
     state = light_state(entity, runtime.get("flags", {}))
     same = {
-        key for key in {*runtime.get("inventory", {}), *runtime.get("dropped_items", {})}
+        key
+        for key in {*runtime.get("inventory", {}), *runtime.get("dropped_items", {})}
         if runtime.get("item_instances", {}).get(key, key) == entity_id
     }
     if not state.get("light_active") or len(same) <= 1:
@@ -46,16 +117,25 @@ def instance_light_state(entity_id, instance, runtime, definitions):
         runtime.get("receipts", {}).values(), key=lambda r: r.get("source_event_seq") or 0
     ):
         eid = receipt.get("entity_id")
-        rule = next((r for r in definitions.get(eid, {}).get("interactions", [])
-                     if r["id"] == receipt.get("interaction_id")), {})
+        rule = next(
+            (
+                r
+                for r in definitions.get(eid, {}).get("interactions", [])
+                if r["id"] == receipt.get("interaction_id")
+            ),
+            {},
+        )
         if "light" not in rule.get("action_kinds", []) or rule.get("check_name"):
             continue
         seen = seen or eid == entity_id
         ruling = receipt.get("kp_ruling") or {}
         selected = ruling.get("action_authority", {}).get("item_instances", {}).get(eid)
-        held = [key for key, actor in receipt.get("inventory", {}).items()
-                if actor == receipt.get("actor_member_id")
-                and runtime.get("item_instances", {}).get(key, key) == eid]
+        held = [
+            key
+            for key, actor in receipt.get("inventory", {}).items()
+            if actor == receipt.get("actor_member_id")
+            and runtime.get("item_instances", {}).get(key, key) == eid
+        ]
         selected = selected or (held[0] if len(held) == 1 else None)
         for flag, value in rule.get("set_flags", {}).items():
             if not value:
@@ -64,12 +144,15 @@ def instance_light_state(entity_id, instance, runtime, definitions):
                 active.setdefault(flag, set()).add(selected)
     if not seen:
         return {"light_active": None}
-    return {"light_active": any(
-        instance in active.get(flag, set())
-        for rule in entity.get("interactions", [])
-        if "light" in rule.get("action_kinds", [])
-        for flag, value in rule.get("set_flags", {}).items() if value
-    )}
+    return {
+        "light_active": any(
+            instance in active.get(flag, set())
+            for rule in entity.get("interactions", [])
+            if "light" in rule.get("action_kinds", [])
+            for flag, value in rule.get("set_flags", {}).items()
+            if value
+        )
+    }
 
 
 async def public_inventory(agents, session, room):
@@ -87,7 +170,10 @@ async def public_inventory(agents, session, room):
             "holder_id": holder,
             "holder_name": members.get(holder, "未知持有者"),
             **instance_light_state(
-                runtime.get("item_instances", {}).get(eid, eid), eid, runtime, definitions,
+                runtime.get("item_instances", {}).get(eid, eid),
+                eid,
+                runtime,
+                definitions,
             ),
             "remaining_uses": runtime.get("item_uses", {}).get(
                 eid,
@@ -181,7 +267,9 @@ async def inventory_context(agents, session, room, question=""):
                 "remaining_uses": runtime.get("item_uses", {}).get(instance),
                 **instance_light_state(
                     runtime.get("item_instances", {}).get(instance, instance),
-                    instance, runtime, snapshots,
+                    instance,
+                    runtime,
+                    snapshots,
                 ),
             }
             for instance, node in runtime.get("dropped_items", {}).items()
@@ -210,8 +298,11 @@ def recalled_inventory(view, question):
         if inventory_probe(clause)
         or re.search(r"物品|持有|库存|背包|身上|随身物", clause)
         or (
-            re.search(r"(?:^|回顾)(?:我|我们|两人|大家).{0,8}(?:是否|有没有).{0,6}"
-                      r"(?:拿到|取得|获得|得到)", clause.strip())
+            re.search(
+                r"(?:^|回顾)(?:我|我们|两人|大家).{0,8}(?:是否|有没有).{0,6}"
+                r"(?:拿到|取得|获得|得到)",
+                clause.strip(),
+            )
             and not re.search(r"台词|原文|原话|写|说", clause)
         )
         or re.search(initial + r".{0,20}(?:保留|留下)", clause)
@@ -236,11 +327,18 @@ def recalled_inventory(view, question):
     descriptions = []
     for member in view.get("members", []):
         held = [
-            h["title"] + (
-                "（照明实例状态尚未确定）" if h["light_active"] is None
-                else "（照明已开启）" if h["light_active"] else "（照明未开启）"
-            ) if "light_active" in h else h["title"]
-            for h in view["holders"] if h["holder_id"] == member["id"]
+            h["title"]
+            + (
+                "（照明实例状态尚未确定）"
+                if h["light_active"] is None
+                else "（照明已开启）"
+                if h["light_active"]
+                else "（照明未开启）"
+            )
+            if "light_active" in h
+            else h["title"]
+            for h in view["holders"]
+            if h["holder_id"] == member["id"]
         ]
         descriptions.append(
             member["name"] + ("当前持有：" + "、".join(held) if held else "当前没有登记的持有物")
@@ -563,6 +661,11 @@ async def apply_inventory(agents, session, room, state, rule, args, actor, node,
             "check_ids": checks,
             "source_event_seq": seq,
         }
+        from uuid import UUID
+
+        for slot in await agents.rooms.slots(session, room):
+            if slot.member_id == actor:
+                state.characters[UUID(slot.id)].equipment_settlement = "module_settled"
         if rule.check_passed:
             runtime.item_instances[instance] = eid
             runtime.inventory[instance] = actor

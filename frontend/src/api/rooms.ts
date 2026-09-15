@@ -3,7 +3,7 @@ import type { GameState } from './agents'
 import type { CombatView, CombatWeapon } from './combat'
 
 export type SanityState = { kind: string; phase: string; symptom: string; day_start_san: number | null; day_loss: number; ends_minute: number | null; bout_end_minute: number | null; bout_end_round: number | null; history: Record<string, unknown>[] }
-export type Runtime = { hp: number | null; hp_max: number | null; mp: number | null; mp_max: number | null; mp_recovery_progress: number; san: number | null; san_max: number | null; sanity: SanityState; luck: number | null; conditions: string[]; injury: Record<string, boolean | string | number | null>; weapons: CombatWeapon[] }
+export type Runtime = { equipment_settlement?: 'unsettled' | 'retained' | 'module_pending' | 'module_settled'; hp: number | null; hp_max: number | null; mp: number | null; mp_max: number | null; mp_recovery_progress: number; san: number | null; san_max: number | null; sanity: SanityState; luck: number | null; conditions: string[]; injury: Record<string, boolean | string | number | null>; weapons: CombatWeapon[] }
 export type InventoryItem = { instance_id: string; item_id: string; title: string; holder_id: string; holder_name: string; remaining_uses: number | null }
 export type SessionState = { luck_spending?: boolean; version: 1; game_minute: number; game_round: number; sanity_day: number; scene_title: string; scene_summary: string; round_number: number | null; active_slot_id: string | null; characters: Record<string, Runtime> }
 export type Member = { id: string; display_name: string; role: 'host' | 'player'; controller_type: 'human' | 'agent'; access_type: 'host_managed' | 'remote'; ready: boolean; active: boolean; slot_id: string | null; last_seen_at: string | null }

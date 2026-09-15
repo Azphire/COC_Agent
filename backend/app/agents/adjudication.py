@@ -240,6 +240,25 @@ class ActionAdjudicationService:
                     for c in checks
                 ):
                     facts.reveal_errors[clue.id] = "必须通过关联的真实检定"
+        # Original card equipment also belongs to rooms using a legacy module.
+        # It has the same approved entity/instance boundary as prepared gear.
+        if not prepared:
+            for row in await agents.entities.rows(session, room.id):
+                if row.snapshot.get("generated_by") == "character_equipment":
+                    eid = row.source_entity_id
+                    facts.approved_entities[eid] = {**row.snapshot, "id": eid}
+                    if row.state != "hidden":
+                        facts.visible_entity_ids.add(eid)
+                        facts.revealed_entity_ids.add(eid)
+                    rt = room.session_state.get("module_runtime", {})
+                    if any(
+                        rt.get("item_instances", {}).get(i, i) == eid
+                        for i in rt.get("inventory", {})
+                    ) or any(
+                        rt.get("item_instances", {}).get(i, i) == eid and scene == facts.scene_id
+                        for i, scene in rt.get("dropped_items", {}).items()
+                    ):
+                        facts.local_entity_ids.add(eid)
         nav = await agents.navigation.state(session, room.id)
         if nav:
             state, snapshot, _, local, linked, _ = await agents.module_context.allowed(

@@ -81,7 +81,11 @@ def response_brief(plan, context, results, *, withdrawal=None):
     if not npc and re.search(r"看|观察|检查|文字|记号|字迹|读|原文|内容|写", raw):
         for entity in context.get("public_entities", []):
             if (
-                entity.get("type") == "clue"
+                (
+                    entity.get("type") == "clue"
+                    or entity.get("type") == "item"
+                    and re.search(r"读|正文|原文|写.{0,4}(?:什么|啥)|文字内容", raw)
+                )
                 and entity.get("fact_scope", "current_scene") == "current_scene"
                 and (
                     any(
@@ -304,7 +308,8 @@ def fallback_narration(
         re.search(r"照明|屏幕|点亮|光|交接|递给|交给|随身|口袋", topic)
         or any(
             name and name in topic
-            for item in inventory_state.get("known_items", []) for name in item["names"]
+            for item in inventory_state.get("known_items", [])
+            for name in item["names"]
         )
     ):
         from app.preparation.inventory import recalled_inventory
@@ -314,9 +319,7 @@ def fallback_narration(
     facts = [f["text"] for f in brief.get("allowed_facts", []) if f.get("text")]
     # A failed generation cannot recover by republishing an unchecked old
     # improvisation. Ordinary generation still receives those attributed memories.
-    available = list(dict.fromkeys(facts[:3])) or (
-        [public_scene] if public_scene else []
-    )
+    available = list(dict.fromkeys(facts[:3])) or ([public_scene] if public_scene else [])
     directions = (
         "你可以继续追问具体细节，或查看这些信息提到的地方；接下来怎么做由你决定。"
         if intent_type == "converse"

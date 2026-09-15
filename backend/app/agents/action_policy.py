@@ -191,7 +191,7 @@ class ActionPolicyValidator:
             return "rejected", "计划不属于当前回合"
         if plan.action_authority.get("rejection_code") == "initial_choice_settled":
             return "clarification_required", "起始随身物已经确定"
-        if plan.action_authority.get("rejection_code") == "item_precondition":
+        if plan.action_authority.get("rejection_code") in {"item_precondition", "inventory_state"}:
             return "clarification_required", "物品使用条件未满足"
         if intent.requires_clarification or plan.needs_clarification or intent.type == "unknown":
             return "clarification_required", "行动意图不明确"

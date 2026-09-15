@@ -1430,7 +1430,13 @@
       "checkpoint.db": true,
       "formal_package": true
     },
-    "summary_rebuilds": 48,
+    "summary_rebuilds": 47,
+    "summary_count_audit_batch21": {
+      "successful_rebuilds": 47,
+      "stale_notifications": 1,
+      "stale_event_seq": 1196,
+      "basis": "long-c39/summary-range-index.json has 47 entries, exactly matching agent.summary_rebuilt in HOST_DEBUG-events.json and read-only game.db; the former 48 included agent.summary_stale. Historical long-test conclusion unchanged."
+    },
     "summary_range_index": "summary-range-index.json",
     "pure_recall_rounds": 18,
     "pure_recall_new_operations": 0,

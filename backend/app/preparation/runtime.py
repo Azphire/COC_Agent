@@ -84,10 +84,21 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
     require(not state.combat.pending_id, "请先完成攻击或伤势结算")
     if rule.outcome or rule.prepare_outcome:
         agents.combat.require_movement_ready(room)
-    nav = await agents.navigation.require_available(session, room.id)
-    snapshot, _ = await agents.navigation.snapshot(session, nav)
+    nav = await agents.navigation.state(session, room.id)
+    if nav:
+        snapshot, _ = await agents.navigation.snapshot(session, nav)
+        node = nav.current_scene_node_id
+    else:
+        require(
+            entity.snapshot.get("generated_by") == "character_equipment"
+            and rule.inventory_operation in {"give", "drop", "pickup"},
+            "此模组交互需要已准备的场景导航",
+        )
+        module = await agents.module(session, room.id)
+        require(module, "请先绑定模组")
+        node, snapshot = module.state["scene_id"], None
     require(
-        not rule.scene_node_ids or nav.current_scene_node_id in rule.scene_node_ids,
+        not rule.scene_node_ids or node in rule.scene_node_ids,
         "此交互不适用于当前场景",
     )
     last_move = await session.scalar(
@@ -98,14 +109,12 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
     )
     require(not last_move or seq > last_move, "不能用转场前的行动确认当前场景交互")
     require(
-        any(
-            b.entity_id == args.entity_id and b.node_id == nav.current_scene_node_id
-            for b in snapshot.entity_bindings
+        snapshot
+        and any(
+            b.entity_id == args.entity_id and b.node_id == node for b in snapshot.entity_bindings
         )
         or args.entity_id
-        in current_entity_ids(
-            snapshot, [nav.current_scene_node_id], state.module_runtime.model_dump()
-        ),
+        in current_entity_ids(snapshot, [node], state.module_runtime.model_dump()),
         "交互实体不在当前场景",
     )
     require(entity.state != "hidden", "交互目标尚未实际揭示")
@@ -126,7 +135,7 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
 
         require(
             intent.type in {"interact", "use_item", "investigate", "observe", "converse"}
-            and matches_action_focus(doc.plan, nav.current_scene_node_id, args.entity_id, rule),
+            and matches_action_focus(doc.plan, node, args.entity_id, rule),
             "交互目标不匹配玩家实际行动",
         )
         actual_action = doc.plan.focus.action if doc.plan.focus else ""
@@ -143,7 +152,7 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
                 state.module_runtime,
                 actor=actor,
                 seq=seq,
-                scene=nav.current_scene_node_id,
+                scene=node,
                 item_id=args.used_item_id,
                 recipient=args.recipient_member_id,
                 instance_id=args.item_instance_id,
@@ -325,24 +334,20 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
     from app.preparation.encounters import apply_encounter
     from app.preparation.inventory import apply_inventory
 
-    await apply_inventory(
-        agents, session, room, state, rule, args, actor, nav.current_scene_node_id, seq, matched
-    )
+    await apply_inventory(agents, session, room, state, rule, args, actor, node, seq, matched)
     if passed:
-        apply_encounter(state, rule, args, actor, nav.current_scene_node_id, seq)
+        apply_encounter(state, rule, args, actor, node, seq)
         state.module_runtime.flags.update(rule.set_flags)
     if rule.encounter_operation in {"sound_start", "sound_stop", "sound_once"}:
         state.module_runtime.flags["continuous_sound"] = any(
             s.get("active") and s.get("continuous") for s in state.module_runtime.sounds.values()
         )
     for eid in rule.acquire_item_ids if passed else []:
+        from app.preparation.inventory import acquire_instance
+
         item = await agents.entities.entity(session, room.id, eid)
         require(item.entity_type == "item" and item.state != "hidden", "所获物品必须已实际发现")
-        require(eid not in state.module_runtime.consumed_items, "物品已经消耗，不能重新取得")
-        require(eid not in state.module_runtime.dropped_items, "放下的物品须在实际位置拾取")
-        holder = state.module_runtime.inventory.get(eid)
-        require(holder in {None, actor}, "物品已有持有者，必须由持有者实际交接")
-        state.module_runtime.inventory[eid] = actor
+        acquire_instance(state.module_runtime, eid, actor)
     state.module_runtime.following_npc_ids = list(
         dict.fromkeys(
             [
@@ -366,7 +371,7 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         "prepare_outcome": rule.prepare_outcome,
         "entity_id": args.entity_id,
         "interaction_id": rule.id,
-        "scene_node_id": nav.current_scene_node_id,
+        "scene_node_id": node,
         "consequence_entity_ids": rule.reveal_entity_ids
         if rule.prepare_outcome or rule.outcome
         else [],
@@ -403,7 +408,7 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             "actor_member_id": actor,
             "source_event_seq": seq,
             "cycle_id": cycle.id if cycle else None,
-            "scene_node_id": nav.current_scene_node_id,
+            "scene_node_id": node,
             "entity_id": rule.observation_entity_id or args.entity_id,
             "effect_id": rule.observation_effect_id,
             "text": rule.public_result,
@@ -528,9 +533,10 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             actor,
             {"text": rule.public_result, "outcome": rule.outcome},
         )
-    await agents.navigation.refresh(session, room, nav, snapshot)
-    await agents.navigation.persist(session, nav)
-    await agents.combat.sync_navigation(session, room, nav, snapshot)
+    if nav:
+        await agents.navigation.refresh(session, room, nav, snapshot)
+        await agents.navigation.persist(session, nav)
+        await agents.combat.sync_navigation(session, room, nav, snapshot)
     return receipt
 
 
@@ -584,7 +590,11 @@ async def freeze_adjustment(agents, session, room, check, entity):
 
 
 def current_entity_ids(snapshot, node_ids, runtime):
-    ids = {b.entity_id for b in snapshot.entity_bindings if b.node_id in node_ids}
+    ids = (
+        {b.entity_id for b in snapshot.entity_bindings if b.node_id in node_ids}
+        if snapshot
+        else set()
+    )
     # Actual terminal consequences belong to the scene where they happened,
     # even when their source paragraphs live in a separate ending section.
     # No pending flag or player assertion can introduce an unplayed ending.

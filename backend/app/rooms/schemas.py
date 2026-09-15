@@ -15,6 +15,9 @@ Visibility = Literal["public", "actor_and_host", "host_only"]
 
 
 class CharacterRuntimeV1(DomainModel):
+    equipment_settlement: Literal["unsettled", "retained", "module_pending", "module_settled"] = (
+        "unsettled"
+    )
     # None means that the published ruleset does not define this resource.
     hp: Resource = None
     hp_max: Resource = None

@@ -205,6 +205,7 @@ def decision_contract(context, candidates):
                         for i in context["items"]
                         if i["holder_id"] == context["actor"]
                     ]
+                    + list(context.get("local_dropped_instances", []))
                     + [None]
                 )
             ],
@@ -281,6 +282,47 @@ def state_verified_method(raw):
         and not raw.get("required_facts")
         or raw.get("required_item_ids")
         and (raw.get("encounter_operation") == "open_door" or raw.get("action_kinds") == ["open"])
+    )
+
+
+def routine_inventory_decision(context, candidates, schema):
+    """A unique unobstructed inventory method requires no extra KP check."""
+    if len(candidates) != 1:
+        return None
+    candidate = candidates[0]
+    rule = ModuleInteraction.model_validate(candidate["rule"])
+    if not (rule.acquire_item_ids or rule.inventory_operation in {"give", "drop", "pickup"}):
+        return None
+    if any(
+        (
+            rule.check_name,
+            rule.host_review,
+            rule.required_facts,
+            rule.required_flags,
+            rule.required_entity_ids,
+            rule.required_item_ids,
+            rule.reveal_entity_ids,
+            rule.encounter_operation,
+            rule.use_effect,
+            rule.set_flags,
+            rule.outcome,
+        )
+    ):
+        return None
+    authority = context["action_authority"]
+    recipients = authority.get("named_recipients", [])
+    if rule.inventory_operation == "give" and len(recipients) != 1:
+        return None
+    clauses = [c["id"] for c in context["clauses"] if c["text"] in authority["action"]]
+    if not clauses:
+        return None
+    return schema(
+        option=candidate["option"],
+        applicable=True,
+        action_clause_ids=clauses,
+        recipient_member_id=recipients[0] if rule.inventory_operation == "give" else None,
+        item_instance_id=authority.get("item_instances", {}).get(rule.item_id),
+        reason="当前已发现实物的唯一无障碍库存操作，按实例直接结算",
     )
 
 
@@ -378,6 +420,11 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
         if guard_initial_reselection(plan, facts, data.module_runtime):
             run.structured_output = plan.model_dump(mode="json")
             return None
+        from app.preparation.inventory import guard_unavailable_transfer
+
+        if guard_unavailable_transfer(plan, facts, data.module_runtime, members):
+            run.structured_output = plan.model_dump(mode="json")
+            return None
         candidates = []
         for eid, entity in facts.approved_entities.items():
             searching = bool(plan.proposed_check and str(plan.proposed_check.clue_id) == eid)
@@ -393,6 +440,14 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 continue
             for raw in entity.get("interactions", []):
                 rule = ModuleInteraction.model_validate(raw)
+                if rule.acquire_item_ids:
+                    from app.preparation.inventory import acquisition_error
+
+                    if any(
+                        acquisition_error(data.module_runtime, item, facts.actor_member_id)
+                        for item in rule.acquire_item_ids
+                    ):
+                        continue
                 if (
                     eid not in facts.revealed_entity_ids
                     and not revealing
@@ -559,6 +614,12 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 if m.active and m.role == "player"
             },
             "items": await public_inventory(agents, session, room),
+            "local_dropped_instances": [
+                iid
+                for iid, node in data.module_runtime.dropped_items.items()
+                if node == facts.scene_id
+                and data.module_runtime.item_instances.get(iid, iid) in facts.revealed_entity_ids
+            ],
             "facts": [
                 {"title": e["title"], "summary": e.get("public_summary", "")[:300]}
                 for eid, e in facts.approved_entities.items()
@@ -591,7 +652,11 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
         return
     context, candidates, quotes = prepared
     schema = decision_contract(context, candidates)
-    decision = await call_model(runtime, state, schema, INSTRUCTION, context, "prepared_situation")
+    decision = routine_inventory_decision(context, candidates, schema)
+    if decision is None:
+        decision = await call_model(
+            runtime, state, schema, INSTRUCTION, context, "prepared_situation"
+        )
     chosen = next((c for c in candidates if c["option"] == decision.option), None)
     verification = None
     if chosen and decision.applicable:
