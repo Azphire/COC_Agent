@@ -91,7 +91,10 @@ class BrowserPage(SmokeCheck):
         """
             },
         )
-        self.command("Page.navigate", {"url": "http://127.0.0.1:5173/#/rooms"})
+        self.command(
+            "Page.navigate",
+            {"url": getattr(owner, "frontend_url", "http://127.0.0.1:5173") + "/#/rooms"},
+        )
         wait_for(lambda: self.contains("加入房间"))
 
     def connected(self):

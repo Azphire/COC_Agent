@@ -1,7 +1,8 @@
+import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, PrivateAttr, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -31,6 +32,13 @@ class Settings(BaseSettings):
     model_base_url: str = "http://127.0.0.1:11434/v1/"
     model_name: str = "qwen3:8b"
     model_api_key: SecretStr = SecretStr("ollama")
+    openai_api_key: SecretStr = SecretStr("")
+    # Keep initial environment values separate from runtime/UI model fields.
+    _environment_model_api_key: SecretStr = PrivateAttr(default=SecretStr(""))
+    _environment_model_service: tuple = PrivateAttr(default=())
+    _saved_model_api_key: SecretStr = PrivateAttr(default=SecretStr(""))
+    _saved_model_service: tuple = PrivateAttr(default=())
+    _credential_sources: dict[str, str] = PrivateAttr(default_factory=dict)
     model_timeout_seconds: float = Field(default=120.0, gt=0)
     model_temperature: float = Field(default=0.3, ge=0, le=2)
     model_context_limit: int = Field(default=8192, ge=2048, le=32768)
@@ -52,6 +60,25 @@ class Settings(BaseSettings):
     checkpoint_db_path: Path | None = None
     knowledge_db_path: Path | None = None
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    def __init__(self, **values):
+        super().__init__(**values)
+        from app.models.credentials import service_identity
+
+        self._environment_model_api_key = self.model_api_key
+        self._environment_model_service = service_identity(self.model_provider, self.model_base_url)
+        self._credential_sources = {
+            name: (
+                "configuration"
+                if name in values
+                else "process"
+                if name.upper() in os.environ
+                else ".env"
+                if name in self.model_fields_set
+                else "default"
+            )
+            for name in ("model_api_key", "openai_api_key")
+        }
 
     @field_validator(
         "data_dir", "checkpoint_db_path", "knowledge_db_path", "model_settings_path", mode="before"

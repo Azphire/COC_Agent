@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -24,6 +25,7 @@ from app.models.base import (
     Tool,
     ToolCall,
 )
+from app.models.credentials import resolve_credential, usable
 from app.models.ollama import generation_schema, schema_issues
 
 
@@ -66,14 +68,21 @@ def request_error(error):
     return "模型服务请求失败，请稍后重试"
 
 
+def safe_identifier(value):
+    return value if isinstance(value, str) and re.fullmatch(r"[\w.:-]{1,200}", value) else None
+
+
 class OpenAICompatibleClient:
     def __init__(self, settings: Settings) -> None:
         self.model = settings.model_name
         self.local = settings.model_provider == "ollama"
         self.output_mode = "json_schema" if self.local else settings.model_output_mode
+        credential = resolve_credential(settings)
+        if not self.local and not usable(credential.key):
+            raise ModelError("模型未配置有效 API 密钥")
         self.client = AsyncOpenAI(
             base_url=settings.model_base_url,
-            api_key=settings.model_api_key.get_secret_value() or ("ollama" if self.local else ""),
+            api_key=credential.key.get_secret_value(),
             max_retries=0,
             timeout=settings.model_timeout_seconds,
             http_client=DefaultAsyncHttpxClient(
@@ -135,10 +144,18 @@ class OpenAICompatibleClient:
         try:
             completion = await self.client.chat.completions.create(**request)
         except OpenAIError as error:
-            raise ModelError(request_error(error)) from None
+            failure = ModelError(request_error(error))
+            failure.error_category = type(error).__name__
+            failure.request_id = safe_identifier(getattr(error, "request_id", None))
+            raise failure from None
         if stream:
             return self._text_stream(completion)
-        return self._parse_response(completion, response_schema)
+        try:
+            return self._parse_response(completion, response_schema)
+        except ModelError as error:
+            error.request_id = safe_identifier(getattr(completion, "_request_id", None))
+            error.response_model = safe_identifier(completion.model)
+            raise
 
     @staticmethod
     def _parse_response(
@@ -188,6 +205,8 @@ class OpenAICompatibleClient:
                 structured=structured,
                 finish_reason=choice.finish_reason,
                 token_usage=usage,
+                request_id=safe_identifier(getattr(completion, "_request_id", None)),
+                response_model=safe_identifier(completion.model),
             )
         except ValidationError as error:
             raise ModelFormatError(

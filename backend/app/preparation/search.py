@@ -56,12 +56,19 @@ def unresolved_search_plan(plan, context):
     a concrete obstacle, or a clarification can still proceed without a check.
     """
     focus = plan.focus
+    # Risk is a reason to adjudicate, not evidence that an action is impossible.
+    # Keep genuinely blocked access eligible for the existing no-roll response.
+    unresolved_risk = bool(
+        focus
+        and re.search(r"风险|危险|受伤|弄伤|划伤|时间紧迫|限时|碰落", focus.obstacle)
+        and not re.search(r"无法|不能|不可|不允许", focus.obstacle)
+    )
     return bool(
         focus
         and "search" in action_kinds(focus.action)
         and plan.parsed_intent.type == "investigate"
         and not context.get("readonly_recall")
-        and not focus.obstacle
+        and (not focus.obstacle or unresolved_risk)
         and not plan.needs_clarification
         and not plan.parsed_intent.requires_clarification
         and not plan.proposed_check
@@ -83,6 +90,7 @@ def validate_search_plan(plan, context):
     instruction = (
         "原话是实际搜索，当前有待调查目标，但计划未作裁定。"
         "请按check_requirements中的原稿条件选择调查目标与必要检定；"
+        "描述时间紧迫或受伤风险不等于已经裁定。"
         "若不能进行，在focus.obstacle说明当前具体障碍。"
         "不要只复述照明或替换成旧动作。不得直接宣布发现或成功。"
     )
@@ -208,7 +216,7 @@ def named_local_interaction_ids(facts, action=None):
     }
 
 
-def repair_local_interaction_target(plan, facts, members):
+def repair_local_interaction_target(plan, facts, members, runtime=None):
     """Revalidate a uniquely named operation target before freezing authority."""
     # A new, explicit transfer of a discovered physical object supersedes a
     # stale investigation detail. Only this clause is repaired; gates and
@@ -240,6 +248,25 @@ def repair_local_interaction_target(plan, facts, members):
             and entity.get("type") == "item"
             and any(mentions_alias(action, a) for a in aliases(entity))
         }
+        if runtime is not None and len(objects) > 1:
+            from app.preparation.inventory import held_instance
+
+            explicit = {
+                runtime.item_instances.get(iid, iid)
+                for iid in {*runtime.inventory, *runtime.dropped_items}
+                if iid in action
+            } & objects
+            if len(explicit) == 1:
+                objects = explicit
+            elif re.search(r"自己持有|自己的|我持有|我的", action) and set(action_kinds(action)) & {
+                "place",
+                "give",
+            }:
+                owned = {
+                    eid for eid in objects if held_instance(runtime, eid, facts.actor_member_id)
+                }
+                if len(owned) == 1:
+                    objects = owned
         if len(objects) == 1:
             target = objects.pop()
             plan.focus = TurnFocus(action=action, action_target_id=target)

@@ -385,7 +385,7 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
         }
         from app.preparation.search import repair_local_interaction_target
 
-        repair_local_interaction_target(plan, facts, members)
+        repair_local_interaction_target(plan, facts, members, data.module_runtime)
         if (
             plan.parsed_intent.type == "wait"
             and "rest" in action_kinds(facts.raw_text)

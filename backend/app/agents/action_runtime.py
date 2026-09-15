@@ -208,7 +208,26 @@ def planning_prompt(context):
         ) == "agent.action_proposed" and held_item_acknowledgement(
             raw, context.get("inventory_state", {}), trigger.get("actor_member_id")
         )
-        if set(action_kinds(raw)) == {"give"} or acknowledgement:
+        kinds = set(action_kinds(raw))
+        from app.agents.generation_contracts import utterance_clauses
+
+        transfer_kinds = {
+            kind for clause in utterance_clauses(raw) for kind in action_kinds(clause["text"])
+        }
+        inventory = context.get("inventory_state", {})
+        concrete_transfer = bool(
+            transfer_kinds
+            and transfer_kinds <= {"take", "place", "give"}
+            and (
+                any(
+                    h.get("instance_id") and h["instance_id"] in raw
+                    for h in [*inventory.get("holders", []), *inventory.get("dropped_items", [])]
+                )
+                or "place" in transfer_kinds
+                and any(w in raw for w in ("自己持有", "自己的", "我持有", "我的"))
+            )
+        )
+        if kinds == {"give"} or acknowledgement or concrete_transfer:
             # Discovery requirements apply to revealing hidden content, not
             # handing over an instance. Inventory and interaction conditions
             # still decide whether the actual transfer is authorized.
@@ -231,6 +250,24 @@ def planning_prompt(context):
                 result.pop("previous_attempts", None)
     if context.get("omit_bound_prompt_metadata"):
         result.pop("action_identifiers", None)
+        # Agent-proposed actions repeat roster/routing metadata. Keep the actor,
+        # original text, target and instance/fact references; the complete event
+        # remains in run.context. Legacy module version metadata is likewise
+        # fixed at binding and is not needed to decide this action.
+        if result.get("triggering_action"):
+            trigger = dict(result["triggering_action"])
+            trigger["payload"] = {
+                k: v
+                for k, v in trigger.get("payload", {}).items()
+                if k not in {"actor_name", "controller_type", "mode"}
+            }
+            result["triggering_action"] = trigger
+        if result.get("module"):
+            result["module"] = {
+                k: v
+                for k, v in result["module"].items()
+                if k not in {"id", "version", "initial_scene"}
+            }
         # These are server routing/diagnostic fields, not scene facts or
         # prerequisites. Their full values remain in run.context and events.
         for key in (

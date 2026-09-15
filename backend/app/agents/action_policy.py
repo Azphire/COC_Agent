@@ -216,6 +216,27 @@ class ActionPolicyValidator:
             and e.get("title")
             and (e["title"] == intent.target_text or e["title"] in facts.raw_text)
         ]
+        authority = plan.action_authority
+        explicit = authority.get("explicit_instance_ids", [])
+        if authority.get("actor_member_id") == facts.actor_member_id and len(explicit) == 1:
+            selected = [
+                e
+                for e in candidates
+                if authority.get("item_instances", {}).get(e["id"]) == explicit[0]
+            ]
+            if len(selected) == 1:
+                candidates = selected
+        if (
+            authority.get("actor_member_id") == facts.actor_member_id
+            and re.search(r"自己持有|自己的|我持有|我的", facts.raw_text)
+            and set(authority.get("kinds", [])) & {"place", "give", "use", "consume"}
+        ):
+            held = authority.get("held_instances", {})
+            owned = [e for e in candidates if e["id"] in held]
+            if len(owned) == 1:
+                # "My knife" selects the actor's actual held entity. Other
+                # characters' identically named items do not create ambiguity.
+                candidates = owned
         if not facts.trusted_target_id and len({e["id"] for e in candidates}) > 1:
             titles = [e["title"] for e in candidates]
             if len(titles) != len(set(titles)):

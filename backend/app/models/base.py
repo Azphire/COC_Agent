@@ -31,6 +31,8 @@ class ModelResponse(BaseModel):
     structured: dict[str, Any] | SerializeAsAny[BaseModel] | None = None
     finish_reason: str | None = None
     token_usage: dict[str, int | None] | None = None
+    request_id: str | None = None
+    response_model: str | None = None
 
 
 class ModelClient(Protocol):

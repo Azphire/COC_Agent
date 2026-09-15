@@ -132,7 +132,9 @@ def accept_original(client, game, check_id):
     return check
 
 
-def wait_cycle(client, game, expected=("completed", "failed", "waiting_for_roll"), *, timeout=15):
+def wait_cycle(client, game, expected=("completed", "failed", "waiting_for_roll"), *, timeout=60):
+    # Windows SQLite/checkpoint work can exceed 15 s even with a fake model
+    # (also reproduced on the unchanged baseline). Keep a bounded state wait.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         cycle = ok(client.get(game["prefix"] + "/agent-cycle"))

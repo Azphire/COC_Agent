@@ -113,6 +113,9 @@ async def test_model(request: Request):
                     "latency_ms",
                     "attempt",
                     "token_usage",
+                    "request_id",
+                    "response_model",
+                    "error_category",
                     "validation_issues",
                     "schema",
                 )

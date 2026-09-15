@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from sqlalchemy import select
 
 from app.models.base import ModelError
+from app.models.credentials import resolve_credential, service_identity, usable
 from app.rooms.service import RoomError
 
 
@@ -21,6 +22,7 @@ class ModelConfiguration(BaseModel):
     model: str = Field(max_length=200)
     base_url: str = Field(max_length=1000)
     api_key: SecretStr = SecretStr("")
+    api_key_source: Literal["none", "saved", "MODEL_API_KEY", "OPENAI_API_KEY", "ollama"] = "none"
     output_mode: Literal["json_schema", "json_object"] = "json_object"
 
     @field_validator("base_url")
@@ -43,11 +45,10 @@ class ModelConfiguration(BaseModel):
             raise ValueError("服务地址须为无凭据、查询参数或片段的 HTTP(S) 地址")
         return value.rstrip("/") + "/"
 
-    def public(self):
+    def public(self, credential=None):
         return {
             **self.model_dump(exclude={"api_key"}),
-            "api_key_set": bool(self.api_key.get_secret_value())
-            and self.api_key.get_secret_value() != "ollama",
+            **(credential.public() if credential else {"api_key_set": usable(self.api_key)}),
         }
 
 
@@ -67,7 +68,6 @@ class ModelSettings:
             provider=settings.model_provider,
             model=settings.model_name,
             base_url=settings.model_base_url,
-            api_key=settings.model_api_key,
             output_mode=settings.model_output_mode,
         )
         self.configurations[current.provider] = current
@@ -90,11 +90,13 @@ class ModelSettings:
         self.apply_fields(self.current)
 
     def apply_fields(self, config):
+        self.settings._saved_model_api_key = config.api_key
+        self.settings._saved_model_service = service_identity(config.provider, config.base_url)
         for key, value in {
             "model_provider": config.provider,
             "model_name": config.model,
             "model_base_url": config.base_url,
-            "model_api_key": config.api_key,
+            "model_api_key": resolve_credential(self.settings, config).key,
             "model_output_mode": config.output_mode,
         }.items():
             setattr(self.settings, key, value)
@@ -161,16 +163,21 @@ class ModelSettings:
 
     def public(self):
         return {
-            **self.current.public(),
+            **self.current.public(resolve_credential(self.settings, self.current)),
             "revision": self.revision,
-            "configurations": {k: v.public() for k, v in self.configurations.items()},
+            "configurations": {
+                k: v.public(resolve_credential(self.settings, v))
+                for k, v in self.configurations.items()
+            },
             "audit": self.audit[-20:],
         }
 
     def ready(self):
         c = self.current
         return bool(
-            c.model and c.base_url and (c.provider == "ollama" or c.public()["api_key_set"])
+            c.model
+            and c.base_url
+            and (c.provider == "ollama" or usable(resolve_credential(self.settings, c).key))
         )
 
     async def save(self, config):
@@ -189,8 +196,20 @@ class ModelSettings:
                 except ModelError:
                     raise RoomError("Ollama 地址须为本机 11434 端口 /v1/", 422) from None
             previous = self.configurations.get(config.provider)
-            if not config.api_key.get_secret_value() and previous:
+            if (
+                not usable(config.api_key)
+                and previous
+                and service_identity(config.provider, config.base_url)
+                == service_identity(previous.provider, previous.base_url)
+            ):
                 config = config.model_copy(update={"api_key": previous.api_key})
+            if not usable(config.api_key):
+                config = config.model_copy(update={"api_key": SecretStr("")})
+            config = config.model_copy(
+                update={
+                    "api_key_source": resolve_credential(self.settings, config).source,
+                }
+            )
             configs = {**self.configurations, config.provider: config}
             audit = [
                 *self.audit,

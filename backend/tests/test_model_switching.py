@@ -207,7 +207,7 @@ async def test_api_format_repair_usage_and_original_budget(tmp_path, monkeypatch
     [(401, "认证"), (403, "认证"), (429, "限流"), (400, "参数"), (404, "不存在"), (503, "失败")],
 )
 async def test_api_failures_are_safe_without_retry(tmp_path, monkeypatch, code, label):
-    config = settings(tmp_path, model_provider="openai")
+    config = settings(tmp_path, model_provider="openai", model_api_key="private-api-key")
     adapter = OpenAICompatibleClient(config)
     error = APIStatusError(
         "private-api-key sensitive provider body",

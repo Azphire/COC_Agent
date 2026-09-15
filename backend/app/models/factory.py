@@ -2,6 +2,7 @@ from urllib.parse import urlsplit
 
 from app.config import Settings
 from app.models.base import ModelClient, ModelError
+from app.models.credentials import resolve_credential, usable
 from app.models.openai_compatible import OpenAICompatibleClient
 
 
@@ -27,7 +28,7 @@ def create_model(settings: Settings) -> ModelClient:
     if settings.model_provider == "ollama":
         local_ollama_origin(settings.model_base_url)
     elif settings.model_provider == "openai":
-        if not settings.model_api_key.get_secret_value():
+        if not usable(resolve_credential(settings).key):
             raise ModelError("An API key is required for the external provider")
     else:
         raise ModelError(f"Unknown model provider: {settings.model_provider}")

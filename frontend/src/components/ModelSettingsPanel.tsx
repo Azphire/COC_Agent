@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, hostToken } from '../api/session'
 
 type Provider = 'ollama' | 'openai'
-type Configuration = { provider: Provider; model: string; base_url: string; api_key_set: boolean; output_mode: 'json_object' | 'json_schema' }
+type Configuration = { provider: Provider; model: string; base_url: string; api_key_set: boolean; api_key_source?: string; api_key_location?: string; output_mode: 'json_object' | 'json_schema' }
 type Saved = Configuration & { revision: number; configurations: Partial<Record<Provider, Configuration>> }
 type Status = { provider: string; model: string; state: 'unconfigured' | 'unverified' | 'available' | 'failed'; error: string | null; busy: { kind: string; room_id?: string; status?: string; stage?: string }[] }
 const labels = { unconfigured: '未配置', unverified: '未验证', available: '可用', failed: '失败' }
@@ -67,7 +67,8 @@ export default function ModelSettingsPanel() {
         </> : <>
           <label>API 服务地址<input id="model-url" type="url" value={form.base_url} placeholder="https://平台地址/v1/" onChange={event => setForm({ ...form, base_url: event.target.value })} /></label>
           <label>模型名<input id="model-name" maxLength={200} value={form.model} onChange={event => setForm({ ...form, model: event.target.value })} /></label>
-          <label>API 密钥（{form.api_key_set ? '已设置，留空保留' : '未设置'}）<input id="model-key" type="password" autoComplete="new-password" value={key} onChange={event => setKey(event.target.value)} /></label>
+          <label>API 密钥（{form.api_key_set ? (form.api_key_source === 'saved' ? '已设置，留空保留同一服务密钥' : `环境密钥已设置：${form.api_key_source}`) : '未设置'}）<input id="model-key" type="password" autoComplete="new-password" value={key} onChange={event => setKey(event.target.value)} /></label>
+          <p>留空时使用该服务的已存密钥或环境配置。修改服务地址后，保存时重新确认密钥来源。</p>
           <label>结构化输出<select id="model-output-mode" value={form.output_mode} onChange={event => setForm({ ...form, output_mode: event.target.value as Configuration['output_mode'] })}>
             <option value="json_object">JSON 模式（后端校验完整规则）</option><option value="json_schema">严格 JSON Schema（平台需支持）</option>
           </select></label>

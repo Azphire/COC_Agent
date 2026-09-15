@@ -92,6 +92,7 @@ class AgentModelClient:
                 call_prompt = list(prompt)
                 usage = None
                 issues = []
+                request_id = response_model = error_category = None
                 try:
                     async with asyncio.timeout(self.settings.model_timeout_seconds):
                         result = await self.adapter.generate(
@@ -104,6 +105,7 @@ class AgentModelClient:
                     if not isinstance(result, ModelResponse):
                         raise ModelFormatError("模型输出格式无效")
                     usage = result.token_usage
+                    request_id, response_model = result.request_id, result.response_model
                     if response_schema:
                         value = result.structured
                         if isinstance(value, BaseModel):
@@ -132,6 +134,9 @@ class AgentModelClient:
                         self.configuration.verification = "available"
                     return result, int((time.monotonic() - started) * 1000)
                 except (ValidationError, ValueError, ModelFormatError) as error:
+                    error_category = type(error).__name__
+                    request_id = request_id or getattr(error, "request_id", None)
+                    response_model = response_model or getattr(error, "response_model", None)
                     usage = usage or getattr(error, "token_usage", None)
                     issues = (
                         schema_issues(error, response_schema)
@@ -154,9 +159,13 @@ class AgentModelClient:
                         }
                     ]
                 except ModelError as error:
+                    error_category = getattr(error, "error_category", type(error).__name__)
+                    request_id = request_id or getattr(error, "request_id", None)
+                    response_model = response_model or getattr(error, "response_model", None)
                     usage = usage or getattr(error, "token_usage", None)
                     raise
                 except TimeoutError:
+                    error_category = "TimeoutError"
                     raise ModelError("模型请求超时") from None
                 finally:
                     call = {
@@ -166,6 +175,9 @@ class AgentModelClient:
                         "latency_ms": int((time.monotonic() - call_started) * 1000),
                         "attempt": attempt + 1,
                         "token_usage": usage,
+                        "request_id": request_id,
+                        "response_model": response_model,
+                        "error_category": error_category,
                         "validation_issues": issues,
                         "schema": response_schema.__name__ if response_schema else None,
                         "input_chars": len(json.dumps(call_prompt, ensure_ascii=False)),
