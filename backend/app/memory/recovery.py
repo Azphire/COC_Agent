@@ -294,6 +294,14 @@ class SummaryRecoveryService:
                             f"场景 {r['scene_id']}：{r['text']}"
                             for r in incidental
                         )
+                    from app.memory.state_facts import summary_state_facts
+
+                    content += "\n" + summary_state_facts(
+                        room.session_state,
+                        await self.agents.entities.public(session, room.id),
+                        await self.agents.rooms.public_inventory(session, room),
+                        source_events,
+                    )
                     if old:
                         old.active = False
                     seqs = [e["seq"] for e in context["events"]]

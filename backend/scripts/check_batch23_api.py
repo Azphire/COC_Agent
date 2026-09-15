@@ -177,7 +177,7 @@ class ApiCheck(Check):
             assert json.loads(ws.recv())["type"] == "echo"
         config = self.request("GET", "/model/config")
         status = self.request("GET", "/model/status")
-        with sqlite3.connect(self.directory / "game.db") as db:
+        with sqlite3.connect(getattr(self, "database_path", self.directory / "game.db")) as db:
             calls = db.execute("SELECT COUNT(*) FROM agent_model_calls").fetchone()[0]
         self.result["launcher"].append(
             {
@@ -458,7 +458,7 @@ class ApiCheck(Check):
         write(self.directory / "agent-debug.json", debug)
         write(self.directory / "final-room.json", self.request("GET", self.prefix))
         write(self.directory / "all-checks.json", self.request("GET", self.prefix + "/checks"))
-        with sqlite3.connect(self.directory / "game.db") as db:
+        with sqlite3.connect(getattr(self, "database_path", self.directory / "game.db")) as db:
             calls = [
                 json.loads(r[0])
                 for r in db.execute("SELECT document FROM agent_model_calls ORDER BY rowid")

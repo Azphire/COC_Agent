@@ -369,7 +369,12 @@ def guard_initial_reselection(plan, facts, runtime):
 
 
 def searchable_entity_ids(entities, local, scene):
-    """A configured possession check permits searching, never early revelation."""
+    """Local inspectable targets can be selected before their contents are revealed.
+
+    Automatic discoveries (for example a wall map) need a selectable identifier
+    too. Selection still runs through normal reveal/interaction prerequisites;
+    it neither publishes contents nor grants possession.
+    """
     from app.agents.check_policy import entity_access
 
     result = {
@@ -377,7 +382,7 @@ def searchable_entity_ids(entities, local, scene):
         for eid, e in entities.items()
         if eid in local
         and e.get("type") in {"item", "clue", "location"}
-        and entity_access(e) == "requires_check"
+        and entity_access(e) in {"automatic", "requires_check"}
     }
     result.update(
         rule["item_id"]
