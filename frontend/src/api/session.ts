@@ -27,7 +27,9 @@ export async function api<T>(path: string, token: string, method = 'GET', body?:
   })
   if (!response.ok) {
     const data = await response.json().catch(() => ({}))
-    throw new ApiError(data.detail?.message || (typeof data.detail === 'string' ? data.detail : '') || `请求失败（${response.status}），请检查输入`, response.status)
+    const issues = (data.detail?.issues || []).map((issue: { field: string; message: string }) => `${issue.field}：${issue.message}`).join('\n')
+    const message = data.detail?.message || (typeof data.detail === 'string' ? data.detail : '') || `请求失败（${response.status}），请检查输入`
+    throw new ApiError([message, issues].filter(Boolean).join('\n'), response.status)
   }
   return response.json()
 }

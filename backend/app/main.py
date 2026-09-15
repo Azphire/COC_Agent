@@ -19,17 +19,19 @@ from app.api import (
     model,
     module_ir,
     preparation,
+    room_submissions,
     rooms,
     websocket,
 )
 from app.auth import require_host
-from app.character.repository import VersionConflict
-from app.character.service import CharacterError
+from app.character.repository import CharacterRepository, VersionConflict
+from app.character.service import CharacterError, CharacterService
 from app.config import Settings
 from app.models.settings import ModelSettings
 from app.persistence.database import Database
 from app.rooms.realtime import RoomHub
 from app.rooms.service import RoomError, RoomService
+from app.rooms.submissions import SubmissionService
 from app.rules.loader import load_rulesets
 
 
@@ -47,6 +49,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         application.state.room_service.hub = application.state.room_hub
         try:
             application.state.character_rulesets = load_rulesets()
+            application.state.room_service.submissions = SubmissionService(
+                application.state.room_service,
+                CharacterService(
+                    CharacterRepository(database), application.state.character_rulesets
+                ),
+            )
             await database.initialize()
             agent_service = AgentService(
                 application.state.room_service,
@@ -81,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(websocket.router)
     application.include_router(characters.router)
     application.include_router(rooms.router)
+    application.include_router(room_submissions.router)
     application.include_router(rooms.ws_router)
     application.include_router(agents.router)
     application.include_router(knowledge.router)

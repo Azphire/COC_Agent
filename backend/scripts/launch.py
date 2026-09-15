@@ -137,6 +137,7 @@ def preflight():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lan", action="store_true", help="Allow LAN players via frontend")
+    parser.add_argument("--tailscale", action="store_true", help="Detect Tailscale remote entry")
     parser.add_argument("--frontend-port", type=int, default=5173)
     parser.add_argument("--service", choices=["backend", "frontend"], help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -165,7 +166,7 @@ def main():
         if not 1 <= args.frontend_port <= 65535 or args.frontend_port == settings.app_port:
             raise RuntimeError("Frontend port must be 1-65535 and differ from APP_PORT.")
         lan = args.lan or settings.app_host == "0.0.0.0"
-        frontend_host = "0.0.0.0" if lan else "127.0.0.1"
+        frontend_host = "0.0.0.0" if lan or args.tailscale else "127.0.0.1"
         available_port(settings.app_host, settings.app_port)
         available_port(frontend_host, args.frontend_port)
         print(
@@ -238,6 +239,12 @@ def main():
                     raise RuntimeError("Services did not become ready within 45 seconds.")
                 time.sleep(0.3)
         print(f"\nReady: {address}\nModel settings: {address}/#/status", flush=True)
+        print(f"本机房间入口: {address}/#/rooms", flush=True)
+        if args.tailscale:
+            from scripts.tailscale_access import detect_tailscale
+
+            print(detect_tailscale().entry(args.frontend_port), flush=True)
+            print("异地玩家使用原房间邀请码；双方须已登录获准连接的 Tailscale 网络。", flush=True)
         if lan:
             addresses = sorted(
                 {
@@ -247,7 +254,7 @@ def main():
                 }
             )
             for ip in addresses:
-                print(f"Player join: http://{ip}:{args.frontend_port}/#/rooms", flush=True)
+                print(f"LAN player join: http://{ip}:{args.frontend_port}/#/rooms", flush=True)
             print("Players use the room invite code; keep the host key private.", flush=True)
         print("Ctrl+C stops only the services started by this launcher.", flush=True)
         while all(p.poll() is None for p in processes):

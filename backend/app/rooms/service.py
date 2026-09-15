@@ -84,6 +84,7 @@ class RoomService:
         self.dice = DiceService()
         self.hub = None
         self.agent_service = None
+        self.submissions = None
 
     def lock(self, room_id):
         return self.locks.setdefault(str(room_id), asyncio.Lock())
@@ -217,6 +218,8 @@ class RoomService:
                 }
                 for s in slots
             ],
+            "character_submissions": await self.submissions.list(session, room, identity)
+            if self.submissions else [],
             **(
                 {"game": await self.agent_service.view(session, room, identity)}
                 if self.agent_service
@@ -388,6 +391,18 @@ class RoomService:
         if self.hub:
             await self.hub.broadcast(str(room_id), events)
 
+    async def receipt(self, session, room, actor, request_id, request_hash):
+        previous = await session.scalar(
+            select(RoomEvent).where(
+                RoomEvent.room_id == room.id,
+                RoomEvent.actor_member_id == actor,
+                RoomEvent.client_request_id == str(request_id),
+            )
+        )
+        if previous:
+            require(previous.request_hash == request_hash, "client_request_id 已用于其他内容")
+        return previous
+
     async def command(self, room_id, token, action, body=None, target=None):
         from contextlib import nullcontext
         config = getattr(self, "model_configuration", None)
@@ -443,7 +458,48 @@ class RoomService:
             await asyncio.gather(stopped_task, return_exceptions=True)
         return response
 
+
+    def publish_character(self, session, room, actor, character):
+        slot = RoomCharacterSlot(
+            id=str(uuid4()),
+            room_id=room.id,
+            source_character_id=str(character.id),
+            character_snapshot=character.model_dump(mode="json"),
+            public_summary={
+                "name": character.name,
+                "age": character.age,
+                "occupation": character.occupation,
+                "ruleset_id": character.ruleset_id,
+            },
+            member_id=None,
+            published_at=utc_now(),
+        )
+        session.add(slot)
+        state = SessionStateV1.model_validate(room.session_state)
+        state.characters[UUID(slot.id)] = CharacterRuntimeV1(
+            hp_max=character.derived_values.get("hp"),
+            mp_max=character.derived_values.get("mp"),
+            mp_recovery_per_hour=(1 + character.effective_attributes.get("pow", 0) // 100)
+            if character.ruleset_id == "coc7-character-creation"
+            else 0,
+            san_max=max(0, 99 - character.skill_values.get("cthulhu_mythos", 0))
+            if character.ruleset_id == "coc7-character-creation"
+            else None,
+            **{key: character.derived_values.get(key) for key in ("hp", "mp", "san", "luck")},
+        )
+        room.session_state = state.model_dump(mode="json")
+        self.append(
+            session,
+            room,
+            "character.published",
+            actor,
+            {"slot_id": slot.id, "public_summary": slot.public_summary},
+        )
+        return slot
+
     async def apply(self, session, room, identity, action, body, target):
+        if action.startswith("submission."):
+            return await self.submissions.command(session, room, identity, action, body, target)
         if self.agent_service and action.startswith("combat."):
             return await self.agent_service.combat.command(
                 session, room, identity, action.removeprefix("combat."), body
@@ -585,41 +641,7 @@ class RoomService:
             character = await CharacterRepository(self.database).get(body.character_id)
             require(character is not None, "角色不存在", 404)
             require(character.status == "finalized", "只能发布最终确认的角色", 422)
-            slot = RoomCharacterSlot(
-                id=str(uuid4()),
-                room_id=room.id,
-                source_character_id=str(character.id),
-                character_snapshot=character.model_dump(mode="json"),
-                public_summary={
-                    "name": character.name,
-                    "age": character.age,
-                    "occupation": character.occupation,
-                    "ruleset_id": character.ruleset_id,
-                },
-                member_id=None,
-                published_at=utc_now(),
-            )
-            session.add(slot)
-            state = SessionStateV1.model_validate(room.session_state)
-            state.characters[UUID(slot.id)] = CharacterRuntimeV1(
-                hp_max=character.derived_values.get("hp"),
-                mp_max=character.derived_values.get("mp"),
-                mp_recovery_per_hour=(1 + character.effective_attributes.get("pow", 0) // 100)
-                if character.ruleset_id == "coc7-character-creation"
-                else 0,
-                san_max=max(0, 99 - character.skill_values.get("cthulhu_mythos", 0))
-                if character.ruleset_id == "coc7-character-creation"
-                else None,
-                **{key: character.derived_values.get(key) for key in ("hp", "mp", "san", "luck")},
-            )
-            room.session_state = state.model_dump(mode="json")
-            self.append(
-                session,
-                room,
-                "character.published",
-                actor,
-                {"slot_id": slot.id, "public_summary": slot.public_summary},
-            )
+            self.publish_character(session, room, actor, character)
         elif action == "slot.remove":
             require(room.status == "lobby", "只能在大厅撤下角色")
             slot = slot_by_id.get(target)
@@ -767,15 +789,10 @@ class RoomService:
                 403,
             )
             request_hash = digest(action + json.dumps(body.model_dump(mode="json"), sort_keys=True))
-            previous = await session.scalar(
-                select(RoomEvent).where(
-                    RoomEvent.room_id == room.id,
-                    RoomEvent.actor_member_id == actor,
-                    RoomEvent.client_request_id == str(body.client_request_id),
-                )
+            previous = await self.receipt(
+                session, room, actor, body.client_request_id, request_hash
             )
             if previous:
-                require(previous.request_hash == request_hash, "client_request_id 已用于其他内容")
                 return {"event": event_view(previous)}
             if action == "roll":
                 try:

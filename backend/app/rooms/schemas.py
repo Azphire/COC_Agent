@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import Field, SecretStr, StrictBool, StrictInt, StringConstraints
 
-from app.domain.character import DomainModel
+from app.domain.character import CharacterExport, DomainModel
 from app.preparation.runtime_schemas import ModuleRuntimeState
 from app.rooms.combat_schemas import CombatState, Injury, Weapon
 from app.rooms.sanity_schemas import SanityState
@@ -80,6 +80,22 @@ class ReadyRequest(DomainModel):
 
 class PublishCharacter(DomainModel):
     character_id: UUID
+
+
+class PreviewCharacterSubmission(DomainModel):
+    document: CharacterExport
+
+
+class SubmitCharacter(PreviewCharacterSubmission):
+    expected_version: Annotated[StrictInt, Field(ge=0)]
+    client_request_id: UUID
+
+
+class ReviewCharacterSubmission(DomainModel):
+    expected_version: Annotated[StrictInt, Field(ge=1)]
+    decision: Literal["accept", "reject"]
+    reason: ShortText = ""
+    client_request_id: UUID
 
 
 class AssignCharacter(DomainModel):

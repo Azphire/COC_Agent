@@ -9,6 +9,7 @@ import { charactersApi } from '../api/characters'
 import type { Character } from '../api/characters'
 import HostUnlock from '../components/HostUnlock'
 import AgentGamePanel from '../components/AgentGamePanel'
+import CharacterSubmissionPanel from '../components/CharacterSubmissionPanel'
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : '请求失败，请重试' }
 
@@ -218,6 +219,7 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
         <button disabled={busy}>添加席位</button>
       </form>}
       </section>
+      <CharacterSubmissionPanel room={room} token={token} acceptRoom={acceptRoom} />
       <section><h2>房间调查员</h2>
         {isHost && room.status === 'lobby' && <form onSubmit={event => { event.preventDefault(); void command('/character-slots', { character_id: publishId }) }}>
           <label>已确认的本地角色<select id="publish-character" value={publishId} onChange={e => setPublishId(e.target.value)} required><option value="">选择角色</option>{characters.filter(c => !room.character_slots.some(s => s.character_snapshot?.id === c.id)).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><button disabled={busy || !publishId}>发布角色</button>

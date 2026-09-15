@@ -60,6 +60,17 @@ class CharacterRepository:
         events: list[tuple[str, dict]],
         expected_version: int | None = None,
     ) -> None:
+        async with self.database.sessions.begin() as session:
+            await self.save_in_session(session, character, events, expected_version)
+
+    async def save_in_session(
+        self,
+        session,
+        character: Character,
+        events: list[tuple[str, dict]],
+        expected_version: int | None = None,
+    ) -> None:
+        """Participate in the caller's transaction (including room acceptance)."""
         data = dict(
             name=character.name,
             status=character.status,
@@ -68,37 +79,36 @@ class CharacterRepository:
             updated_at=character.updated_at,
             document=character.model_dump(mode="json", exclude={"roll_records"}),
         )
-        async with self.database.sessions.begin() as session:
-            if expected_version is None:
-                session.add(CharacterDraftRow(id=str(character.id), **data))
-                await session.flush()
-                for position, record in enumerate(character.roll_records):
-                    session.add(
-                        CharacterRollRow(
-                            id=str(record.id),
-                            character_id=str(character.id),
-                            position=position,
-                            record=record.model_dump(mode="json"),
-                        )
-                    )
-            else:
-                result = await session.execute(
-                    update(CharacterDraftRow)
-                    .where(
-                        CharacterDraftRow.id == str(character.id),
-                        CharacterDraftRow.version == expected_version,
-                    )
-                    .values(**data)
-                )
-                if result.rowcount != 1:
-                    raise VersionConflict
-            for event_type, payload in events:
+        if expected_version is None:
+            session.add(CharacterDraftRow(id=str(character.id), **data))
+            await session.flush()
+            for position, record in enumerate(character.roll_records):
                 session.add(
-                    CharacterEventRow(
-                        id=str(uuid4()),
+                    CharacterRollRow(
+                        id=str(record.id),
                         character_id=str(character.id),
-                        type=event_type,
-                        occurred_at=utc_now(),
-                        payload={"version": character.version, **payload},
+                        position=position,
+                        record=record.model_dump(mode="json"),
                     )
                 )
+        else:
+            result = await session.execute(
+                update(CharacterDraftRow)
+                .where(
+                    CharacterDraftRow.id == str(character.id),
+                    CharacterDraftRow.version == expected_version,
+                )
+                .values(**data)
+            )
+            if result.rowcount != 1:
+                raise VersionConflict
+        for event_type, payload in events:
+            session.add(
+                CharacterEventRow(
+                    id=str(uuid4()),
+                    character_id=str(character.id),
+                    type=event_type,
+                    occurred_at=utc_now(),
+                    payload={"version": character.version, **payload},
+                )
+            )

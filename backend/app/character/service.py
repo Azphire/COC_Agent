@@ -221,13 +221,19 @@ class CharacterService:
 
     async def finalize(self, character_id: UUID, version: int) -> CharacterSheet:
         character = await self.get(character_id)
+        sheet = self.finalize_candidate(character, version)
+        await self.repository.save(sheet, [("finalized", {})], expected_version=version)
+        return sheet
+
+    def finalize_candidate(self, character: Character, version: int) -> CharacterSheet:
+        """Validate and freeze without committing, also used by room acceptance."""
         self.check_editable(character, version)
         ruleset = self.ruleset(character.ruleset_id, character.ruleset_version)
         self.check_known(character, ruleset)
         recalculate(character, ruleset)
         if not character.validation.valid:
             raise CharacterError(422, "角色校验未通过，草稿已保留", character.validation.issues)
-        sheet = CharacterSheet.model_validate(
+        return CharacterSheet.model_validate(
             {
                 **character.model_dump(),
                 "status": "finalized",
@@ -235,8 +241,6 @@ class CharacterService:
                 "updated_at": utc_now(),
             }
         )
-        await self.repository.save(sheet, [("finalized", {})], expected_version=version)
-        return sheet
 
     async def export(self, character_id: UUID) -> CharacterExport:
         character = await self.get(character_id)
@@ -253,6 +257,14 @@ class CharacterService:
         )
 
     async def import_character(self, document: CharacterExport) -> CharacterDraft:
+        character = self.prepare_import(document)
+        await self.repository.save(
+            character, [("imported", {"original_id": str(document.character.id)})]
+        )
+        return character
+
+    def prepare_import(self, document: CharacterExport) -> CharacterDraft:
+        """Recalculate an imported draft without storing it or generating any dice."""
         original = document.character
         if (document.ruleset.id, document.ruleset.version) != (
             original.ruleset_id,
@@ -260,6 +272,8 @@ class CharacterService:
         ):
             raise CharacterError(422, "导入文件的规则集元数据不一致")
         ruleset = self.ruleset(document.ruleset.id, document.ruleset.version)
+        if document.ruleset.verification_status != ruleset.verification_status:
+            raise CharacterError(422, "导入文件的规则集核对状态不匹配")
         character = CharacterDraft.model_validate(
             {
                 **original.model_dump(),
@@ -277,5 +291,4 @@ class CharacterService:
         )
         self.check_known(character, ruleset)
         recalculate(character, ruleset)
-        await self.repository.save(character, [("imported", {"original_id": str(original.id)})])
         return character

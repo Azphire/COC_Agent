@@ -85,6 +85,32 @@ class RoomEvent(Base):
     request_hash: Mapped[str | None] = mapped_column(String(64))
 
 
+class RoomCharacterSubmission(Base):
+    __tablename__ = "room_character_submissions"
+    __table_args__ = (
+        UniqueConstraint("room_id", "member_id", "version"),
+        Index(
+            "uq_room_pending_submission",
+            "room_id",
+            "member_id",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    room_id: Mapped[str] = mapped_column(ForeignKey("game_rooms.id"), index=True)
+    member_id: Mapped[str] = mapped_column(ForeignKey("room_members.id"))
+    version: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16))
+    document: Mapped[dict] = mapped_column(JSON)
+    character: Mapped[dict] = mapped_column(JSON)
+    reason: Mapped[str] = mapped_column(String(2000), default="")
+    slot_id: Mapped[str | None] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class RoomSnapshot(Base):
     __tablename__ = "room_snapshots"
 
