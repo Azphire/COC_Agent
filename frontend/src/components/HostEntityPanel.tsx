@@ -21,7 +21,7 @@ export default function HostEntityPanel({ room, token, acceptRoom }: Props) {
         const [tasks, requests, nextEntities] = await Promise.all([
           api<Preparation[]>('/module-preparations', token), api<HostReview[]>(prefix + '/review-requests', token), api<Entity[]>(prefix + '/host-entities', token),
         ])
-        if (active) { setPreparations(tasks.filter(p => p.status === 'approved')); setReviews(requests); setEntities(nextEntities) }
+        if (active) { setPreparations(tasks.filter(p => p.status === 'approved' && p.package_bindable !== false)); setReviews(requests); setEntities(nextEntities) }
       } catch (e) { if (active) setError(e instanceof Error ? e.message : '读取失败') }
     }, 100)
     return () => { active = false; clearTimeout(timer) }

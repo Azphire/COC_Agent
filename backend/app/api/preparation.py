@@ -1,15 +1,35 @@
+import hashlib
+import json
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.api.agents import Service, Token, host
 from app.persistence.preparation_models import GenerationRun, HostReviewRequest, ModulePreparation
 from app.preparation import schemas as s
 from app.preparation.service import entity_view
-from app.rooms.service import require
+from app.rooms.service import RoomError, require
 
 router = APIRouter(prefix="/api")
+
+
+@router.post("/module-preparations/import", dependencies=host)
+async def import_package(request: Request, svc: Service):
+    content = bytearray()
+    async for chunk in request.stream():
+        content.extend(chunk)
+        require(len(content) <= 15_000_000, "准备包超过 15 MB", 413)
+    try:
+        package = json.loads(content.decode("utf-8-sig"))
+        require(isinstance(package, dict), "准备包必须是 JSON 对象", 422)
+        return await svc.packages.import_package(package, hashlib.sha256(content).hexdigest())
+    except ValidationError as error:
+        fields = [".".join(map(str, e["loc"])) + ": " + e["type"] for e in error.errors()]
+        raise RoomError("准备包字段校验失败：" + "；".join(fields[:8]), 422) from None
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        raise RoomError("准备包校验失败：" + str(error)[:500], 422) from None
 
 
 @router.post("/module-preparations", dependencies=host)

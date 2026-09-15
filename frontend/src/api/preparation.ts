@@ -1,10 +1,25 @@
 export type EntityType = 'scene' | 'npc' | 'location' | 'clue' | 'item'
-export type CoverageSummary = { blocks_accounted: number; playable_scenes: number; entities: number; transitions: number; outcomes: string[]; reviewer: string; source_accounting_complete: boolean; runtime_complete: boolean; missing_combat_values: Record<string, string[]> }
+import { authHeaders, ApiError } from './session'
+
+export type CoverageSummary = { blocks_accounted: number; playable_scenes: number; entities: number; transitions: number; outcomes: string[]; reviewer: string; source_accounting_complete: boolean; static_validation_passed?: boolean; required_operations_ready?: boolean; missing_combat_values: Record<string, string[]>; operation_gaps?: Record<string, Record<string, string[]>>; source_classification?: Record<string, number>; source_gaps?: { id: string; status: string; gaps: string[] }[]; numeric_review?: { status: string; approval_id?: string; pending_entity_keys: string[] }; runtime_acceptance?: { status: string; verified_scope: string[]; not_verified: string[] } }
+export type PackageImport = { preparation_id: string; reused: boolean; preparation: Preparation; coverage: CoverageSummary }
+export async function importPreparation(file: File, token: string): Promise<PackageImport> {
+  if (file.size > 15_000_000) throw new Error('准备包超过 15 MB')
+  const response = await fetch('/api/module-preparations/import', {
+    method: 'POST', headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+    body: file, signal: AbortSignal.timeout(180000),
+  })
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}))
+    throw new ApiError(data.detail?.message || (typeof data.detail === 'string' ? data.detail : '') || `导入失败（${response.status}）`, response.status)
+  }
+  return response.json()
+}
 export type NPCCheckStats = { attributes: Record<string, number>; skills: Record<string, number>; source: string; page?: number | null }
 export const entityLabels: Record<EntityType, string> = { scene: '场景', npc: '人物', location: '地点', clue: '线索', item: '物品' }
 export type SourceReference = { source_title: string; source_hash: string; physical_page: number | null; page_kind: string }
 export type PublicEntity = { holder_name?: string | null; held_by_member_id?: string | null; id: string; type: EntityType; title: string; public_summary: string; source_references: SourceReference[]; state: string; revealed_time: string | null; correction_reference: number | null; origin?: string; fact_scope?: 'current_scene' | 'historical' | 'unknown'; scope_label?: string }
 export type Entity = PublicEntity & { combat_template?: Record<string, unknown> | null; reviewed_by?: string; review_basis?: string; source_block_ids?: string[]; interactions?: Record<string, unknown>[]; check_stats?: NPCCheckStats | null; sanity_effects?: Record<string, unknown>[]; preparation_id: string; keeper_summary: string; status: string; initial_visibility: string; evidence_ids: string[]; source_pages: number[]; suggested_checks: { kind: string; name: string; difficulty: string }[]; reveal_conditions: { access_policy?: 'automatic' | 'requires_check' | 'requires_condition' | 'host_review' | null; scene_id: string | null; required_entity_ids: string[]; successful_check: { kind: string; name: string; difficulty: string } | null; note: string }; confidence: number | null; validation_errors: string[]; generated_by: string; host_edited: boolean; version: number }
-export type Preparation = { coverage_summary?: CoverageSummary; reviewed_by?: string; activity?: { time: string; action: string; title: string }[]; id: string; source_id: string; source_hash: string; display_title: string; status: string; version: number; scope: { page_start: number | null; page_end: number | null; section: string | null }; source: { file_types?: string[]; mime_type: string; page_count: number; chunk_count: number } | null; initial_scene_entity_id: string | null; required_entity_ids: string[]; generated_entity_count: number; approved_entity_count: number; rejected_entity_count: number; model_call_count: number; safe_error: string | null; completed_batches: number; total_batches: number }
+export type Preparation = { package_bindable?: boolean; coverage_summary?: CoverageSummary; reviewed_by?: string; activity?: { time: string; action: string; title: string }[]; id: string; source_id: string; source_hash: string; display_title: string; status: string; version: number; scope: { page_start: number | null; page_end: number | null; section: string | null }; source: { title: string; relative_reference: string; file_types?: string[]; mime_type: string; page_count: number; chunk_count: number } | null; initial_scene_entity_id: string | null; required_entity_ids: string[]; generated_entity_count: number; approved_entity_count: number; rejected_entity_count: number; model_call_count: number; safe_error: string | null; completed_batches: number; total_batches: number }
 export type Relation = { id: string; source_entity_id: string; target_entity_id: string; relation_type: string; keeper_note: string; status: string; validation_errors: string[] }
 export type HostReview = { id: string; cycle_id: string; request_type: string; proposed_title: string; proposed_public_summary: string; keeper_reason: string; entity_type: EntityType; evidence: (SourceReference & { evidence_id: string; excerpt: string })[]; status: string; host_response: string }

@@ -56,6 +56,9 @@ def generation_contract(schema, context):
             if member_id != ids["actor_member_id"]
         ]
         targets = [t["id"] for t in context.get("current_targets", [])]
+        # The KP must be able to select a local undiscovered search result.
+        # Its access conditions still apply; players need not know its name.
+        targets += [t["entity_id"] for t in context.get("check_requirements", [])]
         targets += [t["target_scene_node_id"] for t in context.get("approved_exits", [])]
         focus_base = create_model(
             "TurnFocus",

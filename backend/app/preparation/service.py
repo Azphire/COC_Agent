@@ -112,6 +112,55 @@ class PreparationService:
 
     async def view(self, session, prep):
         entities = await self.entities(session, prep.id)
+        package_view = {}
+        if prep.document.get("package_sha256"):
+            from app.persistence.module_ir_models import StructureOverride
+            from app.rooms.combat_schemas import CombatTemplate
+
+            by_id = {e.id: e for e in entities}
+            operations = {}
+            for eid, required in prep.document.get("package_required_operations", {}).items():
+                template = by_id[eid].document.get("combat_template") if eid in by_id else None
+                operations[eid] = {
+                    op: CombatTemplate.model_validate(template).missing(op)
+                    if template
+                    else ["combat_template"]
+                    for op in required
+                }
+            gaps = {
+                by_id[eid].document["title"] if eid in by_id else eid: {
+                    op: fields for op, fields in checks.items() if fields
+                }
+                for eid, checks in operations.items()
+                if any(checks.values())
+            }
+            summary = dict(prep.document["coverage_summary"])
+            review = dict(summary["numeric_review"])
+            keys = prep.document["package_entity_ids"]
+            pending = [
+                key
+                for key, eid in keys.items()
+                if eid not in by_id or by_id[eid].status != "approved"
+            ]
+            if not pending and review["status"] == "requires_host_review":
+                review["status"] = "host_reviewed"
+            review["pending_entity_keys"] = pending
+            summary.update(
+                operation_gaps=gaps, required_operations_ready=not gaps, numeric_review=review
+            )
+            structure = await session.get(StructureOverride, prep.id)
+            package_view = {
+                "coverage_summary": summary,
+                "package_bindable": bool(
+                    prep.status == "approved"
+                    and not gaps
+                    and not pending
+                    and structure
+                    and structure.approved_snapshot_id
+                    and structure.document.get("approved")
+                    and structure.document.get("preparation_version") == prep.version
+                ),
+            }
         runs = list(
             await session.scalars(
                 select(GenerationRun)
@@ -122,6 +171,7 @@ class PreparationService:
         source = self.repository.source(prep.source_id, prep.source_hash)
         return {
             **prep.document,
+            **package_view,
             **{k: v for k, v in row_view(prep).items() if k != "document"},
             "generated_entity_count": sum(e.document["generated_by"] == "model" for e in entities),
             "approved_entity_count": sum(e.status == "approved" for e in entities),
@@ -130,6 +180,8 @@ class PreparationService:
             "model_call_count": sum(len(r.calls) for r in runs),
             "runs": [{k: v for k, v in row_view(r).items() if k != "evidence"} for r in runs],
             "source": {
+                "title": source.title,
+                "relative_reference": source.relative_reference,
                 "mime_type": source.mime_type,
                 "file_types": sorted(
                     {
@@ -390,79 +442,99 @@ class PreparationService:
 
     async def approve(self, preparation_id):
         async with self.rooms.transaction() as session:
-            prep = await self.get(session, preparation_id)
-            require(prep.status not in {"extracting", "stale", "failed"}, "任务不可批准")
-            entities = {e.id: e for e in await self.entities(session, prep.id)}
-            approved = {k: e for k, e in entities.items() if e.status == "approved"}
-            scene = approved.get(prep.document["initial_scene_entity_id"])
+            return await self.approve_in_session(session, preparation_id)
+
+    async def approve_in_session(self, session, preparation_id):
+        prep = await self.get(session, preparation_id)
+        require(prep.status not in {"extracting", "stale", "failed"}, "任务不可批准")
+        entities = {e.id: e for e in await self.entities(session, prep.id)}
+        if prep.document.get("package_sha256"):
+            from app.rooms.combat_schemas import CombatTemplate
+
             require(
-                scene and scene.type == "scene" and scene.document["public_summary"].strip(),
-                "请批准并设置具有公开摘要的初始场景",
+                all(e.status == "approved" for e in entities.values()),
+                "导入包仍有实体待审阅；请先批准补充数值及全部实体",
                 422,
             )
-            required = set(prep.document["required_entity_ids"])
-            require(required <= approved.keys(), "开场必要实体尚未全部批准", 422)
+            for eid, operations in prep.document.get("package_required_operations", {}).items():
+                template = entities[eid].document.get("combat_template")
+                require(template, f"必需 NPC {entities[eid].document['title']} 缺少数值模板", 422)
+                for operation in operations:
+                    missing = CombatTemplate.model_validate(template).missing(operation)
+                    require(
+                        not missing,
+                        f"{entities[eid].document['title']} / {operation} 缺少："
+                        + ", ".join(missing),
+                        422,
+                    )
+        approved = {k: e for k, e in entities.items() if e.status == "approved"}
+        scene = approved.get(prep.document["initial_scene_entity_id"])
+        require(
+            scene and scene.type == "scene" and scene.document["public_summary"].strip(),
+            "请批准并设置具有公开摘要的初始场景",
+            422,
+        )
+        required = set(prep.document["required_entity_ids"])
+        require(required <= approved.keys(), "开场必要实体尚未全部批准", 422)
+        require(
+            any(e.type in {"npc", "location", "clue", "item"} for e in approved.values()),
+            "请批准至少一个开场相关人物、地点、线索或物品",
+            422,
+        )
+        for entity in approved.values():
             require(
-                any(e.type in {"npc", "location", "clue", "item"} for e in approved.values()),
-                "请批准至少一个开场相关人物、地点、线索或物品",
+                not await self.validation_errors(session, prep, entity),
+                "批准实体的证据失效",
                 422,
             )
-            for entity in approved.values():
+            condition = entity.document["reveal_conditions"]
+            for rule in entity.document.get("interactions", []):
+                refs = {
+                    *rule["required_item_ids"],
+                    *rule["required_entity_ids"],
+                    *rule["acquire_item_ids"],
+                    *rule["reveal_entity_ids"],
+                    *rule["following_npc_ids"],
+                    *(r["entity_id"] for r in rule.get("required_sanity", [])),
+                }
+                require(refs <= approved.keys(), "交互引用未批准实体", 422)
                 require(
-                    not await self.validation_errors(session, prep, entity),
-                    "批准实体的证据失效",
+                    all(
+                        approved[i].type == "item"
+                        for i in [*rule["required_item_ids"], *rule["acquire_item_ids"]]
+                    ),
+                    "物品条件必须引用item",
                     422,
                 )
-                condition = entity.document["reveal_conditions"]
-                for rule in entity.document.get("interactions", []):
-                    refs = {
-                        *rule["required_item_ids"],
-                        *rule["required_entity_ids"],
-                        *rule["acquire_item_ids"],
-                        *rule["reveal_entity_ids"],
-                        *rule["following_npc_ids"],
-                        *(r["entity_id"] for r in rule.get("required_sanity", [])),
-                    }
-                    require(refs <= approved.keys(), "交互引用未批准实体", 422)
-                    require(
-                        all(
-                            approved[i].type == "item"
-                            for i in [*rule["required_item_ids"], *rule["acquire_item_ids"]]
-                        ),
-                        "物品条件必须引用item",
-                        422,
-                    )
+            require(
+                set(condition["required_entity_ids"]) <= approved.keys(),
+                "公开条件引用了未批准实体",
+                422,
+            )
+            require(
+                not condition["scene_id"]
+                or condition["scene_id"] in approved
+                and approved[condition["scene_id"]].type == "scene",
+                "公开条件场景必须批准",
+                422,
+            )
+            if entity.document["initial_visibility"] == "revealed":
+                require(entity.document["public_summary"].strip(), "初始公开实体缺少公开摘要", 422)
                 require(
-                    set(condition["required_entity_ids"]) <= approved.keys(),
-                    "公开条件引用了未批准实体",
+                    not condition["successful_check"] and not condition["required_entity_ids"],
+                    "初始公开实体不能要求尚未完成的检定或前置实体",
                     422,
                 )
+        for relation in await self.relations(session, prep.id):
+            if relation.status == "approved":
                 require(
-                    not condition["scene_id"]
-                    or condition["scene_id"] in approved
-                    and approved[condition["scene_id"]].type == "scene",
-                    "公开条件场景必须批准",
+                    {relation.source_entity_id, relation.target_entity_id} <= approved.keys(),
+                    "批准关系不能引用未批准实体",
                     422,
                 )
-                if entity.document["initial_visibility"] == "revealed":
-                    require(
-                        entity.document["public_summary"].strip(), "初始公开实体缺少公开摘要", 422
-                    )
-                    require(
-                        not condition["successful_check"] and not condition["required_entity_ids"],
-                        "初始公开实体不能要求尚未完成的检定或前置实体",
-                        422,
-                    )
-            for relation in await self.relations(session, prep.id):
-                if relation.status == "approved":
-                    require(
-                        {relation.source_entity_id, relation.target_entity_id} <= approved.keys(),
-                        "批准关系不能引用未批准实体",
-                        422,
-                    )
-            prep.status, prep.updated_at = "approved", utc_now()
-            self.activity(prep, "准备版本已批准")
-            return await self.view(session, prep)
+        prep.status, prep.updated_at = "approved", utc_now()
+        self.activity(prep, "准备版本已批准")
+        return await self.view(session, prep)
 
     async def change_relation(self, relation_id, status):
         async with self.rooms.transaction() as session:

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, hostToken } from '../api/session'
 import type { KnowledgeSource } from '../api/knowledge'
-import { entityLabels } from '../api/preparation'
+import { entityLabels, importPreparation } from '../api/preparation'
 import type { Entity, EntityType, Preparation, Relation } from '../api/preparation'
 import ModuleStructurePanel from '../components/ModuleStructurePanel'
 
@@ -19,6 +19,8 @@ export default function ModulePreparationPage() {
   const [relations, setRelations] = useState<Relation[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [packageFile, setPackageFile] = useState<File | null>(null)
+  const [importNotice, setImportNotice] = useState('')
   const current = preparations.find(p => p.id === selected)
   async function refresh(id = selected) {
     setPreparations(await api<Preparation[]>('/module-preparations', token))
@@ -62,6 +64,23 @@ export default function ModulePreparationPage() {
     {error && <p role="alert">{error}</p>}
     <form onSubmit={async e => {
       e.preventDefault()
+      if (!packageFile) return
+      setBusy(true); setError(''); setImportNotice('')
+      try {
+        const result = await importPreparation(packageFile, token)
+        setSelected(result.preparation_id)
+        await refresh(result.preparation_id)
+        setSources((await api<KnowledgeSource[]>('/knowledge/sources', token)).filter(v => v.kind === 'module' && v.chunk_count))
+        setImportNotice(`${result.reused ? '已复用相同内容的版本' : '准备包已导入'}。${result.preparation.status === 'approved' ? '在房间的“批准版本”中选择此版本并绑定即可开团。' : '有内容待审阅，请先完成下方实体及结构批准。'}`)
+      } catch (e) { setError(e instanceof Error ? e.message : '导入失败') }
+      finally { setBusy(false) }
+    }}><h3>导入已准备模组</h3><p>选择本地 JSON 准备包。原稿须位于本应用的来源目录且 hash 一致；已登记批准的相同内容会保留批准记录，导入不调用模型。</p>
+      <label>准备包文件<input id="preparation-package" type="file" accept=".json,application/json" disabled={busy} onChange={e => setPackageFile(e.target.files?.[0] || null)} /></label>
+      <button disabled={busy || !packageFile}>{busy ? '处理中…' : '导入准备包'}</button>
+      {importNotice && <p role="status">{importNotice}</p>}
+    </form>
+    <form onSubmit={async e => {
+      e.preventDefault()
       const source = sources.find(s => s.source_id === sourceId)
       if (!source) return
       const result = await command('/module-preparations', { source_id: source.source_id, source_hash: source.source_hash, display_title: title || source.title, scope: { page_start: pageStart ? Number(pageStart) : null, page_end: pageEnd ? Number(pageEnd) : null, section: section || null } })
@@ -74,13 +93,21 @@ export default function ModulePreparationPage() {
     </form>
     <section><label>准备任务<select id="preparation-select" value={selected} onChange={e => setSelected(e.target.value)}><option value="">选择任务</option>{preparations.map(p => <option key={p.id} value={p.id}>{p.display_title} · {p.status} · v{p.version}</option>)}</select></label></section>
     {current && <>
-      <ModuleStructurePanel key={current.id} preparationId={current.id} token={token} entities={entities} />
       <section data-testid="preparation-status"><h3>{current.display_title}</h3><p>{current.source_hash.slice(0, 12)} · {current.source?.file_types?.join(' / ') || current.source?.mime_type} · {current.source?.page_count} 页 / {current.source?.chunk_count} 块</p><p>范围：{current.scope.page_start || '起始'}–{current.scope.page_end || '末尾'} {current.scope.section || ''} · 状态：{current.status}</p><p>生成进度 {current.completed_batches}/{current.total_batches} 批 · 模型调用 {current.model_call_count} 次 · 生成 {current.generated_entity_count} · 批准 {current.approved_entity_count} · 拒绝 {current.rejected_entity_count}</p>
-        {current.coverage_summary && <details data-testid="preparation-coverage" open><summary>导入时全文覆盖校对</summary><p>校对者：{current.coverage_summary.reviewer}（非用户人工审核）</p><p>{current.coverage_summary.blocks_accounted} 个原文块 · {current.coverage_summary.playable_scenes} 个可玩场景 · {current.coverage_summary.entities} 个实体 · {current.coverage_summary.transitions} 条转换 · 结局 {current.coverage_summary.outcomes.join(' / ')}</p><p>来源清点：{current.coverage_summary.source_accounting_complete ? '完成' : '未完成'} · 运行缺口：{current.coverage_summary.runtime_complete ? '无记录缺口' : '仍有缺项，请查看覆盖清单'}</p>{Object.entries(current.coverage_summary.missing_combat_values).map(([key, gaps]) => <p key={key}>{key}：{gaps.join('、')}</p>)}</details>}
+        {current.source && <p>原稿：{current.source.title} · {current.source.relative_reference}</p>}
+        {current.coverage_summary && <details data-testid="preparation-coverage" open><summary>准备包校验与验收范围</summary><p>来源校对者：{current.coverage_summary.reviewer}</p><p>{current.coverage_summary.blocks_accounted} 个原文块 · {current.coverage_summary.playable_scenes} 个可玩场景 · {current.coverage_summary.entities} 个实体 · {current.coverage_summary.transitions} 条转换 · 结局 {current.coverage_summary.outcomes.join(' / ')}</p>
+          <h4>来源分类</h4><p>来源清点：{current.coverage_summary.source_accounting_complete ? '完成' : '未完成'}。以下是原稿历史分类，补值批准和实际运行另列。</p><p>{Object.entries(current.coverage_summary.source_classification || {}).map(([kind, count]) => `${kind}：${count}`).join(' · ')}</p>
+          <details><summary>原稿历史缺值记录</summary>{current.coverage_summary.source_gaps?.map(g => <p key={g.id}>{g.id}（{g.status}）：{g.gaps.join('；')}</p>)}</details>
+          <h4>批准与必需操作</h4><p>补充值：{['approved', 'host_reviewed'].includes(current.coverage_summary.numeric_review?.status || '') ? '已有明确批准' : current.coverage_summary.numeric_review?.status === 'source_only' ? '无独立补充记录' : '需主机审阅'} · {current.coverage_summary.numeric_review?.approval_id}</p><p>当前必需操作数值：{current.coverage_summary.required_operations_ready ? '无缺项' : '存在缺项'} · 当前准备状态：{current.status}</p>
+          {Object.entries(current.coverage_summary.operation_gaps || {}).flatMap(([key, operations]) => Object.entries(operations).map(([op, gaps]) => <p key={`${key}:${op}`}>{key} / {op}：{gaps.join('、')}</p>))}
+          <details><summary>其他未配置战斗字段（是否必需以上述操作范围为准）</summary>{Object.entries(current.coverage_summary.missing_combat_values).map(([key, gaps]) => <p key={key}>{key}：{gaps.join('、')}</p>)}</details>
+          <h4>已知实测范围</h4>{current.coverage_summary.runtime_acceptance?.verified_scope.map(scope => <p key={scope}>{scope}</p>)}{current.coverage_summary.runtime_acceptance?.not_verified.map(scope => <p key={scope}>未覆盖：{scope}</p>)}<p>导入只执行静态校验；本次房间的实际游戏结果需另行验证。</p>
+        </details>}
         {current.safe_error && <p role="alert">{current.safe_error}</p>}{current.status === 'stale' && <p>来源已变化。已有房间保持原快照；请按当前来源创建新的准备任务。</p>}
         <p>人物准备：{entities.filter(e => e.type === 'npc' && e.status === 'approved').length} 个已批准。请核对当前场景的人物绑定；若范围内没有人物，可继续无人物场景，测试人物请勾选专用标记。</p><div className="action-row"><button disabled={busy || ['extracting', 'approved', 'stale'].includes(current.status)} onClick={() => void command(`/module-preparations/${current.id}/generate`)}>生成实体草稿</button><button disabled={busy || !current.initial_scene_entity_id || current.status === 'extracting' || current.status === 'stale'} onClick={() => void command(`/module-preparations/${current.id}/approve`)}>批准准备版本</button><button onClick={() => void refresh()}>刷新状态</button></div>
         <p>初始场景：{entities.find(e => e.id === current.initial_scene_entity_id)?.title || '尚未设置'}</p><details><summary>最近准备与审阅记录</summary>{current.activity?.map((entry, i) => <p key={i}>{new Date(entry.time).toLocaleString()} · {entry.action} {entry.title}</p>)}</details>
       </section>
+      <ModuleStructurePanel key={current.id} preparationId={current.id} token={token} entities={entities} />
       <section><h3>实体草稿审阅</h3>{entities.length === 0 && <p>尚无实体，生成草稿或手动新增。</p>}{entities.map(entity => <EntityEditor key={`${entity.id}:${entity.version}`} entity={entity} token={token} busy={busy} command={command} initial={entity.id === current.initial_scene_entity_id} onInitial={() => void command(`/module-preparations/${current.id}`, { initial_scene_entity_id: entity.id, required_entity_ids: current.required_entity_ids }, 'PATCH')} required={current.required_entity_ids.includes(entity.id)} onRequired={(checked) => {
         if (!current.initial_scene_entity_id) { setError('请先设置初始场景'); return }
         void command(`/module-preparations/${current.id}`, { initial_scene_entity_id: current.initial_scene_entity_id, required_entity_ids: checked ? [...current.required_entity_ids, entity.id] : current.required_entity_ids.filter(id => id !== entity.id) }, 'PATCH')

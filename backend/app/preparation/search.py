@@ -83,7 +83,8 @@ def unresolved_search_plan(plan, context):
 
 
 def validate_search_plan(plan, context):
-    if not unresolved_search_plan(plan, context):
+    unbound = unbound_search_result(plan, context)
+    if not unbound and not unresolved_search_plan(plan, context):
         return
     from app.models.ollama import ModelFormatError
 
@@ -93,6 +94,10 @@ def validate_search_plan(plan, context):
         "描述时间紧迫或受伤风险不等于已经裁定。"
         "若不能进行，在focus.obstacle说明当前具体障碍。"
         "不要只复述照明或替换成旧动作。不得直接宣布发现或成功。"
+        "若成功后果是发现已有模组线索，骰前必须选择对应的check_requirements.entity_id，"
+        "将focus.action_target_id和proposed_check.target_entity_id指向该目标。"
+        "不能只绑定父场景并用文字承诺发现。多个目标可选本次合理搜索范围内的一项或澄清；"
+        "无关目标不能关联，单纯避免受伤等风险检定应说明其自身后果。"
     )
     # The existing bounded retry sends issues, not exception prose. Keep the
     # server-authored repair instruction in that actual transmitted envelope.
@@ -101,10 +106,27 @@ def validate_search_plan(plan, context):
         [
             {
                 "field": "proposed_check",
-                "code": "search_plan_missing",
+                "code": "search_result_unbound" if unbound else "search_plan_missing",
                 "instruction": instruction,
             }
         ],
+    )
+
+
+def unbound_search_result(plan, context):
+    """Reject an unexecutable discovery promise before dice, never repair old rolls."""
+    proposal = plan.proposed_check
+    return bool(
+        proposal
+        and plan.focus
+        and "search" in action_kinds(plan.focus.action)
+        and plan.parsed_intent.type == "investigate"
+        and not context.get("readonly_recall")
+        and not plan.needs_clarification
+        and not plan.parsed_intent.requires_clarification
+        and not proposal.clue_id
+        and any(r.get("successful_check") for r in context.get("check_requirements", []))
+        and re.search(r"发现|找到|找出|搜出|线索|隐藏物|查明", proposal.success_effect)
     )
 
 
@@ -348,12 +370,14 @@ def guard_initial_reselection(plan, facts, runtime):
 
 def searchable_entity_ids(entities, local, scene):
     """A configured possession check permits searching, never early revelation."""
+    from app.agents.check_policy import entity_access
+
     result = {
         eid
         for eid, e in entities.items()
         if eid in local
         and e.get("type") in {"item", "clue", "location"}
-        and e.get("reveal_conditions", {}).get("access_policy") == "requires_check"
+        and entity_access(e) == "requires_check"
     }
     result.update(
         rule["item_id"]

@@ -33,8 +33,10 @@ HOST = "batch23-isolated-host"
 
 
 class ApiCheck(Check):
+    artifact_batch = "batch-23"
+
     def __init__(self, args):
-        root = (ROOT / "data/prepared/changan/batch-23").resolve()
+        root = (ROOT / "data/prepared/changan" / self.artifact_batch).resolve()
         self.directory = (root / args.run).resolve()
         assert self.directory.is_relative_to(root) and self.directory != root
         self.directory.mkdir(parents=True, exist_ok=args.resume)

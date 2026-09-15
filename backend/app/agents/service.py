@@ -45,6 +45,9 @@ class AgentService:
         from app.module_ir.service import ModuleStructureService
 
         self.structure = ModuleStructureService(self)
+        from app.preparation.packages import PackageService
+
+        self.packages = PackageService(self)
         self.navigation = ModuleNavigationService(self)
         self.module_context = ModuleContextResolver(self)
         from app.agents.adjudication import ActionAdjudicationService

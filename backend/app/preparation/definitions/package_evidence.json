@@ -1,0 +1,33 @@
+{
+  "numeric_approvals": {
+    "batch17-npc-values-v1-user-approval": "7b0f879e85e1afc2145796fdaf734665039bfd3cfb4919143b7955b15d328729"
+  },
+  "packages": {
+    "031a3096c3b260db0d4fa6653228b1a0b96ea175fd79f060078537aa8c3f3836": {
+      "status": "historical_evidence",
+      "reports": [
+        "docs/batch-18-report.md",
+        "docs/batch-20-report.md",
+        "docs/batch-21-report.md"
+      ],
+      "verified_scope": [
+        "历史 Ollama 正式 B 主线、搜索取得、SAN、伤势及独立战斗",
+        "第 20 批 77 分 58.10 秒及恢复",
+        "第 21 批便签、报纸日常物品补充"
+      ],
+      "not_verified": [
+        "A/C 自然主线全验收",
+        "本次导入后的自然游戏（须另行实测）"
+      ]
+    }
+  },
+  "source_numeric_values": {
+    "a72e88d5a4cb08831bb4ab6719094447b6c995932b4760945a1abb871cad57c8": {
+      "mouth": "28083947ebb656828043e3d80e8bca810b494993c343d688364388f87e384c11",
+      "staff": "c47e31cd420a9120a8d1b5d8ed25c22d37fdd6dba98ae0484f3b1f9a1b717830",
+      "clicker": "a6705d3cea7a24f740a1dce7c68549b2bd3f6c81fd9054de1e46e68adcdd0cbe",
+      "station_staff": "28083947ebb656828043e3d80e8bca810b494993c343d688364388f87e384c11",
+      "dark_man": "28083947ebb656828043e3d80e8bca810b494993c343d688364388f87e384c11"
+    }
+  }
+}

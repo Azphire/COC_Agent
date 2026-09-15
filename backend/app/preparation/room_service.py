@@ -102,6 +102,25 @@ class RoomEntityService:
         require(not await self.agents.cycle(session, room.id, active=True), "房间有活动回合")
         prep = await self.agents.preparation.get(session, preparation_id)
         require(prep.status == "approved", "只能绑定当前 hash 的 approved preparation", 422)
+        if prep.document.get("package_sha256"):
+            from app.preparation.packages import validate_package_source
+            from app.rooms.service import RoomError
+
+            structure = await self.agents.structure.view(session, prep.id)
+            require(
+                structure["approved"]
+                and structure["approved_snapshot_id"]
+                and structure["preparation_version"] == prep.version,
+                "导入包结构尚未全部批准或版本已变化",
+                422,
+            )
+            try:
+                validate_package_source(
+                    self.agents.knowledge.repository.source(prep.source_id, prep.source_hash),
+                    self.agents.settings.data_dir,
+                )
+            except (ValueError, OSError):
+                raise RoomError("准备包原稿缺失或 hash 已变化，请核对来源后重新导入", 422) from None
         require(
             self.agents.knowledge.repository.available(prep.source_id, prep.source_hash),
             "knowledge_missing：来源版本不可用",
