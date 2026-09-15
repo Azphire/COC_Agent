@@ -54,6 +54,7 @@ class ModuleContextResolver:
         budget=3000,
         cycle=None,
         persist_selection=True,
+        shared_inventory=None,
     ):
         nav = self.agents.navigation
         state = await nav.state(session, room.id)
@@ -169,9 +170,14 @@ class ModuleContextResolver:
         if runtime.get("flags") or runtime.get("inventory"):
             module["interaction_state"] = {
                 "flags": runtime.get("flags", {}),
-                "held_items": holdings,
                 "doors": runtime.get("doors", {}),
             }
+            if shared_inventory is not None and shared_inventory.get("holders") == holdings:
+                # The caller already reserves this exact current projection.
+                # Deduplicate before the structural budget gate, not after it.
+                audit["inventory_in_shared_context"] = True
+            else:
+                module["interaction_state"]["held_items"] = holdings
         if not fits():
             # Include mandatory current state before allocating the scene prose.
             # The complete summary remains in the frozen snapshot and blocks.

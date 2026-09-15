@@ -3,6 +3,45 @@
 import re
 
 
+def validate_access_prose(text, action, entities, runtime):
+    """A prepared key gate is not opened by an improvised inspection sentence."""
+    from app.preparation.action_authority import aliases
+    from app.rooms.service import require
+
+    topic = (action + text).replace("的", "")
+    for entity in entities:
+        methods = [
+            r
+            for r in entity.get("interactions", [])
+            if r.get("encounter_operation") == "open_door" and r.get("required_item_ids")
+        ]
+        if not methods or not any(n and n.replace("的", "") in topic for n in aliases(entity)):
+            continue
+        claims = [
+            c
+            for c in re.split(r"[。；\n]", text)
+            if re.search(
+                r"没(?:有)?上锁|未上锁|不用钥匙|无需钥匙|(?:门|锁).{0,20}(?:打开|开启|开着|开了|敞开)",
+                c,
+            )
+            and not re.search(
+                r"尝试|试着|打算|准备|如果|能否|是否|没有打开|未打开|没能|打不开|不能|无法|未能|[?？]",
+                c,
+            )
+        ]
+        if not claims:
+            continue
+        require(
+            any(
+                r.get("entity_id") == entity["id"]
+                and r.get("interaction_id") in {m["id"] for m in methods}
+                for r in runtime.receipts.values()
+            ),
+            "门的通行状态必须来自实际开门回执，查看或旁白不能代替开锁",
+            422,
+        )
+
+
 def current_results(runtime, entities):
     definitions = {e.source_entity_id: e.snapshot for e in entities}
     latest = {}

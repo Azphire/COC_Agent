@@ -188,7 +188,8 @@ def test_scene_bound_test_npc_converse_and_private_summary_never_public(client, 
     )["events"]
     assert private_text not in json.dumps(events)
     speech = [e for e in events if e["type"] == "npc.spoke"]
-    assert len(speech) == 1 and speech[0]["payload"]["text"] == spoken_text
+    assert len(speech) == 2 and speech[0]["payload"]["text"] == spoken_text
+    assert "说不清楚" in speech[1]["payload"]["text"]
 
 
 @pytest.mark.parametrize(

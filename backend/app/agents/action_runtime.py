@@ -50,6 +50,8 @@ PLAN_INSTRUCTION = (
     "发现物品不代表已持有；无交互回执不能宣布获得物品、解锁或结局。host_review=true的特殊方法先交KP确认。"
     "只回顾用recall，规则用out_of_character。不能替其他人行动或凭空创造关键事实、成功、出口、资源。"
     "普通裁决不需主机审批。服务端绑定元数据；不重复工具与高层提案。"
+    "inventory_state是实际持有物与起始判定，空held即未持有；不能由旧叙述补出物品。"
+    "readonly_recall为true时只回顾fact_evidence，不创建物品操作或检定。"
 )
 NARRATION_INSTRUCTION = (
     "你是中文跑团的公开叙述者，输出KeeperNarration。只回应response_brief指定的本轮任务。"
@@ -68,6 +70,8 @@ NARRATION_INSTRUCTION = (
     "responder为teammate时留给队友回答，不冒充队友。"
     "历史事实保留范围限定，不能写成人物此刻在场。普通语气、停顿、非关键小动作可自由写。"
     "不输出内部ID、工具术语、规则未发生的结果；needs_host_ruling通常false。"
+    "inventory_state为空库存时，不得叙述持有、交出或使用手机、手电等道具。"
+    "readonly_recall为true时，fact_ids可排列fact_evidence原始片段，原文由服务端呈现。"
 )
 
 TEAMMATE_INSTRUCTION = (
@@ -80,8 +84,11 @@ TEAMMATE_INSTRUCTION = (
     "confidence 只能填0到1的小数，例如0.8，不能填写80。"
     "act/assist只描述自己的尝试，后续由KP裁决，不宣布成功或控制其他角色。集体移动先征询玩家。简短目标不能包含新事实。若有behavior_rejection只修复一次。"
     "speech_text只写自己说的话，action_text只写自己的具体尝试，不能在两处重复同一句话。"
-    "直接请求的协助应尝试requested_operations中的操作；不愿执行可说出理由或pass。"
+    "直接请求的协助应尝试requested_operations中的操作；不愿执行用speak说明理由，不用pass跳过明确请求。"
     "item_holders是实际持有者，public_state.completed_interactions是已完成的公开结果。"
+    "inventory_state明确当前持有物与起始检定结果，空held就是未持有，不是资料遗漏。"
+    "只有实际持有的实例可提出具体使用或交出；没有道具可寻找，不能先说自己正使用。"
+    "readonly_recall为true时只回答问题，fact_ids排列原始事实片段，不自行检查背包或申请新骰。"
 )
 
 
@@ -90,7 +97,7 @@ def planning_prompt(context):
     result = {
         k: v
         for k, v in context.items()
-        if k not in {"module_context_audit", "search_targets"}
+        if k not in {"module_context_audit", "search_targets", "omit_bound_prompt_metadata"}
         and (v not in (None, [], {}) or k == "approved_exits")
     }
     if (
@@ -104,8 +111,7 @@ def planning_prompt(context):
         known = {e["id"]: e for e in context.get("known_targets", [])}
         if known:
             result["response_fact_candidates"] = [
-                {**known.get(e["id"], {}), **e}
-                for e in context.get("response_fact_candidates", [])
+                {**known.get(e["id"], {}), **e} for e in context.get("response_fact_candidates", [])
             ]
             selected_ids = {e["id"] for e in result["response_fact_candidates"]}
             remaining = [e for eid, e in known.items() if eid not in selected_ids]
@@ -136,6 +142,20 @@ def planning_prompt(context):
             for k, v in context["triggering_action"].items()
             if k not in {"occurred_at", "client_request_id", "visibility"}
         }
+        result["triggering_action"]["payload"] = {
+            k: v
+            for k, v in context["triggering_action"].get("payload", {}).items()
+            if k not in {"cycle_id", "category", "client_request_id"} and v is not None
+        }
+        if context.get("inventory_state"):
+            result["inventory_state"] = {
+                k: v for k, v in context["inventory_state"].items() if k != "rule"
+            }
+        if context.get("fact_evidence"):
+            result["fact_evidence"] = [
+                {k: v for k, v in r.items() if v is not None and k != "source_event_seq"}
+                for r in context["fact_evidence"]
+            ]
         result["module"] = {
             k: v
             for k, v in context.get("module", {}).items()
@@ -144,7 +164,11 @@ def planning_prompt(context):
         }
         result["check_requirements"] = [
             {
-                **{k: v for k, v in r.items() if k not in {"task_scope", "conditions"}},
+                **{
+                    k: v
+                    for k, v in r.items()
+                    if k not in {"task_scope", "conditions"} and v not in (None, [], {})
+                },
                 "conditions": {
                     k: v
                     for k, v in r.get("conditions", {}).items()
@@ -157,12 +181,173 @@ def planning_prompt(context):
             result["current_participants"] = {
                 k: v for k, v in context["current_participants"].items() if k != "assignments"
             }
+    if context.get("readonly_recall"):
+        # This turn has no independent operation. Retrieval already selected the
+        # original quotations; unrelated action menus must not displace them.
+        for key in (
+            "characters",
+            "check_requirements",
+            "module_interactions",
+            "previous_attempts",
+            "compound_candidates",
+            "observation_targets",
+            "known_targets",
+            "response_fact_candidates",
+        ):
+            result.pop(key, None)
+        result["approved_exits"] = []
+    else:
+        from app.agents.action_policy import explicit_movement
+        from app.preparation.action_authority import action_kinds
+        from app.preparation.inventory import held_item_acknowledgement
+
+        raw = context.get("triggering_action", {}).get("payload", {}).get("text", "")
+        trigger = context.get("triggering_action", {})
+        acknowledgement = trigger.get(
+            "type"
+        ) == "agent.action_proposed" and held_item_acknowledgement(
+            raw, context.get("inventory_state", {}), trigger.get("actor_member_id")
+        )
+        if set(action_kinds(raw)) == {"give"} or acknowledgement:
+            # Discovery requirements apply to revealing hidden content, not
+            # handing over an instance. Inventory and interaction conditions
+            # still decide whether the actual transfer is authorized.
+            result.pop("check_requirements", None)
+            result["characters"] = [
+                {k: v for k, v in card.items() if k not in {"skill_values", "effective_attributes"}}
+                for card in result.get("characters", [])
+            ]
+        if acknowledgement:
+            result["completed_item_acknowledgement"] = True
+            result.pop("module_interactions", None)
+            result.pop("previous_attempts", None)
+        if explicit_movement(raw) and not any(
+            w in raw for w in ("检查", "查看", "观察", "搜索", "寻找", "调查")
+        ):
+            # These conditions concern discovering hidden entity content. Exit
+            # conditions and actual navigation remain in approved_exits/module.
+            result.pop("check_requirements", None)
+            if not any(w in raw for w in ("潜行", "悄悄", "检定", "重试")):
+                result.pop("previous_attempts", None)
+    if context.get("omit_bound_prompt_metadata"):
+        result.pop("action_identifiers", None)
+        # These are server routing/diagnostic fields, not scene facts or
+        # prerequisites. Their full values remain in run.context and events.
+        for key in (
+            "phase",
+            "role",
+            "knowledge_enabled",
+            "structure_incomplete",
+            "structure_navigation",
+            "prepared_module",
+        ):
+            result.pop(key, None)
+        if not result.get("current_check"):
+            result.pop("current_check", None)
+        if result.get("module", {}).get("current_scene"):
+            result["module"] = {
+                **result["module"],
+                "current_scene": {
+                    k: v
+                    for k, v in result["module"]["current_scene"].items()
+                    if k != "heading_path"
+                },
+            }
+    return result
+
+
+def generation_prompt(context, schema):
+    """Send shared state once, keeping the complete run context for validation."""
+    if schema is KeeperPlan:
+        result = planning_prompt(context)
+    elif schema is KeeperNarration:
+        result = {
+            k: context[k]
+            for k in (
+                "response_brief",
+                "triggering_action",
+                "PUBLIC_CLAIM_OPTIONS",
+                "RULE_EVIDENCE",
+                "RULE_TOPICS",
+                "public_tool_results",
+                "inventory_state",
+                "readonly_recall",
+                "fact_evidence",
+            )
+            if k in context
+        }
+    else:
+        result = dict(context)
+    result = deepcopy(result)
+    if schema is TeammateDecision:
+        # Requests and participant assignments also live in the server ledger.
+        # Keep the actual speaker, action, roster and state once in this prompt.
+        for key in (
+            "phase",
+            "knowledge_enabled",
+            "structure_incomplete",
+            "structure_navigation",
+            "prepared_module",
+        ):
+            result.pop(key, None)
+        if not result.get("current_check"):
+            result.pop("current_check", None)
+        if result.get("current_participants"):
+            result["current_participants"].pop("assignments", None)
+        if result.get("triggering_action"):
+            trigger = result["triggering_action"]
+            for key in ("occurred_at", "client_request_id", "visibility"):
+                trigger.pop(key, None)
+            for key in ("cycle_id", "category", "client_request_id"):
+                trigger.get("payload", {}).pop(key, None)
+        completed = result.get("public_state", {}).get("completed_interactions", [])
+        for entity in result.get("public_entities", []):
+            # Public eligibility and provenance stay in the server ledger.
+            # Keep the content, identity and current/historical scope; the same
+            # actual receipt need only occur once in the transmitted prompt.
+            for key in ("state", "origin", "revealed_event_seq", "scope_label"):
+                entity.pop(key, None)
+            if entity.get("current_state_receipts"):
+                remaining = [r for r in entity["current_state_receipts"] if r not in completed]
+                if remaining:
+                    entity["current_state_receipts"] = remaining
+                else:
+                    entity.pop("current_state_receipts")
+    inventory = result.get("inventory_state")
+    if inventory and "holders" in inventory:
+        inventory.pop("rule", None)  # Already in each role's instruction.
+        if result.get("item_holders") == inventory["holders"]:
+            result.pop("item_holders", None)
+        # Compare before compacting holder display names: callers may share
+        # the same list object between these otherwise identical projections.
+        brief = result.get("response_brief", {})
+        if brief.get("current_inventory") == inventory["holders"]:
+            brief.pop("current_inventory", None)
+        module_state = result.get("module", {}).get("interaction_state", {})
+        if module_state.get("held_items") == inventory["holders"]:
+            module_state.pop("held_items", None)
+        # The holder-to-instance relation is already complete in holders. Keep
+        # explicit empty held lists, initial outcomes, locations and uses.
+        names = {m["id"]: m.get("name") for m in inventory.get("members", [])}
+        for member in inventory.get("members", []):
+            if member.get("held"):
+                member.pop("held")
+        for holder in inventory["holders"]:
+            if holder.get("holder_name") == names.get(holder.get("holder_id")):
+                holder.pop("holder_name", None)
+    brief = result.get("response_brief", {})
+    if brief.get("completed_results") == result.get("public_tool_results"):
+        brief.pop("completed_results", None)
     return result
 
 
 def compact_planning_prose(context, budget):
     """Reserve the final prompt for action identifiers, prerequisites and results."""
     result = deepcopy(context)
+    # These defaults are already bound in the response contract. Keep them in
+    # run.context for validation/recovery; the model still has the original
+    # actor/clauses, current targets, scene and exit prerequisites in its prompt.
+    result["omit_bound_prompt_metadata"] = True
     module = result.get("module", {})
     summaries = [(module.get("current_scene", {}), "summary")]
     summaries += [
@@ -171,13 +356,28 @@ def compact_planning_prose(context, budget):
         for key in ("keeper_summary", "public_summary")
     ]
     for container, key in summaries:
-        size = len(json.dumps(planning_prompt(result), ensure_ascii=False, separators=(",", ":")))
+        size = len(
+            json.dumps(
+                generation_prompt(result, KeeperPlan), ensure_ascii=False, separators=(",", ":")
+            )
+        )
         if size <= budget:
             break
         value = container.get(key)
         if isinstance(value, str) and value:
             container[key] = value[: max(0, len(value) - (size - budget) - 16)]
             result.setdefault("module_context_audit", {})["prompt_prose_truncated"] = True
+    if not result.get("readonly_recall"):
+        while (
+            len(result.get("fact_evidence", [])) > 1
+            and len(
+                json.dumps(
+                    generation_prompt(result, KeeperPlan), ensure_ascii=False, separators=(",", ":")
+                )
+            )
+            > budget
+        ):
+            result["fact_evidence"] = result["fact_evidence"][:-1]
     return result
 
 
@@ -330,7 +530,7 @@ class ActionRuntimeMixin:
             )
             if addressed == binding.member_id:
                 eligibility = "direct_conversation"
-            from app.preparation.action_authority import action_kinds, teammate_request
+            from app.preparation.action_authority import requested_action_kinds, teammate_request
 
             requested_action = bool(
                 teammate_request(
@@ -339,9 +539,11 @@ class ActionRuntimeMixin:
                     trigger.actor_member_id,
                 )
                 == binding.member_id
-                and action_kinds(trigger.payload["text"])
+                and requested_action_kinds(trigger.payload["text"])
             )
-            requested_operations = action_kinds(trigger.payload["text"]) if requested_action else []
+            requested_operations = (
+                requested_action_kinds(trigger.payload["text"]) if requested_action else []
+            )
             additions["requested_operations"] = requested_operations
             # One eligible teammate per cycle, including semantic/schema repairs.
             if current.get("teammate_model_called"):
@@ -375,12 +577,37 @@ class ActionRuntimeMixin:
                         ),
                         explicit_action_request=requested_action,
                         requested_operations=requested_operations,
+                        inventory_state=run.context.get("inventory_state"),
+                        actor_id=binding.member_id,
+                        requester_id=trigger.actor_member_id,
                     )
                     rejections.append(rejected)
                     if rejected.accepted:
                         accepted = candidate
                         break
                     additions["behavior_rejection"] = rejected.model_dump()
+                    if rejected.reason == "item_not_held":
+                        additions["inventory_repair"] = (
+                            "物品没有实际持有记录。不要说还在口袋、拿着或已经找到了；"
+                            "可以如实回答尚未确认，或只提出正在检查口袋、寻找物品的动作。"
+                            "寻找的结果由后续实际检定决定。"
+                        )
+                    elif rejected.reason == "suggestion_requires_speak_mode":
+                        additions["behavior_repair"] = (
+                            "一起前往、我们可以等建议用speak，不发布成新的行动。"
+                            "若还有自己的独立尝试，action_text只保留这项尝试，建议放speech_text。"
+                        )
+                    elif rejected.reason in {
+                        "assistance_does_not_attempt_requested_operation",
+                        "action_request_requires_response",
+                    }:
+                        additions["behavior_repair"] = (
+                            "请回应本轮原请求："
+                            + trigger.payload["text"]
+                            + "。选择协助必须实际尝试请求的操作；不愿执行则用speak明确回应，"
+                            "不能只复述物品现状或另提无关用途。"
+                            "明确对你提出的请求不能用pass跳过；可以明确拒绝，但要回应。"
+                        )
                     additions["recent_output_summary"] = [
                         *recent,
                         *others,
@@ -414,6 +641,22 @@ class ActionRuntimeMixin:
                     related_player_action_seq=trigger.seq,
                     confidence=1,
                 )
+            if (
+                accepted.mode == "pass"
+                and eligibility == "direct_conversation"
+                and any(r.reason == "item_not_held" for r in rejections)
+            ):
+                from app.preparation.inventory import inventory_reply
+
+                accepted.mode = "speak"
+                accepted.speech_text = inventory_reply(
+                    run.context.get("inventory_state", {}), binding.member_id
+                )
+                accepted.reason_summary = "按实际物品状态回答，未发布无权执行的行动"
+            elif accepted.mode == "pass" and requested_action:
+                accepted.mode = "speak"
+                accepted.speech_text = "我这次还没有执行你的请求。"
+                accepted.reason_summary = "有限修复后没有可执行回应，如实说明本次未执行"
             # Never save ungrounded model goals or arbitrary private-looking novelty strings.
             safe_goal = (
                 accepted.short_term_goal
@@ -435,6 +678,19 @@ class ActionRuntimeMixin:
                 chosen = accepted
                 if chosen.mode != "pass":
                     try:
+                        from app.memory.facts import readonly_recall
+                        from app.preparation.inventory import bind_item_prose, inventory_context
+
+                        if chosen.mode in {"act", "assist"} or not readonly_recall(
+                            trigger.payload["text"]
+                        ):
+                            chosen.item_instance_ids = bind_item_prose(
+                                output_text(chosen),
+                                await inventory_context(
+                                    self.service, session, room, output_text(chosen)
+                                ),
+                                binding.member_id,
+                            )
                         ensure_public_text(
                             await self.service.module(session, room.id), output_text(chosen)
                         )
@@ -478,6 +734,8 @@ class ActionRuntimeMixin:
                             "controller_type": "agent",
                             "mode": chosen.mode,
                             "target_id": chosen.target_id,
+                            "item_instance_ids": chosen.item_instance_ids,
+                            "fact_ids": chosen.fact_ids,
                         },
                         request_id=cycle.id + ":" + binding.member_id,
                     )
@@ -687,7 +945,8 @@ class ActionRuntimeMixin:
                     if eid in facts.local_entity_ids
                     and (
                         eid in facts.revealed_entity_ids
-                        or eid in facts.visible_entity_ids and not facts.reveal_errors.get(eid)
+                        or eid in facts.visible_entity_ids
+                        and not facts.reveal_errors.get(eid)
                     )
                     and e.get("interactions")
                     and interaction_score(e)
@@ -790,6 +1049,12 @@ class ActionRuntimeMixin:
                     if explicit_movement(facts.raw_text)
                 ]
             if schema is KeeperNarration:
+                if cycle.state.get("dialogue_npc"):
+                    context["readonly_recall"] = False
+                    npc = cycle.state["dialogue_npc"]
+                    context["public_entities"] = [
+                        e for e in context.get("public_entities", []) if e["id"] != npc["id"]
+                    ] + [npc]
                 if not context.get("prepared_module"):
                     context["public_entities"] = [
                         {
@@ -840,16 +1105,24 @@ class ActionRuntimeMixin:
                     withdrawal=cycle.state.get("withdrawal_result"),
                 )
                 context["response_brief"] = brief
-                target = doc.plan.parsed_intent.target_id
+                brief["dialogue_answers"] = [
+                    e["public_summary"]
+                    for e in context.get("public_entities", [])
+                    if e["id"] in cycle.state.get("dialogue_fact_ids", [])
+                ]
+                target = (
+                    doc.plan.focus.action_target_id if doc.plan.focus else None
+                ) or doc.plan.parsed_intent.target_id
                 row = next(
                     (
                         e
                         for e in await self.service.entities.rows(session, room.id)
-                        if e.source_entity_id == target and e.entity_type == "item"
+                        if e.source_entity_id == target and e.entity_type in {"item", "clue"}
                     ),
                     None,
                 )
                 if row and row.state == "hidden":
+                    brief["unconfirmed_target"] = True
                     brief["resource_gate"] = "unconfirmed_item"
                     brief["resource_instruction"] = (
                         "物品尚未通过所需检定确认，不能宣称它在身上或已经取得；旧即兴不是物品依据。"
@@ -904,23 +1177,7 @@ class ActionRuntimeMixin:
             )
 
             def context_size():
-                measured = run.context
-                if schema is KeeperPlan:
-                    measured = planning_prompt(measured)
-                if schema is KeeperNarration:
-                    # These are the actual prompt fields below. The rest is verification data.
-                    measured = {
-                        k: measured[k]
-                        for k in (
-                            "response_brief",
-                            "triggering_action",
-                            "PUBLIC_CLAIM_OPTIONS",
-                            "RULE_EVIDENCE",
-                            "RULE_TOPICS",
-                            "public_tool_results",
-                        )
-                        if k in measured
-                    }
+                measured = generation_prompt(run.context, schema)
                 return len(json.dumps(measured, ensure_ascii=False, separators=(",", ":")))
 
             if schema is KeeperPlan:
@@ -1047,6 +1304,13 @@ class ActionRuntimeMixin:
             for key in ("incidental_memories", "recent_dialogue"):
                 while run.context.get(key) and context_size() > budget:
                     run.context = {**run.context, key: run.context[key][1:]}
+            if schema is TeammateDecision:
+                # Repetition is still checked against the complete server-side
+                # history. Old proposals cannot block a fresh, legal request
+                # after current inventory and action receipts grow.
+                for key in ("recent_outputs", "other_teammate_outputs"):
+                    while run.context.get(key) and context_size() > budget:
+                        run.context = {**run.context, key: run.context[key][1:]}
             if schema is KeeperPlan and context_size() > budget:
                 # Search/method/exit identifiers are added after scene selection.
                 # Allocate prose again against this final measured envelope.
@@ -1055,10 +1319,14 @@ class ActionRuntimeMixin:
                 import logging
 
                 logging.getLogger(__name__).warning(
-                    "Action context exceeds %s (%s actual): %s",
+                    "Action context exceeds %s (%s actual, %s): %s",
                     budget,
                     context_size(),
-                    {k: len(json.dumps(v, ensure_ascii=False)) for k, v in run.context.items()},
+                    schema.__name__,
+                    {
+                        k: len(json.dumps(v, ensure_ascii=False))
+                        for k, v in generation_prompt(run.context, schema).items()
+                    },
                 )
             require(
                 context_size() <= budget,
@@ -1129,6 +1397,10 @@ class ActionRuntimeMixin:
                         for item in error.errors()
                     ],
                 ) from None
+            if schema is KeeperPlan:
+                from app.preparation.search import validate_search_plan
+
+                validate_search_plan(restored, context)
             if schema is not KeeperNarration:
                 return
 
@@ -1145,22 +1417,7 @@ class ActionRuntimeMixin:
                         "叙事校验失败", [{"field": "public_narration", "code": error.message}]
                     ) from None
 
-        prompt_context = context
-        if schema is KeeperPlan:
-            prompt_context = planning_prompt(context)
-        if schema is KeeperNarration:
-            prompt_context = {
-                k: context[k]
-                for k in (
-                    "response_brief",
-                    "triggering_action",
-                    "PUBLIC_CLAIM_OPTIONS",
-                    "RULE_EVIDENCE",
-                    "RULE_TOPICS",
-                    "public_tool_results",
-                )
-                if k in context
-            }
+        prompt_context = generation_prompt(context, schema)
         result, latency = await self.service.model.generate(
             [
                 {
@@ -1764,8 +2021,24 @@ class ActionRuntimeMixin:
             r.get("idempotency_key", str(i)).removesuffix(":recovery"): r
             for i, r in enumerate(run.tool_results)
         }
+        record = await session.get(ActionPlanRecord, cycle.id)
+        rejected = (
+            (record.document.get("validation") or {}).get("rejected_actions", []) if record else []
+        )
         return {
             "events": selected,
+            # Rejected proposals never ran, so they are absent from failed_tools.
+            # Their absence must not license the narrator to supply a discovery.
+            "blocked_discovery": any(r.get("tool") == "reveal_entity" for r in rejected),
+            "blocked_operations": any(
+                r.get("tool") in {"apply_module_action", "transition_scene", "update_scene"}
+                for r in rejected
+            )
+            or any(
+                r.get("ok") is False
+                and r.get("tool") in {"apply_module_action", "transition_scene", "update_scene"}
+                for r in latest_results.values()
+            ),
             "failed_tools": [
                 {"tool": r["tool"], "succeeded": False}
                 for r in latest_results.values()
@@ -1781,6 +2054,8 @@ class ActionRuntimeMixin:
         from app.module_ir.facts import SCOPE_PREFIXES
 
         public = {e["id"]: e for e in await self.service.entities.public(session, room.id)}
+        if cycle.state.get("dialogue_npc"):
+            public[cycle.state["dialogue_npc"]["id"]] = cycle.state["dialogue_npc"]
         text = "\n".join(
             [
                 output.public_narration,
@@ -1789,7 +2064,52 @@ class ActionRuntimeMixin:
             ]
         )
         public_material = "\n".join(e["public_summary"] for e in public.values())
+        if not run.context.get("readonly_recall"):
+            from app.module_ir.facts import nonlocal_source_claims
+
+            require(
+                not nonlocal_source_claims(
+                    "\n".join([output.public_narration, *output.incidental_details]),
+                    list(public.values()),
+                ),
+                "先前场景的已公开线索不能叙述为当前所见，请依据本场实际揭示与回执描述",
+                422,
+            )
         brief = run.context.get("response_brief", {})
+        from app.preparation.inventory import bind_item_prose, inventory_context
+
+        if not run.context.get("readonly_recall"):
+            inventory = await inventory_context(self.service, session, room, text)
+            bind_item_prose(
+                "\n".join([output.public_narration, *output.incidental_details]),
+                inventory,
+                run.context.get("triggering_action", {}).get("actor_member_id"),
+            )
+            if output.npc_speech:
+                bind_item_prose(output.npc_speech.text, inventory, output.npc_speech.entity_id)
+            scene = run.context.get("module", {}).get("scene", {})
+            for entity in public.values():
+                if entity.get("type") != "scene" or entity["id"] == scene.get("id"):
+                    continue
+                for clause in re.split(r"[。；\n]", text):
+                    if re.search(r"之前|先前|当时|曾经|回顾", clause):
+                        continue
+                    require(
+                        not re.search(
+                            r"(?:抵达|到达|进入|来到|回到|穿过|现在在).{0,8}"
+                            + re.escape(entity["title"]),
+                            clause,
+                        ),
+                        "位置叙述与当前导航状态不一致",
+                        422,
+                    )
+        responder = brief.get("responder", {})
+        if responder.get("kind") == "npc":
+            require(
+                output.npc_speech and output.npc_speech.text.strip(),
+                "已确定NPC对象，必须实际答话",
+                422,
+            )
         if brief.get("resource_gate") == "unconfirmed_item":
             require(
                 not re.search(r"还在|仍在|拿到了|拿好了|已找到|已经找到|收好|揣入|装进", text),
@@ -1824,10 +2144,17 @@ class ActionRuntimeMixin:
             )
         rows = await self.service.entities.rows(session, room.id)
         if run.context.get("intent_type") != "recall":
+            from app.preparation.current_state import validate_access_prose
             from app.preparation.observation import validate_lighting_prose
             from app.rooms.combat_service import load_state
 
             nav = await self.service.navigation.state(session, room.id)
+            validate_access_prose(
+                output.public_narration,
+                run.context.get("triggering_action", {}).get("payload", {}).get("text", ""),
+                [{**r.snapshot, "id": r.source_entity_id} for r in rows],
+                load_state(room).module_runtime,
+            )
             validate_lighting_prose(
                 text,
                 [{**r.snapshot, "id": r.source_entity_id, "type": r.entity_type} for r in rows],
@@ -1842,8 +2169,10 @@ class ActionRuntimeMixin:
                 if len(phrase.strip()) >= 6 and phrase.strip() not in public_material:
                     require(phrase.strip() not in text, "输出包含未获准公开的实体内容", 403)
         candidates = run.context.get("PUBLIC_CLAIM_OPTIONS", [])
-        if run.context.get("intent_type") == "recall" and any(
-            c["statement"].startswith(tuple(SCOPE_PREFIXES.values())) for c in candidates
+        if (
+            run.context.get("intent_type") == "recall"
+            and not run.context.get("fact_evidence")
+            and any(c["statement"].startswith(tuple(SCOPE_PREFIXES.values())) for c in candidates)
         ):
             require(
                 any(
@@ -2012,6 +2341,8 @@ class ActionRuntimeMixin:
             ):
                 output = KeeperNarration(needs_host_ruling=True)
             public = {e["id"]: e for e in await self.service.entities.public(session, room.id)}
+            if cycle.state.get("dialogue_npc"):
+                public[cycle.state["dialogue_npc"]["id"]] = cycle.state["dialogue_npc"]
             if not run.context.get("prepared_module"):
                 public.update({e["id"]: e for e in run.context.get("public_entities", [])})
             documents, citations = [], []
@@ -2021,6 +2352,10 @@ class ActionRuntimeMixin:
             fallback_reason = None
 
             async def fallback_text():
+                if run.context.get("readonly_recall"):
+                    from app.memory.facts import render_facts
+
+                    return render_facts(run.context.get("fact_evidence", []))
                 if doc.plan.parsed_intent.type == "recall":
                     from app.knowledge.service import KnowledgeContextBuilder
                     from app.module_ir.facts import SCOPE_PREFIXES
@@ -2044,6 +2379,7 @@ class ActionRuntimeMixin:
                         doc.validation.rejected_actions and not doc.validation.approved_actions
                     ),
                     brief=run.context.get("response_brief"),
+                    inventory_state=run.context.get("inventory_state"),
                 )
 
             try:
@@ -2122,6 +2458,19 @@ class ActionRuntimeMixin:
                 output.needs_host_ruling = doc.validation.status == "host_review_required"
                 output.npc_speech = None
                 documents, citations = [], []
+            if (
+                not output.npc_speech
+                and run.context.get("response_brief", {}).get("responder", {}).get("kind") == "npc"
+            ):
+                from app.agents.adjudication_schemas import NPCSpeech
+
+                brief = run.context["response_brief"]
+                output.npc_speech = NPCSpeech(
+                    entity_id=brief["responder"]["id"],
+                    text="\n".join(brief.get("dialogue_answers", []))
+                    or "我听见你的问题了，但这件事我现在还说不清楚。",
+                )
+                content = ""
             if fallback_reason and rule_question and not run.context.get("RULE_EVIDENCE"):
                 content = "需要主持人裁定：目前没有找到可以支持这项规则解释的依据。"
             from app.memory.events import published_incidental_details
@@ -2181,6 +2530,9 @@ class ActionRuntimeMixin:
                         "incidental_details": narration_details,
                         "incidental_source": "kp_improvisation",
                         "scene_id": scene_id,
+                        "fact_evidence": run.context.get("fact_evidence", [])
+                        if run.context.get("readonly_recall")
+                        else [],
                     },
                     request_id=run.id,
                 )

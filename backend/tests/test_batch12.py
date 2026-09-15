@@ -111,8 +111,12 @@ def test_npc_profile_is_not_published_as_a_spoken_reply(client, game):  # noqa: 
 
     def response(messages, kwargs):
         if kwargs["response_schema"].__name__ == "KeeperNarration":
-            c = json.loads(messages[-1]["content"])
-            claim = next(x for x in c["PUBLIC_CLAIM_OPTIONS"] if "caretaker" in x["entity_ids"])
+            claim = dict(
+                claim_id="npc_profile",
+                category="module_fact",
+                entity_ids=["caretaker"],
+                statement="钟楼管理员，穿着湿透的灰色外套，请你们查明停摆原因。",
+            )
             used.append(claim)
             return {
                 "public_narration": "管理员等你继续说。",
@@ -126,7 +130,8 @@ def test_npc_profile_is_not_published_as_a_spoken_reply(client, game):  # noqa: 
     assert wait_cycle(client, game)["status"] == "completed"
     assert used
     events = ok(client.get(game["prefix"] + "/events"))["events"]
-    assert not any(e["type"] == "npc.spoke" for e in events)
+    speech = [e["payload"]["text"] for e in events if e["type"] == "npc.spoke"]
+    assert speech and all(text != claim["statement"] for text in speech for claim in used)
 
 
 def finish_roll(client, game, check):  # noqa: F811
@@ -282,7 +287,9 @@ def test_explicit_rules_discussion_cannot_become_world_action(client, game):  # 
 
 
 def test_pre_roll_restore_does_not_make_fixed_dice_withdrawable(
-    client, game, monkeypatch  # noqa: F811
+    client,
+    game,  # noqa: F811
+    monkeypatch,
 ):
     import asyncio
     import threading

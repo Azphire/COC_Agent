@@ -68,11 +68,153 @@ class TeammateBehaviorPolicy:
         public_change_after_last_output=False,
         explicit_action_request=False,
         requested_operations=None,
+        inventory_state=None,
+        actor_id=None,
+        requester_id=None,
     ):
         if decision.mode == "pass":
-            return BehaviorRejection(accepted=True)
+            return BehaviorRejection(
+                accepted=not explicit_action_request,
+                reason="action_request_requires_response" if explicit_action_request else "",
+            )
         if decision.related_player_action_seq != action_seq:
             return BehaviorRejection(accepted=False, reason="unrelated_player_action")
+        if decision.mode in {"act", "assist"} and inventory_state is not None:
+            from app.preparation.inventory import held_item_acknowledgement, inventory_reply
+
+            if held_item_acknowledgement(output_text(decision), inventory_state, actor_id):
+                decision.speech_text = inventory_reply(inventory_state, actor_id)
+                decision.action_text = None
+                decision.action_type = "converse"
+                decision.mode = "speak"
+                decision.target_id = None
+                decision.related_public_entity_ids = []
+                decision.fact_ids = []
+        from app.memory.facts import readonly_recall
+
+        if readonly_recall(player_text) and decision.mode in {"act", "assist"}:
+            return BehaviorRejection(accepted=False, reason="recall_has_no_new_action")
+        if inventory_state is not None and not readonly_recall(player_text):
+            from app.preparation.action_authority import action_kinds
+            from app.preparation.inventory import (
+                inventory_probe,
+                inventory_reply,
+                requested_handover,
+            )
+
+            if decision.mode == "assist" and set(requested_operations or []) == {"give"}:
+                handover = requested_handover(player_text, inventory_state, actor_id, requester_id)
+                if handover:
+                    # assist agrees to the current request. Its actual item and
+                    # recipient cannot be replaced by an unrelated phone plan.
+                    decision.action_text = handover["action_text"]
+                    decision.speech_text = None
+                    decision.action_type = "interact"
+                    decision.target_id = handover["item_id"]
+                    decision.related_public_entity_ids = [handover["item_id"]]
+                    decision.item_instance_ids = [handover["instance_id"]]
+                    decision.fact_ids = []
+
+            if (
+                decision.mode == "assist"
+                and explicit_action_request
+                and "search" in (requested_operations or [])
+                and set(requested_operations or []) <= {"search", "observe"}
+                and not inventory_probe(player_text)
+            ):
+                from app.preparation.action_authority import requested_search_attempt
+
+                search = requested_search_attempt(player_text)
+                if search:
+                    decision.action_text = search
+                    decision.speech_text = None
+                    decision.action_type = "investigate"
+                    decision.target_id = None
+                    decision.related_public_entity_ids = []
+                    decision.fact_ids = []
+                    decision.novelty_keys = []
+                    decision.short_term_goal = None
+
+            own_probe = inventory_probe(decision.action_text or "")
+            kinds = set(action_kinds(decision.action_text or ""))
+            addressed_probe = inventory_probe(player_text) and (
+                explicit_action_request
+                or "你" in player_text
+                or any(
+                    m.get("name") and m["name"] in player_text
+                    for m in inventory_state.get("members", [])
+                    if m["id"] == actor_id
+                )
+            )
+            if addressed_probe and explicit_action_request and decision.mode == "speak":
+                import re
+
+                member = next(
+                    (m for m in inventory_state.get("members", []) if m["id"] == actor_id), {}
+                )
+                said = output_text(decision)
+                if (
+                    member.get("starting_belongings") == "undetermined"
+                    and re.match(r"\s*我(?:现在|这就|先)?(?:来)?检查", said)
+                    and not re.search(r"不想|不愿|不检查|没有检查|没检查|先不|之前|刚才", said)
+                ):
+                    # Saying yes by describing a check is agreement to attempt
+                    # it, never proof of its result. Submit the normal action.
+                    decision.mode = "act"
+                    decision.action_text = "我检查自己的口袋与随身物，确认实际保留下来的物品。"
+                    own_probe, kinds = True, {"search", "observe"}
+            if addressed_probe and not action_kinds(player_text):
+                # Asking what is held is not an instruction to search again.
+                decision.mode = "speak"
+                decision.action_type = "converse"
+                decision.action_text = None
+                decision.speech_text = inventory_reply(inventory_state, actor_id)
+                decision.target_id = None
+                decision.related_public_entity_ids = []
+                decision.fact_ids = []
+            elif (
+                decision.mode in {"act", "assist"}
+                and own_probe
+                and kinds & {"search", "observe"}
+                and kinds <= {"search", "observe"}
+            ):
+                # This is the investigator's chosen attempt, not a discovered
+                # item list. Only the following actual check may supply results.
+                decision.action_text = "我检查自己的口袋与随身物，确认实际保留下来的物品。"
+                decision.speech_text = None
+                decision.action_type = "investigate"
+                decision.target_id = None
+                decision.related_public_entity_ids = []
+                decision.fact_ids = []
+                decision.novelty_keys = []
+                decision.short_term_goal = None
+                decision.reason_summary = "确认实际保留的随身物，结果由后续检定决定。"
+            elif decision.mode == "speak" and (
+                addressed_probe or inventory_probe(output_text(decision))
+            ):
+                decision.speech_text = inventory_reply(inventory_state, actor_id)
+                decision.action_text = None
+                decision.fact_ids = []
+        if decision.mode in {"act", "assist"}:
+            import re
+
+            if re.search(
+                r"或许|我建议|可以考虑|要不要|我们可以|我们一起(?:去|过去|前往)",
+                decision.action_text or "",
+            ):
+                return BehaviorRejection(accepted=False, reason="suggestion_requires_speak_mode")
+        if inventory_state is not None and not (
+            decision.mode == "speak" and readonly_recall(player_text)
+        ):
+            from app.preparation.inventory import bind_item_prose
+            from app.rooms.service import RoomError
+
+            try:
+                decision.item_instance_ids = bind_item_prose(
+                    output_text(decision), inventory_state, actor_id
+                )
+            except RoomError:
+                return BehaviorRejection(accepted=False, reason="item_not_held")
         refs = set(decision.related_public_entity_ids)
         if decision.target_id:
             refs.add(decision.target_id)
@@ -102,7 +244,9 @@ class TeammateBehaviorPolicy:
             "assist",
         }:
             recent = []  # A changed world permits a new attempt through the normal KP/check gates.
-        compared = [*recent, *other_outputs, player_text]
+        compared = [*recent, *other_outputs]
+        if not (explicit_action_request and decision.mode in {"act", "assist"}):
+            compared.append(player_text)
         score = max((bigram_jaccard(text, old) for old in compared), default=0)
         if score >= self.threshold:
             return BehaviorRejection(

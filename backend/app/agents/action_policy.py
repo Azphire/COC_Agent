@@ -44,8 +44,23 @@ STATE_TOOLS = frozenset(
 )
 
 
+def movement_question_view(text: str) -> str:
+    # An embedded inspection question concerns the destination's contents, not
+    # whether the preceding declared movement should occur.
+    return re.sub(
+        r"((?:观察|查看|留意|看看|检查)[^，。；！？,;!?\n]{0,12})(?:是否|有没有|是不是|能否|可否)",
+        r"\1待确认",
+        text,
+    )
+
+
 def explicit_movement(text: str) -> bool:
     """A conservative corroboration of a model-parsed move, never an intent classifier."""
+    text = movement_question_view(text)
+    sentences = [s for s in re.split(r"[。；;\n]", text) if s.strip()]
+    if len(sentences) > 1 and not re.search(r"如果|假如|假设|\bif\b", text, re.I):
+        # A separate historical failure does not negate a new declared move.
+        return any(explicit_movement(s) for s in sentences)
     compact = re.sub(r"\s+", "", text).lower()
     if re.search(r"\b(?:move|enter|return|leave|walk)\b", text.lower()):
         return not re.search(r"\b(?:not|never|suggest|suggests|ask|asks|if)\b|[?？]", text.lower())
@@ -81,6 +96,52 @@ def named_move_exits(text, transitions):
             re.IGNORECASE,
         )
     ]
+
+
+def local_scene_movement(text, targets, transitions=()):
+    """An explicit point inside the current scene cannot select an outgoing exit."""
+    text = movement_question_view(text)
+    if re.search(r"如果|假如|假设|不要|并未|没有|要不要|是否|能否|[?？]", text):
+        return False
+    if named_move_exits(text, transitions):
+        return False
+    # A later destination clause outranks traversing the present room first.
+    destinations = re.findall(
+        r"(?:^|[，。；,;])(?:我(?:们)?)?(?:然后|再|接着)?"
+        r"(?:进入|走进|前往|返回|回到)([^，。！？；,.!?;\n]+)",
+        text,
+    )
+    if not re.search(r"潜行|悄悄", text) and any(
+        not any(
+            e.get("title") and e["title"] in destination
+            for e in targets
+            if e.get("type") == "scene"
+        )
+        and not re.search(r"(?:这|本|当前)(?:节|间|个)?(?:车厢|房间|大厅)", destination)
+        for destination in destinations
+    ):
+        return False
+    named = any(
+        e.get("type") == "scene"
+        and e.get("title")
+        and (
+            re.search(
+                re.escape(e["title"])
+                + r"(?:的)?(?:内部|内|另一端|这头|那头|边缘|边上|侧边|入口|前门|后门)",
+                text,
+            )
+            or re.search(r"(?:穿过|通过|绕过)" + re.escape(e["title"]), text)
+        )
+        for e in targets
+    )
+    current = any(e.get("type") == "scene" for e in targets) and re.search(
+        r"(?:这|本|当前)(?:节|间|个)?(?:车厢|房间|大厅|区域)(?:的)?(?:内部|内|里|另一端|前门|后门)|"
+        r"(?:沿|在)(?:车厢|房间|大厅)(?:内部|内|里)",
+        text,
+    )
+    return bool(named or current) and bool(
+        re.search(r"到|走|潜行|靠近|过去|移动|穿过|通过|绕过", text)
+    )
 
 
 @dataclass
@@ -160,11 +221,17 @@ class ActionPolicyValidator:
             if len(titles) != len(set(titles)):
                 return "clarification_required", "当前场景有多个同名目标"
         if intent.type == "move":
+            transitions = [t for t in facts.transitions.values() if t.get("approved")]
+            if local_scene_movement(
+                facts.raw_text,
+                [e for eid, e in facts.approved_entities.items() if eid in facts.local_entity_ids],
+                transitions,
+            ):
+                return "clarification_required", "当前场景内的移动不能选择跨场景出口"
             if not explicit_movement(facts.raw_text) or not explicit_movement(
                 intent.evidence_quote
             ):
                 return "clarification_required", "玩家尚未明确表示移动"
-            transitions = [t for t in facts.transitions.values() if t.get("approved")]
             named = named_move_exits(facts.raw_text, transitions)
             local_destinations = named_move_exits(
                 facts.raw_text,

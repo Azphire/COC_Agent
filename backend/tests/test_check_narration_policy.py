@@ -471,9 +471,12 @@ def test_narration_fallback_does_not_repeat_effects(client, game):  # noqa: F811
     assert cycle["status"] == "completed", cycle
     events = ok(client.get(game["prefix"] + "/events"))["events"]
     assert sum(e["type"] == "clue.revealed" for e in events) == 1
-    assert calls.count("KeeperPlan") == 1 and calls.count("KeeperNarration") == 2
+    # A revealed source now supplies its actual text directly, so an invalid
+    # draft cannot alter the fact or force the completed reveal to run again.
+    assert calls.count("KeeperPlan") == 1 and calls.count("KeeperNarration") <= 2
     narration = next(e["payload"] for e in events if e["type"] == "keeper.narration")
-    assert narration["safe_fallback"] and "spot_hidden" not in narration["text"]
+    revealed = next(e["payload"] for e in events if e["type"] == "clue.revealed")
+    assert revealed["content"] in narration["text"] and "spot_hidden" not in narration["text"]
 
 
 def test_partial_plan_keeps_legal_reveal_without_replanning(client, game):  # noqa: F811

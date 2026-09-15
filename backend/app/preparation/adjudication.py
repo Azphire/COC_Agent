@@ -5,7 +5,7 @@ import unicodedata
 from copy import deepcopy
 from typing import Literal
 
-from pydantic import Field, create_model
+from pydantic import Field, create_model, model_validator
 from sqlalchemy import select
 
 from app.agents.adjudication_schemas import KeeperPlan
@@ -98,6 +98,10 @@ INSTRUCTION = (
     "若本轮没有适用操作，option=null。一次只选择一个方法；关门不是移动到另一个场景。"
     "declared_focus是本轮已解析的动作焦点，不要把照明等背景条件改成新的操作。"
     "当前行动依据由action_clause_ids对应的本轮原话生成；evidence_quotes补充已有事实，过去动作不能授权本次操作。"
+    "options的authorized_action_clause_ids列出原话中授权此方法的动作段落，选择时应包含对应段落。"
+    "scene是服务器已确认的当前所在地，不要再次询问是否已经进入当前场景。"
+    "潜行或靠近的尝试不要求玩家已经到达目标；check非空且required_facts为空时，"
+    "不得额外要求距离或已完成靠近的证明，应按实际动作选择方法并等待真实检定。"
 )
 
 
@@ -115,10 +119,16 @@ def matches_action_focus(plan, scene_id, entity_id, rule):
     ):
         return False
     if rule.inventory_operation == "initial":
+        from app.preparation.inventory import inventory_probe
+
         return focus == rule.item_id or (
             focus in {scene_id, entity_id}
-            and plan.proposed_check is not None
-            and plan.proposed_check.name == "luck"
+            and (
+                plan.proposed_check is not None
+                and plan.proposed_check.name == "luck"
+                or inventory_probe(plan.focus.action)
+                and "search" in action_kinds(plan.focus.action)
+            )
         )
     if rule.encounter_operation == "sound_once" and scene_id in rule.scene_node_ids:
         authority = getattr(plan, "action_authority", {})
@@ -142,9 +152,35 @@ def matches_action_focus(plan, scene_id, entity_id, rule):
 
 def decision_contract(context, candidates):
     owned = [i["item_id"] for i in context["items"] if i["holder_id"] == context["actor"]]
+    if context.get("action_authority") is not None:
+        mentioned = context["action_authority"].get("item_instances", {})
+        owned = [eid for eid in owned if eid in mentioned]
+
+    @model_validator(mode="after")
+    def validate_selected_action(decision):
+        chosen = next((c for c in candidates if c["option"] == decision.option), None)
+        authority = context.get("action_authority")
+        if not chosen or not decision.applicable or not authority:
+            return decision
+        evidence = action_evidence(
+            decision,
+            context["clauses"],
+            authority["utterance"],
+            [],
+            state_verified=True,
+        )
+        rule = ModuleInteraction.model_validate(chosen["rule"])
+        if not evidence or not selected_action_matches(authority, evidence[0], rule):
+            raise ValueError(
+                "action_clause_ids未包含所选方法的实际动作。请引用本轮执行该动作的连续原话段落，"
+                "不能只引用靠近、目的或观察；若本轮没有该动作，applicable=false。"
+            )
+        return decision
+
     return create_model(
         "PreparedDecision",
         __base__=PreparedDecision,
+        __validators__={"validate_selected_action": validate_selected_action},
         option=(
             Literal[tuple([c["option"] for c in candidates] + [None])],
             Field(default=None, json_schema_extra={"x-explicit-output": True}),
@@ -240,6 +276,9 @@ def state_verified_method(raw):
         or raw.get("outcome")
         or raw.get("acquire_item_ids")
         or raw.get("encounter_operation") == "sound_once"
+        or raw.get("action_kinds") == ["pass"]
+        and raw.get("check_name") in {"stealth", "luck"}
+        and not raw.get("required_facts")
         or raw.get("required_item_ids")
         and (raw.get("encounter_operation") == "open_door" or raw.get("action_kinds") == ["open"])
     )
@@ -492,6 +531,15 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                     "uses_sound_item": c["rule"]["encounter_operation"] == "sound_once",
                     "allows_worn_item": c["rule"]["allow_worn_sound_item"],
                     "required_facts": c["rule"]["required_facts"],
+                    "authorized_action_clause_ids": [
+                        clause["id"]
+                        for clause in utterance_clauses(facts.raw_text)
+                        if selected_action_matches(
+                            plan.action_authority,
+                            clause["text"],
+                            ModuleInteraction.model_validate(c["rule"]),
+                        )
+                    ],
                     **(
                         {"use_effect": c["rule"]["use_effect"]}
                         if c["rule"].get("use_effect")
@@ -762,7 +810,7 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 "action_authority": plan.action_authority,
             }
             store_state(room, data)
-        elif chosen and decision.clarification:
+        elif decision.clarification:
             plan.needs_clarification = plan.parsed_intent.requires_clarification = True
             plan.parsed_intent.clarification_question = decision.clarification
             plan.proposed_check = None

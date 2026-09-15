@@ -36,12 +36,31 @@ def incidental_records(event):
         for detail in published_incidental_details(
             payload.get("incidental_details", []), payload.get("text", "")
         )
+        if not re.search(
+            r"写着|写道|写有|上写|文字是|内容是|"
+            r"(?:没有|看不到|未见|没任何).{0,10}(?:文字|字迹|记号)|"
+            r"(?:背面|纸面).{0,10}空白|(?:纸条|便签|信件|报纸).{0,10}(?:内容|号码|数字)",
+            detail,
+        )
     ]
 
 
 def relevant_incidental_memories(visible_events, query, scene_id, *, limit=6, budget=1400):
     """Retrieve public quotes on the active story branch, independently of summaries."""
     events, _ = story_events(visible_events)
+    from app.memory.facts import fact_records
+    from app.module_ir.facts import nonlocal_source_claims, recalling
+    from app.preparation.action_authority import action_kinds, declared_action
+
+    observing_here = bool(
+        declared_action(query) and set(action_kinds(query)) & {"observe", "search"}
+        and not recalling(query)
+    )
+    sources = [
+        r for r in fact_records(visible_events)
+        if r["kind"] == "source_text" and r.get("source_type") in {"clue", "location"}
+        and r.get("scene_id")
+    ]
 
     def terms(text):
         # Chinese questions rarely contain spaces. Bigrams also find short
@@ -56,6 +75,19 @@ def relevant_incidental_memories(visible_events, query, scene_id, *, limit=6, bu
     for event in events:
         for record in incidental_records(event):
             current = bool(scene_id and record["scene_id"] == scene_id)
+            if observing_here and not current:
+                continue
+            located = [
+                {"id": source["id"], "type": source["source_type"],
+                 "public_summary": source["text"],
+                 "fact_scope": "current_scene" if source["scene_id"] == record["scene_id"]
+                 else "historical"}
+                for source in sources if source["source_event_seq"] < event["seq"]
+            ] if record["scene_id"] else []
+            if event["type"] == "keeper.narration" and nonlocal_source_claims(
+                event["payload"].get("text", ""), located
+            ):
+                continue  # Rebuild the projection without rewriting the false original log.
             score = len(wanted & terms(record["text"] + record["speaker"]))
             if not current and not score:
                 continue
@@ -132,32 +164,71 @@ def epistemic_event(event):
     }
 
 
-def story_events(visible_events):
+def story_events(visible_events, *, include_initial_reveals=False):
     selected, excluded = [], Counter()
+    # A later load can select a snapshot made before an intervening rewind.
+    # Save each requested original prefix; filtering the current branch cannot
+    # bring back records removed by an earlier snapshot load.
+    sources = sorted(
+        {
+            e["payload"]["source_seq"]
+            for e in visible_events
+            if e["type"] == "snapshot.loaded"
+            and isinstance(e["payload"].get("source_seq"), int)
+            and e["payload"]["source_seq"] < e["seq"]
+        }
+    )
+    prefixes, source_index = {}, 0
     started = False
     previous_type = None
     for event in visible_events:
+        while source_index < len(sources) and sources[source_index] < event["seq"]:
+            prefixes[sources[source_index]] = list(selected)
+            source_index += 1
         kind, payload = event["type"], event["payload"]
         if kind == "game.started" or kind == "action.submitted" or payload.get("cycle_id"):
             started = True
         if kind == "snapshot.loaded":
             source = payload.get("source_seq")
             if isinstance(source, int):
-                retained = [e for e in selected if e["seq"] <= source]
-                excluded["abandoned_after_snapshot"] += len(selected) - len(retained)
+                retained = list(prefixes.get(source, [e for e in selected if e["seq"] <= source]))
+                retained_ids = {e["seq"] for e in retained}
+                excluded["abandoned_after_snapshot"] += sum(
+                    e["seq"] not in retained_ids for e in selected
+                )
                 selected = retained
         if kind not in STORY_TYPES:
             excluded[kind] += 1
-        elif kind in INITIAL_TYPES and (
-            not started
-            or payload.get("initialization")
-            or kind == "scene.updated"
-            and previous_type == "module.bound"
+        elif (
+            kind in INITIAL_TYPES
+            and not (
+                include_initial_reveals
+                and kind in {"entity.revealed", "entity.corrected", "clue.revealed"}
+            )
+            and (
+                not started
+                or payload.get("initialization")
+                or kind == "scene.updated"
+                and previous_type == "module.bound"
+            )
         ):
             excluded["initialization:" + kind] += 1
         else:
             selected.append(event)
         previous_type = kind
+    from app.preparation.inventory import inventory_probe
+
+    projected, checking_inventory = [], False
+    for event in selected:
+        if event["type"] in {"action.submitted", "agent.action_proposed"}:
+            checking_inventory = inventory_probe(event["payload"].get("text", ""))
+        if checking_inventory and event["type"] == "keeper.narration":
+            # Possession comes from checks/receipts/current inventory. A past
+            # pocket-search narration cannot establish an invented new item.
+            excluded["inventory_narration_replaced_by_receipts"] += 1
+        else:
+            projected.append(event)
+    selected = projected
     return selected, {
         "policy": "story_v1",
         "visible_count": len(visible_events),

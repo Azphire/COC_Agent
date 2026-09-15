@@ -11,8 +11,42 @@ def validate_lighting_prose(text, entities, runtime, scene):
     from app.preparation.action_authority import aliases
     from app.rooms.service import require
 
-    for entity in entities:
-        if entity.get("type") != "item":
+    items = [entity for entity in entities if entity.get("type") == "item"]
+    claims = set()
+    for sentence in re.split(r"[。；;\n]", text):
+        subject = None
+        hypothetical = False
+        for clause in re.split(r"[，,]", sentence):
+            hypothetical = hypothetical or bool(re.search(r"如果|假如|假设|打算|准备|可以", clause))
+            named = [
+                (len(name), entity["id"])
+                for entity in items for name in aliases(entity)
+                if name and name in clause
+            ]
+            if named:
+                longest = max(size for size, _ in named)
+                ids = {eid for size, eid in named if size == longest}
+                subject = next(iter(ids)) if len(ids) == 1 else None
+            elif subject is None and "屏幕" in clause:
+                screens = {
+                    entity["id"] for entity in items
+                    if any(re.search(r"手机|平板|电脑|屏幕|终端", name) for name in aliases(entity))
+                }
+                subject = next(iter(screens)) if len(screens) == 1 else None
+            if (
+                subject
+                and not hypothetical
+                and re.search(
+                    r"光束|灯光|亮着|亮起|发光|照亮|照明|点亮|"
+                    r"(?:打开|开启).{0,12}(?:手机|屏幕|灯|手电)", clause
+                )
+                and not re.search(
+                    r"没有|未|不亮|关闭|关掉|如果|假设|打算|准备|可以|能否|是否|[?？]", clause
+                )
+            ):
+                claims.add(subject)
+    for entity in items:
+        if entity["id"] not in claims:
             continue
         lights = [
             r
@@ -20,15 +54,6 @@ def validate_lighting_prose(text, entities, runtime, scene):
             if "light" in r.get("action_kinds", []) and any(r.get("set_flags", {}).values())
         ]
         if not lights:
-            continue
-        claims = [
-            clause
-            for clause in re.split(r"[，。；,;\n]", text)
-            if any(name and name in clause for name in aliases(entity))
-            and re.search(r"光束|灯光|亮着|照亮|点亮|(?:打开|开启).*(?:灯|手电)", clause)
-            and not re.search(r"没有|未|不亮|关闭|关掉|如果|假设|打算|准备|可以|[?？]", clause)
-        ]
-        if not claims:
             continue
         eid = entity["id"]
         present = any(runtime.item_instances.get(i, i) == eid for i in runtime.inventory)

@@ -10,17 +10,24 @@ from app.preparation.inventory import held_instance
 
 VERBS = {
     "throw": r"扔|抛|投(?:出|向|掷)|掷|甩(?:出|向)|砸向|\bthrow\b|\btoss\b|\bhurl\b",
-    "give": r"交(?:还)?(?:给|到|出)|归还|还给|递(?:给|到|出)|转交|塞.{0,16}手里|\bgive\b|\bhand\b",
+    "give": (
+        r"交(?:还|回)?(?:给|到|出)|归还|还给|递(?:给|到|出)|转交|塞.{0,16}手里"
+        r"|\bgive\b|\bhand\b"
+    ),
     "place": r"放(?:下|在|到|置)|搁|摆在|\b(?:place|drop|put)\b",
     "take": r"拿(?:起|走|取|好|回)|取(?:走|下|回)|拾|捡|收起|带走|\b(?:take|pick|collect)\b",
     "consume": r"吃|喝|吞|用掉|耗用|消耗|\b(?:eat|drink|consume)\b",
     "search": (
-        r"寻找|找|搜|翻(?:找|查|开|看)|检查|查看.{0,8}(?:包|袋)"
+        r"寻找|找|搜|翻(?:找|查|开|看|过|转)|揭下|检查|查看.{0,8}(?:包|袋|背面|反面|正反面)"
+        r"|(?:看看|观察)(?:一下)?(?:(?:我|你|自己)(?:的)?)?(?:口袋|衣袋|随身物|随身东西|背包)"
         r"|\b(?:search|rummage|find|inspect)\b"
     ),
     "clear": r"清理|搬开|移开|\bclear\b",
-    "observe": r"观察|看(?:清|向|看)|照(?:向|着)|辨认|打量|注视|\b(?:look|observe|watch)\b",
-    "light": r"(?:打开|开启|点亮|关掉|关闭).{0,12}(?:灯|照明|手电)|\b(?:light|illuminate)\b",
+    "observe": r"观察|查看|看(?:清|向|看)|照(?:向|着)|辨认|打量|注视|\b(?:look|observe|watch)\b",
+    "light": (
+        r"(?:打开|开启|点亮|关掉|关闭).{0,12}(?:灯|照明|手电|屏幕)"
+        r"|(?:用|使用).{0,16}(?:照明|照亮)|\b(?:light|illuminate)\b"
+    ),
     "sound_start": r"(?:打开|开启|放|播|启动|响起).{0,12}(?:铃|音乐|声音|录音)|\b(?:ring|play)\b",
     "sound_stop": r"(?:关闭|关掉|停止|关上).{0,12}(?:铃|音乐|声音|录音)|静音|\bsilence\b",
     "open": (
@@ -44,10 +51,39 @@ NON_ACTION = re.compile(
 )
 
 
+def declared_action(text):
+    """An actual inspection may contain an embedded question about its result."""
+    if re.search(r"假如|如果|假设|建议|不如|要不要|不要|并未|\bif\b", text, re.I):
+        return False
+    return any(
+        re.match(
+            r"\s*(?:我(?:们)?(?:现在|这就|先|想|要|打算|准备)?)?"
+            r"(?:仔细|认真|先|再|然后|接着|继续|试着|尝试|实际)*"
+            r"(?:(?:靠近|走近|凑近)[^，。；,.!?;]{0,16}?)?"
+            r"(?:检查|查看|看看|搜索|寻找|搜寻|翻看|翻转|翻过|揭下|观察|拿起|取下|使用|潜行|"
+            r"(?:把|将).{1,24}(?:翻过|翻转|揭下|拿起|扔|抛|交给|打开)|交给|交还|归还|递给)",
+            c,
+        )
+        for c in re.split(r"[，。；,;.!\n]", text)
+    )
+
+
 def action_kinds(text):
     if not text or re.search(r"假如|如果|假设|建议|\bif\b", text, re.I):
         return []
-    clauses = [c for c in re.split(r"[，。；,;.!\n]", text) if c and not NON_ACTION.search(c)]
+    clauses = [
+        c
+        for c in re.split(r"[，。；,;.!\n]", text)
+        if c and (not NON_ACTION.search(c) or declared_action(c))
+    ]
+    # The question describes what is being checked, not additional operations:
+    # inspecting whether a door opened cannot acquire an opening capability.
+    clauses = [
+        re.split(r"是否|有没有|是不是|能否|可否|在不在|能不能", c, maxsplit=1)[0]
+        if declared_action(c)
+        else c
+        for c in clauses
+    ]
     # A completed-state modifier identifies an object; it is not a new attempt
     # to perform that operation (e.g. operating an already-open panel).
     clauses = [re.sub(r"(?:已经|早已|已)[^，。；,;.!\n]{0,16}?的", "", c) for c in clauses]
@@ -56,18 +92,87 @@ def action_kinds(text):
     ]
 
 
+def speaker_action(text):
+    """A present first-person operation remains owned by its speaker."""
+    for clause in re.split(r"(?<=[，。；,;.!\n])", text):
+        if re.match(r"\s*我(?:们)?", clause) and declared_action(clause):
+            return clause
+    return None
+
+
+def requested_action_kinds(text):
+    """A requestee does not inherit a separate first-person requester action."""
+    clauses = [
+        c
+        for c in re.split(r"[，。；,;.\n]", text)
+        if not speaker_action(c)
+        and not re.match(r"\s*我(?:们)?(?:来|去|先|要|会|再|接着|随后|自己)", c)
+    ]
+    # A polite request remains non-executable for its speaker. Once addressed
+    # to a teammate, its requested operation can guide that teammate's choice.
+    clauses = [
+        re.sub(
+            r"(?:能不能|可不可以|能否|可否|可以|能)(?=把|将|请|帮|交|递|拿|用|检查|查看|打开|关闭)",
+            "",
+            c,
+        )
+        .replace("？", "")
+        .replace("?", "")
+        for c in clauses
+    ]
+    return [kind for kind in action_kinds("，".join(clauses)) if kind != "converse"]
+
+
+def requested_search_attempt(text):
+    """Retain the target of a search the teammate explicitly agreed to attempt."""
+    if re.search(r"如果|假如|假设|不要|不想|不必|不需要|先不|别找|别搜|别检查", text):
+        return None
+    clauses = [
+        c
+        for c in re.split(r"[，。；？！,;.!?\n]", text)
+        if c.strip() and not re.match(r"\s*我(?:们)?(?:来|去|先|要|会|再|接着|随后|自己)", c)
+    ]
+    for i, clause in enumerate(clauses):
+        match = re.search(VERBS["search"], clause)
+        if match:
+            tail = re.sub(r"(?:吗|呢)\s*$", "", clause[match.end() :])
+            return "我搜索" + "，".join([tail, *clauses[i + 1 :]]) + "。"
+    return None
+
+
 def aliases(entity):
     return list(dict.fromkeys([entity.get("title", ""), *entity.get("aliases", [])]))
 
 
-def teammate_request(raw, members, actor):
+def mentions_alias(text, name):
+    """Match a local name with ordinary possessive particles, preserving its words."""
+
+    def compact(value):
+        return re.sub(r"[的\s]", "", value)
+
+    return bool(name and compact(name) and compact(name) in compact(text))
+
+
+def teammate_request(raw, members, actor, *, action=None):
     """A direct request is speech until the addressee submits their own event."""
+    if action and action in raw and speaker_action(action):
+        return None  # This selected action belongs to the speaker, even with a separate request.
     for mid, name in members.items():
         if mid == actor:
             continue
-        if re.search(r"^\s*" + re.escape(name) + r"[，,:：]\s*(?:请|你|帮|把|打开|关|拿|用)", raw):
+        if re.search(
+            r"^\s*"
+            + re.escape(name)
+            + r"[，,:：]\s*(?:(?:现在|这就|马上|接着|随后|先|再)\s*)*"
+            + r"(?:请|你|帮|把|打开|关|拿|用|麻烦你|劳驾|我(?:是|想)?请你|我希望你|"
+            r"能不能|可不可以|能否|可否|可以|能)",
+            raw,
+        ):
             return mid
-        if re.search(r"(?:请|让|叫)" + re.escape(name) + r".{0,8}(?:打开|关|拿|用|帮)", raw):
+        if re.search(
+            r"(?:请|让|叫)" + re.escape(name) + r".{0,8}(?:打开|关|拿|用|帮|检查|查看|搜索|观察)",
+            raw,
+        ):
             return mid
     return None
 
@@ -75,7 +180,7 @@ def teammate_request(raw, members, actor):
 def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
     action = plan.focus.action if plan.focus else ""
     target = plan.focus.action_target_id if plan.focus else plan.parsed_intent.target_id
-    request = teammate_request(raw, members, actor)
+    request = teammate_request(raw, members, actor, action=action)
     kinds = action_kinds(action) if action and action in raw and not request else []
     if plan.parsed_intent.type == "observe":
         kinds = [k for k in kinds if k in {"observe", "light"}]
@@ -90,7 +195,9 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
         )
         if instance:
             held[eid] = instance
-    named = {eid for eid, e in entities.items() if any(a and a in action for a in aliases(e))}
+    named = {
+        eid for eid, e in entities.items() if any(mentions_alias(action, a) for a in aliases(e))
+    }
     named.update(runtime.item_instances.get(iid, iid) for iid in explicit)
     named.intersection_update(entities)
     instances = {

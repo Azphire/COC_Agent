@@ -623,6 +623,15 @@ class AgentService:
                     "请先绑定角色",
                 )
             cycle_id = str(uuid4())
+            from app.agents.conversation import movement_reply
+
+            movement = (
+                None
+                if rule_question
+                else await movement_reply(
+                    self, session, room, actor, safe_body["text"], body.clarification_event_seq
+                )
+            )
             event = self.rooms.append(
                 session,
                 room,
@@ -634,6 +643,7 @@ class AgentService:
                     "cycle_id": cycle_id,
                     "target_entity_id": body.target_entity_id,
                     "clarification_event_seq": body.clarification_event_seq,
+                    **(movement or {}),
                 },
                 request_id=str(body.client_request_id),
                 request_hash=fingerprint,
@@ -1001,8 +1011,9 @@ class AgentService:
         )
         from app.preparation.runtime import freeze_adjustment
 
-        await freeze_adjustment(self, session, room, check,
-                                facts.approved_entities.get(policy.target_entity_id))
+        await freeze_adjustment(
+            self, session, room, check, facts.approved_entities.get(policy.target_entity_id)
+        )
         if check.opposed or check.combined:
             await self.compound.freeze(session, room, check, facts)
         # The private KP model must not publish arbitrary text through a check reason.

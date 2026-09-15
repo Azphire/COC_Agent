@@ -141,10 +141,14 @@ class SummaryRecoveryService:
                     return None
                 context = {
                     "phase": "summary",
-                    "previous_summary": old.content if old else None,
+                    "previous_summary": None,
                     "current_participants": await current_participants(self.agents, session, room),
                     "events": [],
                 }
+                if old:
+                    from app.memory.facts import summary_sources
+
+                    context["previous_summary"] = summary_sources(events, old.source_event_ids)
                 budget = min(
                     self.agents.settings.agent_context_chars,
                     max(

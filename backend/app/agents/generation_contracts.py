@@ -7,7 +7,7 @@ server metadata as defaults. These fields never enter the generation grammar.
 import re
 from typing import Literal
 
-from pydantic import Field, create_model
+from pydantic import Field, create_model, model_validator
 
 from app.agents.adjudication_schemas import (
     KeeperNarration,
@@ -50,7 +50,11 @@ def generation_contract(schema, context):
     if schema is KeeperPlan:
         ids = context["action_identifiers"]
         people = [t["id"] for t in context.get("current_targets", []) if t["type"] == "npc"]
-        people += list(context.get("current_participants", {}).get("members", {}))
+        people += [
+            member_id
+            for member_id in context.get("current_participants", {}).get("members", {})
+            if member_id != ids["actor_member_id"]
+        ]
         targets = [t["id"] for t in context.get("current_targets", [])]
         targets += [t["target_scene_node_id"] for t in context.get("approved_exits", [])]
         focus_base = create_model(
@@ -89,6 +93,51 @@ def generation_contract(schema, context):
             },
             **{k: (f.annotation, f) for k, f in focus_base.model_fields.items()},
         )
+        trigger = context["triggering_action"]
+        from app.preparation.action_authority import (
+            action_kinds,
+            declared_action,
+            speaker_action,
+            teammate_request,
+        )
+
+        original = trigger.get("payload", {}).get("text", "")
+        own_transfers = {
+            c["id"]: c["text"] for c in clauses
+            if speaker_action(c["text"]) and "give" in action_kinds(c["text"])
+        } if teammate_request(original, context.get("current_participants", {}).get("members", {}),
+                              trigger.get("actor_member_id")) else {}
+        if not context.get("readonly_recall") and (
+            trigger.get("type") == "agent.action_proposed"
+            and re.search(r"检查|搜索|寻找|拿起|使用|交给", original)
+            or declared_action(original)
+            and action_kinds(original)
+        ):
+
+            def keep_proposed_operation(value):
+                if own_transfers and not (
+                    set(value.action_clause_ids) & own_transfers.keys()
+                    or value.action and any(t in value.action for t in own_transfers.values())
+                ):
+                    raise ValueError(
+                        "本人交出物品与队友请求是两段意图；"
+                        "action_clause_ids须保留本人实际交出段落。"
+                    )
+                if not value.action_clause_ids and not (value.action and value.action in original):
+                    raise ValueError(
+                        "原话包含实际检查或物品操作；action_clause_ids必须保留原动作。检查有没有文字不是只向人提问。检定仍由KP按条件决定。"
+                    )
+                return value
+
+            focus = create_model(
+                "TurnFocus",
+                __base__=focus,
+                __validators__={
+                    "keep_proposed_operation": model_validator(mode="after")(
+                        keep_proposed_operation
+                    )
+                },
+            )
         intent = bound(
             PlayerIntent,
             {
@@ -186,9 +235,9 @@ def generation_contract(schema, context):
         if responder.get("kind") == "npc":
             speech = bound(NPCSpeech, {"entity_id": responder["id"]})
             fields["npc_speech"] = (
-                speech | None,
+                speech,
                 Field(
-                    default=None,
+                    ...,
                     json_schema_extra={"x-explicit-output": True},
                 ),
             )
@@ -234,6 +283,34 @@ def restore_output(output, schema, context):
 
         raw = context["triggering_action"]["payload"]["text"]
         named = named_move_exits(raw, context.get("approved_exits", []))
+        from app.preparation.action_authority import action_kinds
+
+        if (
+            len(named) == 1
+            and explicit_movement(raw)
+            and value["parsed_intent"]["type"]
+            in {"observe", "investigate", "wait", "unknown", "converse", "interact"}
+            and set(action_kinds(raw)) <= {"observe", "search", "pass"}
+            and not re.search(r"潜行|悄悄", raw)
+        ):
+            # "Enter the hall and look around" cannot lose its explicit move
+            # merely because the model called it investigation. The named exit
+            # still goes through the normal availability/authority checks.
+            focus = value.get("focus") or TurnFocus().model_dump(mode="json")
+            focus.update(action=raw, action_target_id=named[0]["target_scene_node_id"])
+            if focus.get("question") == raw:
+                focus.update(question="", addressee_id=None)
+            value["focus"] = focus
+            value["parsed_intent"].update(
+                type="move", evidence_quote=raw, requires_clarification=False
+            )
+            value["proposed_transition_id"] = named[0]["transition_id"]
+            value["needs_clarification"] = False
+            value["proposed_check"] = None
+            value["proposed_reveal_entity_ids"] = []
+            value["proposed_tool_calls"] = [
+                t for t in value["proposed_tool_calls"] if t["name"] in READ_TOOLS
+            ]
         local = named_move_exits(
             raw,
             [
@@ -309,7 +386,54 @@ def restore_output(output, schema, context):
                     else ""
                 )
         from app.agents.action_policy import named_move_exits
-        from app.preparation.action_authority import NON_ACTION, action_kinds
+        from app.preparation.action_authority import NON_ACTION, action_kinds, declared_action
+
+        kinds = set(action_kinds(focus.get("action", "")))
+        if (
+            (
+                value["parsed_intent"]["type"] in {"converse", "wait", "unknown", "assist"}
+                or value["parsed_intent"]["type"] == "observe"
+                and (
+                    kinds & {"take", "give", "open", "close", "place", "control"}
+                    or "search" in kinds
+                    and (
+                        re.search(r"翻看|翻过|翻转|揭下", focus.get("action", ""))
+                        or any(
+                            entry.get("entity_id") == focus.get("action_target_id")
+                            and any("search" in rule.get("action_kinds", [])
+                                    for rule in entry.get("interactions", []))
+                            for entry in context.get("module_interactions", [])
+                        )
+                    )
+                )
+            )
+            and kinds
+            and declared_action(focus["action"])
+        ):
+            value["parsed_intent"]["type"] = (
+                "observe" if kinds <= {"observe", "light"} else "interact"
+            )
+
+        if (
+            value["parsed_intent"]["type"] in {"observe", "converse", "wait", "unknown", "move"}
+            and "throw" in action_kinds(focus.get("action", ""))
+            and (value["parsed_intent"]["type"] != "move" or not explicit_movement(raw))
+            and re.search(
+                r"(?:^|[，。；])\s*我?(?:(?:把|将|脱下|摘下|取下).{1,24})?(?:扔|抛|掷|投向)",
+                focus["action"],
+            )
+        ):
+            # An explicit current throw cannot be downgraded to observation.
+            # Keep the source clauses/target; approved methods still decide
+            # whether a worn or actually held object is legal and its result.
+            value["parsed_intent"]["type"] = "interact"
+            value["proposed_transition_id"] = None
+            value["needs_clarification"] = False
+            value["proposed_tool_calls"] = [
+                t
+                for t in value["proposed_tool_calls"]
+                if t["name"] not in {"transition_scene", "update_scene"}
+            ]
 
         if (
             value["parsed_intent"]["type"] == "move"
@@ -333,7 +457,12 @@ def restore_output(output, schema, context):
                 if t["name"] not in {"transition_scene", "update_scene"}
             ]
 
-        if NON_ACTION.search(focus.get("action", "")) and not action_kinds(focus["action"]):
+        if (
+            NON_ACTION.search(focus.get("action", ""))
+            and not action_kinds(focus["action"])
+            and not explicit_movement(focus["action"])
+            and not (value["parsed_intent"]["type"] == "move" and explicit_movement(raw))
+        ):
             focus["question"] = focus.get("question") or focus["action"]
             focus["action"] = ""
             focus["action_target_id"] = None
@@ -382,13 +511,18 @@ def restore_output(output, schema, context):
                         c["text"]
                         for c in clauses[min(movement_positions) : max(movement_positions) + 1]
                     )
+                if "converse" not in action_kinds(raw):
+                    focus.update(question="", addressee_id=None)
         proposal = value.get("proposed_check")
         from app.preparation.search import (
+            named_check_requirement,
+            repair_belongings_action,
             repair_control_target,
             repair_observation_target,
             repair_search_target,
         )
 
+        repair_belongings_action(value, context)
         repair_observation_target(value, context)
         repair_search_target(value, context)
         repair_control_target(value, context)
@@ -397,8 +531,52 @@ def restore_output(output, schema, context):
             for r in context.get("check_requirements", [])
             if r.get("access_policy") == "requires_check"
             and r.get("successful_check")
-            and r["title"] in focus.get("action", "")
+            and named_check_requirement(
+                r, focus.get("action", ""), value.get("proposed_reveal_entity_ids", []),
+                parent=next(
+                    (t for t in context.get("current_targets", [])
+                     if t["id"] == focus.get("action_target_id")), None
+                ),
+                proposal=proposal,
+            )
         ]
+        from app.preparation.search import search_instrument, unrelated_item_focus
+
+        if (
+            not named_requirements
+            and (
+                focus.get("action_target_id")
+                == context.get("action_identifiers", {}).get("current_scene_id")
+                or any(
+                    t.get("type") == "scene" and t["id"] == focus.get("action_target_id")
+                    for t in context.get("current_targets", [])
+                )
+                or unrelated_item_focus(
+                    focus.get("action", ""), focus.get("action_target_id"), context
+                )
+                or search_instrument(
+                    focus.get("action", ""),
+                    focus.get("action_target_id"),
+                    context.get("inventory_state", {}),
+                    context.get("triggering_action", {}).get("actor_member_id"),
+                )
+            )
+            and set(action_kinds(focus.get("action", ""))) & {"search", "observe"}
+            and value["parsed_intent"]["type"] in {"investigate", "observe"}
+        ):
+            # A scene search need not name the object it has not discovered yet.
+            # The KP already chose a single gated discovery; bind that attempt
+            # to its approved real check, retaining all normal prerequisites.
+            named_requirements = [
+                r
+                for r in context.get("check_requirements", [])
+                if (
+                    r["entity_id"] in value.get("proposed_reveal_entity_ids", [])
+                    or r["entity_id"] == (proposal or {}).get("target_entity_id")
+                )
+                and r.get("access_policy") == "requires_check"
+                and r.get("successful_check")
+            ]
         if len(named_requirements) == 1 and value["parsed_intent"]["type"] in {
             "investigate",
             "observe",
@@ -489,6 +667,66 @@ def restore_output(output, schema, context):
                 reason=focus["action"],
                 uncertainty=focus["obstacle"],
             )
+    acknowledgement = False
+    if schema is KeeperPlan:
+        from app.preparation.inventory import held_item_acknowledgement
+
+        trigger = context["triggering_action"]
+        acknowledgement = trigger.get(
+            "type"
+        ) == "agent.action_proposed" and held_item_acknowledgement(
+            raw, context.get("inventory_state", {}), trigger.get("actor_member_id")
+        )
+    if schema is KeeperPlan and (context.get("readonly_recall") or acknowledgement):
+        value["parsed_intent"].update(
+            type="converse" if acknowledgement else "recall",
+            target_id=None,
+            evidence_quote=context["triggering_action"]["payload"]["text"],
+            requires_clarification=False,
+        )
+        value.update(
+            proposed_check=None,
+            proposed_tool_calls=[],
+            proposed_transition_id=None,
+            proposed_reveal_entity_ids=[],
+            needs_clarification=False,
+        )
+        value["focus"] = TurnFocus(
+            question=context["triggering_action"]["payload"]["text"],
+            addressee_id=(value.get("focus") or {}).get("addressee_id"),
+            answer_basis="facts",
+        ).model_dump()
+    elif schema is KeeperPlan:
+        from app.agents.action_policy import local_scene_movement
+
+        if local_scene_movement(
+            raw, context.get("current_targets", []), context.get("approved_exits", [])
+        ):
+            scene_id = context["action_identifiers"]["current_scene_id"]
+            focus = value.get("focus") or TurnFocus().model_dump()
+            focus.update(action=raw, action_target_id=scene_id)
+            value.update(focus=focus, proposed_transition_id=None, needs_clarification=False)
+            # The navigation node is already the current scene. It is not an
+            # unrevealed prepared entity that a local move needs to discover.
+            value["proposed_reveal_entity_ids"] = [
+                eid for eid in value["proposed_reveal_entity_ids"] if eid != scene_id
+            ]
+            value["parsed_intent"].update(
+                type="interact",
+                target_id=scene_id,
+                evidence_quote=raw,
+                requires_clarification=False,
+            )
+            value["proposed_tool_calls"] = [
+                t
+                for t in value["proposed_tool_calls"]
+                if t["name"] not in {"transition_scene", "update_scene"}
+                and not (
+                    t["name"] == "reveal_entity" and t["arguments"].get("entity_id") == scene_id
+                )
+            ]
+            if value.get("proposed_check"):
+                value["proposed_check"].update(target_entity_id=scene_id, clue_id=None)
     if schema is KeeperNarration and value.get("claim_ids"):
         options = {c["claim_id"]: c for c in context["PUBLIC_CLAIM_OPTIONS"]}
         if not set(value["claim_ids"]) <= options.keys():
@@ -496,4 +734,119 @@ def restore_output(output, schema, context):
 
             raise ModelFormatError("未知公开依据", [{"field": "claim_ids", "code": "unknown_id"}])
         value["grounded_claims"] = [options[k] for k in dict.fromkeys(value["claim_ids"])]
+    if schema in {KeeperNarration, TeammateDecision} and context.get("readonly_recall"):
+        from app.memory.facts import render_facts
+
+        evidence = context.get("fact_evidence", [])
+        ids = value.get("fact_ids", [])
+        # The model may order retrieved excerpts. The original text is always
+        # rendered by the server, including evidence the model forgot to select.
+        known = {r["id"]: r for r in evidence}
+        ids = list(dict.fromkeys([i for i in ids if i in known] + list(known)))
+        content = render_facts([known[i] for i in ids])
+        if schema is KeeperNarration:
+            value.update(
+                public_narration=content,
+                incidental_details=[],
+                npc_speech=None,
+                grounded_claims=[],
+                claim_ids=[],
+                fact_ids=ids,
+            )
+        else:
+            value.update(
+                mode="speak",
+                action_type="recall",
+                action_text=None,
+                speech_text=content,
+                target_id=None,
+                related_public_entity_ids=[],
+                fact_ids=[r["id"] for r in evidence],
+            )
+    elif schema is KeeperNarration:
+        brief = context.get("response_brief", {})
+        if value.get("npc_speech") and brief.get("dialogue_answers"):
+            from app.preparation.dialogue import sourced_dialogue_reply
+
+            value["npc_speech"]["text"] = sourced_dialogue_reply(
+                brief.get("question", ""), brief["dialogue_answers"]
+            )
+        results = context.get("public_tool_results", {}).get("events", [])
+        transitions = [e for e in results if e["type"] == "scene.updated"]
+        interactions = [
+            e["payload"]["text"]
+            for e in results
+            if e["type"] == "module.interaction" and e["payload"].get("text")
+        ]
+        checks = [e for e in results if e["type"] == "check.resolved"]
+        reveals = [
+            e["payload"].get("public_summary", e["payload"].get("content", ""))
+            for e in results
+            if e["type"] in {"entity.revealed", "clue.revealed"}
+        ]
+        if transitions:
+            p = transitions[-1]["payload"]
+            # A movement outcome is a receipt, not prose inferred from intent.
+            value["public_narration"] = (
+                "你已抵达" + p.get("scene_title", "") + "。" + p.get("scene_summary", "")
+            )
+            value["incidental_details"] = []
+        elif interactions:
+            # The selected approved operation supplies its actual result text.
+            # A correct claim ID cannot authorize a different outcome in prose.
+            value["public_narration"] = "\n".join(dict.fromkeys(interactions))
+            value["incidental_details"] = []
+        elif checks:
+            from app.agents.narration import fallback_narration
+
+            # A real roll constrains the achieved result, not only its ID or the
+            # words "success/failure". Only actual reveals can supply new clues.
+            value["public_narration"] = fallback_narration(
+                context.get("intent_type", ""), {"events": results}, "", brief=brief
+            )
+            value["incidental_details"] = []
+        elif context.get("public_tool_results", {}).get("blocked_operations"):
+            value["public_narration"] = "这次动作没有完成，当前状态未因这次尝试改变。"
+            value.update(incidental_details=[], claim_ids=[], grounded_claims=[])
+        elif brief.get("movement_requested"):
+            title = brief.get("current_scene", {}).get("title", "原场景")
+            value["public_narration"] = "本次没有完成转场；当前位置仍是" + title + "。"
+            value.update(incidental_details=[], claim_ids=[], grounded_claims=[])
+        elif (
+            brief.get("responder", {}).get("kind") == "teammate"
+            and not brief.get("attempt")
+            and not brief.get("source_quotes")
+        ):
+            value["public_narration"] = ""
+            value.update(incidental_details=[], claim_ids=[], grounded_claims=[])
+        elif brief.get("inventory_probe") and brief.get("responder", {}).get("kind") != "npc":
+            from app.preparation.inventory import inventory_reply
+
+            view = context.get("inventory_state", {})
+            actor = context["triggering_action"].get("actor_member_id")
+            name = next(
+                (m["name"] for m in view.get("members", []) if m["id"] == actor), "该调查员"
+            )
+            value["public_narration"] = (
+                ""
+                if brief.get("responder", {}).get("kind") == "teammate"
+                else "请先完成本次随身物检查的检定，物品结果尚未确定。"
+                if any(e["type"] == "check.requested" for e in results)
+                else inventory_reply(view, actor).replace("我", name, 1)
+            )
+            value.update(incidental_details=[], claim_ids=[], grounded_claims=[])
+        elif reveals:
+            value["public_narration"] = "\n".join(filter(None, reveals))
+            value["incidental_details"] = []
+        elif context.get("public_tool_results", {}).get("blocked_discovery"):
+            value["public_narration"] = "这次尚未确认新的线索内容，仍需满足该目标的调查条件。"
+            value["incidental_details"] = []
+        elif brief.get("unconfirmed_target"):
+            value["public_narration"] = "这次检查的目标尚未实际确认，目前无法确定其中的具体内容。"
+            value["incidental_details"] = []
+        elif brief.get("source_quotes") and brief.get("responder", {}).get("kind") != "npc":
+            # Already public writing remains the same on a teammate's repeated
+            # inspection; an old improvised absence cannot erase the source.
+            value["public_narration"] = "\n".join(brief["source_quotes"])
+            value["incidental_details"] = []
     return schema.model_validate(value)

@@ -23,6 +23,7 @@ DECISION = (
     "range_band按场景距离选base/long/extreme/point_blank，不明确距离用base。"
     "first_aid急救；medicine医学；reload装填；pass主动等待或站起等占用行动；end仅表示自己脱离战斗。"
     "急救和医学的目标选treatment_targets；不要将原话中的NPC替换成队友。没有对应目标时用talk说明。"
+    "同句实际包扎并提问时先选first_aid（医学治疗选medicine），问题在结算后继续；问号不能吞掉治疗动作。"
     "不因聊天自动结束战斗。自动角色结合自己的队伍、伤势和武器选行动，攻击对方，受伤严重可以脱离。"
     "无需主机审批普通合法行动。reason简短描述尝试，不宣布伤害或成败。"
 )
@@ -79,12 +80,28 @@ def human_decision_contract(context):
         if base and base != label and base in raw:
             groups.add(pid)
     named = exact or groups
+    from app.preparation.dialogue import compound_treatment
+
+    operation = compound_treatment(raw)
+    if operation and not named and re.search(r"他|她|对方", raw):
+        previous = context.get("previous_dialogue_target")
+        if previous in participants:
+            named = {previous}
+    treatments = {t["id"] for t in context.get("treatment_targets", [])}
+    fields = {}
+    if operation and named & treatments:
+        fields["operation"] = (Literal[operation], ...)
+        named &= treatments
     if not named:
         return CombatDecision
     return create_model(
         "HumanCombatDecision",
         __base__=CombatDecision,
-        target_id=(Literal[tuple(sorted(named) + [None])], None),
+        target_id=(
+            Literal[tuple(sorted(named) + ([] if fields else [None]))],
+            ... if fields else None,
+        ),
+        **fields,
     )
 
 
@@ -152,7 +169,9 @@ async def call_model(runtime, state, schema, instruction, context, node):
     return schema.model_validate(await service.mutate(state["room_id"], finish))
 
 
-async def reveal_addressed_npc(service, session, room, raw_text, scene, cycle_id=None):
+async def reveal_addressed_npc(
+    service, session, room, raw_text, scene, cycle_id=None, previous_npc=None
+):
     """Bridge an explicitly addressed, already described NPC into ordinary treatment."""
     summary = next(
         (
@@ -168,7 +187,11 @@ async def reveal_addressed_npc(service, session, room, raw_text, scene, cycle_id
             entity.entity_type != "npc"
             or entity.state != "hidden"
             or not title
-            or title not in raw_text
+            or not (
+                title in raw_text
+                or entity.source_entity_id == previous_npc
+                and re.search(r"他|她|对方", raw_text)
+            )
             or title not in summary
         ):
             continue
@@ -192,8 +215,17 @@ async def drive_combat(runtime, state):
         await combat_service.ensure_members(session, room, data, module.state["scene_id"])
         store_state(room, data)
         trigger = await session.get(RoomEvent, (room.id, state["triggering_event_seq"]))
+        from app.memory.events import story_events
+
+        history, _ = story_events(
+            await rooms.events(session, room, Identity(state["triggering_member_id"], False))
+        )
+        previous_npc = next(
+            (e["payload"].get("entity_id") for e in reversed(history) if e["type"] == "npc.spoke"),
+            None,
+        )
         await reveal_addressed_npc(
-            service, session, room, trigger.payload["text"], module, cycle.id
+            service, session, room, trigger.payload["text"], module, cycle.id, previous_npc
         )
         data = load_state(room)
         actor = state.get("combat_actor_id") or state["triggering_member_id"]
@@ -212,6 +244,17 @@ async def drive_combat(runtime, state):
             "input": trigger.payload["text"],
             "actor_id": actor,
             "automatic": bool(state.get("combat_automatic")),
+            "previous_dialogue_target": next(
+                (
+                    p.id
+                    for p in data.combat.participants.values()
+                    if p.npc_id == previous_npc
+                    and previous_npc
+                    and p.public
+                    and p.scene_id == module.state["scene_id"]
+                ),
+                None,
+            ),
             "recent_player_actions": recent,
             "combat": public,
             "attack_targets": [
@@ -414,6 +457,9 @@ async def drive_combat(runtime, state):
                 "safe_error": cycle.state["combat_rejection"],
             }
         service.cycle_event(session, room, cycle)
+        from app.preparation.dialogue import continue_treatment_question
+
+        await continue_treatment_question(service, session, room, cycle, action)
         await session.flush()
         from app.agents.conversation import activate_next
 

@@ -260,7 +260,11 @@ def test_rejected_private_draft_never_enters_public_memory(client, game):  # noq
     public = [e for e in events if e["visibility"] == "public"]
     assert secret[:160] not in json.dumps(public, ensure_ascii=False)
     assert not relevant_incidental_memories(events, "门外", "square")
-    assert any(e["type"] == "keeper.narration" and e["payload"]["safe_fallback"] for e in public)
+    # An addressed NPC now answers through the real speech publication path,
+    # including a safe refusal when the draft cannot be published.
+    speech = [e for e in public if e["type"] == "npc.spoke"]
+    assert speech and speech[-1]["payload"]["text"].strip()
+    assert speech[-1]["payload"]["entity_id"] == "caretaker"
 
 
 def test_snapshot_reload_retains_only_effective_improvisation_branch(client, game):  # noqa: F811

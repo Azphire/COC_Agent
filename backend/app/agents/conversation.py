@@ -42,15 +42,74 @@ def addressed_targets(text, targets):
     }
 
 
+async def movement_reply(service, session, room, actor, raw, clarification_seq=None):
+    """Bind a short destination answer to its actual, still-local pending move."""
+    from app.agents.action_policy import explicit_movement
+
+    if re.search(r"[?？]|取消|不去|不走|不再|改为|先问", raw):
+        return None
+    if not re.search(r"车厢|门|另一端|内部|大厅|走廊|房间|楼|室|出口", raw):
+        return None
+    clarification = (
+        await session.get(RoomEvent, (room.id, clarification_seq))
+        if clarification_seq
+        else await session.scalar(
+            select(RoomEvent)
+            .where(RoomEvent.room_id == room.id, RoomEvent.type == "action.clarification_requested")
+            .order_by(RoomEvent.seq.desc())
+            .limit(1)
+        )
+    )
+    if not clarification or clarification.payload.get("actor_member_id") != actor:
+        return None
+    cycle = await session.get(AgentCycle, clarification.payload.get("cycle_id"))
+    if not cycle:
+        return None
+    original = await session.get(RoomEvent, (room.id, cycle.state["triggering_event_seq"]))
+    latest = await session.scalar(
+        select(RoomEvent)
+        .where(RoomEvent.room_id == room.id, RoomEvent.type == "action.submitted")
+        .order_by(RoomEvent.seq.desc())
+        .limit(1)
+    )
+    if (
+        not original
+        or latest.seq != original.seq
+        or not explicit_movement(original.payload["text"])
+    ):
+        return None
+    record = await session.get(ActionPlanRecord, cycle.id)
+    nav = await service.navigation.state(session, room.id)
+    if (
+        not record
+        or not nav
+        or record.document["plan"]["current_scene_id"] != nav.current_scene_node_id
+        or record.document["plan"].get("expected_navigation_revision") != nav.navigation_revision
+    ):
+        return None
+    text = (
+        raw
+        if explicit_movement(raw)
+        else ("我潜行前往" if "潜行" in original.payload["text"] else "我前往") + raw
+    )
+    return {
+        "text": text,
+        "submitted_text": raw,
+        "clarification_source_seq": original.seq,
+        "clarification_original_text": original.payload["text"],
+        "clarification_event_seq": clarification.seq,
+    }
+
+
 async def can_withdraw(session, room, pending):
     if (
         not pending
         or pending.status != "pending"
         or pending.document.get("sanity")
         or pending.document.get("settlement")
-        or any(s.get("dice") for s in (pending.document.get("compound") or {}).get(
-            "participants", []
-        ))
+        or any(
+            s.get("dice") for s in (pending.document.get("compound") or {}).get("participants", [])
+        )
     ):
         return False
     # Loading a pre-roll snapshot rewinds the projection, not fixed dice receipts.
@@ -221,14 +280,22 @@ async def route(runtime, state):
                     plan.proposed_reveal_entity_ids = []
                     plan.proposed_transition_id = None
                     reply = "好，这次尚未掷骰的尝试已撤回。你可以继续说话或换个做法。"
-                    child.state = {**child.state, "withdrawal_result": {
-                        "check_id": pending.id, "withdrawn": True, "message": reply,
-                    }}
+                    child.state = {
+                        **child.state,
+                        "withdrawal_result": {
+                            "check_id": pending.id,
+                            "withdrawn": True,
+                            "message": reply,
+                        },
+                    }
                     if not plan.focus or not (plan.focus.question or plan.focus.addressee_id):
                         plan.parsed_intent.type = "out_of_character"
                         child.state = {**child.state, "conversation_reply": reply}
                         runtime.rooms.append(
-                            session, room, "keeper.narration", room.host_member_id,
+                            session,
+                            room,
+                            "keeper.narration",
+                            room.host_member_id,
                             {"text": reply, "cycle_id": child.id},
                             request_id=child.id + ":withdraw",
                         )
@@ -242,9 +309,13 @@ async def route(runtime, state):
                 plan.proposed_reveal_entity_ids = []
                 plan.proposed_transition_id = None
                 plan.next_decision = "原骰或遭遇已经发生，不能撤销；仍可选择当前可用的结算选项。"
-                child.state = {**child.state, "withdrawal_result": {
-                    "withdrawn": False, "message": plan.next_decision,
-                }}
+                child.state = {
+                    **child.state,
+                    "withdrawal_result": {
+                        "withdrawn": False,
+                        "message": plan.next_decision,
+                    },
+                }
         if choice == "independent" and (
             plan.proposed_check
             or plan.proposed_reveal_entity_ids

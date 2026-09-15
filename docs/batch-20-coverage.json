@@ -1,0 +1,1623 @@
+{
+  "batch": 20,
+  "baseline_head": "0828dfd88c60a84ae827bd5dc5b7aa7262677609",
+  "branch": "main",
+  "committed_or_pushed": false,
+  "source": {
+    "local_originals_found": true,
+    "formal_package_byte_sha256": "b47bf0fb5127e4bc46fdb1c5a97fd9b41fe358eea2595351b5e19d95411e6c87",
+    "approval_reused": "batch17-npc-values-v1-user-approval",
+    "original_batch19_failure_preserved": true,
+    "historical_batch18_b_pass_preserved": true,
+    "original_preservation": {
+      "game.db": true,
+      "knowledge.db": true,
+      "checkpoint.db": true,
+      "formal_package": true
+    },
+    "missing_local_materials": []
+  },
+  "final_candidate": {
+    "manifest": "data/prepared/changan/batch-20/final-freeze.json",
+    "manifest_sha256": "3abaeb0beb7f381566b33d6a956cc0abd9a964bd1ee1d4bae768363f8e99aab5",
+    "files": 207,
+    "model": "qwen3:8b",
+    "model_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "context": 8192,
+    "output": 900,
+    "planning_output": 1600,
+    "temperature": 0.3,
+    "think": false,
+    "keep_alive": "5m",
+    "summary_event_threshold": 20,
+    "summary_context_threshold": 12000,
+    "status": "verified by long-c39",
+    "freeze_unchanged": true
+  },
+  "regression": {
+    "result": "passed",
+    "passed": 785,
+    "warnings": 1,
+    "seconds": 351.62,
+    "artifact": "data/prepared/changan/batch-20/tests-c213-final-affected.xml",
+    "scope": "affected memory, dialogue, navigation, P0, recovery and necessary MP/item regressions",
+    "static_check": "ruff and git diff --check passed",
+    "overlapping_runs_not_added": true
+  },
+  "p0_mainline": {
+    "status": "passed within batch20 scope",
+    "final_pass": true,
+    "run": "long-c39",
+    "evidence": "NPC direct/alias/followup/mixed response, empty inventory, actual key acquisition/transfer/use, legal local movement and actual arrivals",
+    "limitations": [
+      "Optional paper pickup #533 was not completed: approved item has interactions=[]; old date focus produced an unhelpful clue-condition response, but repeat check/reveal were rejected and no item was granted. Formal package unchanged.",
+      "Repeated peer follow proposals #348/#1167 did not complete (#374/#1193), did not move the party again and did not block explicit next actions.",
+      "Some answers repeat source speech or include irrelevant true receipts; wording remains verbose.",
+      "Stealth failure #1094 did not grant passage; hidden-target tool #1098 was rejected before any effect.",
+      "No train-control ending, A/C full route, all random combat branches or MP example was replayed in this final game."
+    ]
+  },
+  "p1_memory_long": {
+    "status": "passed",
+    "final_pass": true,
+    "run": "long-c39",
+    "active_seconds": 4678.10284280777,
+    "player_inputs": 45,
+    "model_calls": 203,
+    "summary_rebuilds": 47,
+    "pure_recall_rounds": 18,
+    "pure_recall_new_operations": 0,
+    "last_failed_run": "long-c38",
+    "previous_failures_preserved": true
+  },
+  "save_restore": {
+    "status": "passed independently",
+    "run": "long-c39",
+    "normal_restart_count": 2,
+    "comparisons": {
+      "mid": {
+        "characters": true,
+        "module_runtime": true,
+        "combat": true,
+        "time_receipts": true,
+        "game_minute": true,
+        "game_round": true,
+        "sanity_day": true,
+        "checks": true
+      },
+      "correction": {
+        "characters": true,
+        "module_runtime": true,
+        "combat": true,
+        "time_receipts": true,
+        "game_minute": true,
+        "game_round": true,
+        "sanity_day": true,
+        "checks": true
+      }
+    },
+    "final_short_run": "short-c48",
+    "final_short_comparisons": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "historical_short32_branch_switch": "7/8 before later ordinary 8/8; not conflated"
+  },
+  "mp_and_item_counts": {
+    "status": "existing configured scope regression passed",
+    "reimplemented": false,
+    "all_possible_items_supported": false,
+    "full_mp_example_replayed_in_long_game": false,
+    "regression_artifact": "data/prepared/changan/batch-20/tests-c213-final-affected.xml",
+    "final_long_key_acquisition_transfer_use": true,
+    "final_long_phone_or_torch_acquired": false
+  },
+  "deferred": [
+    "full character creation",
+    "all A/C routes",
+    "all combat random branches",
+    "model/API switching",
+    "network tools",
+    "voice",
+    "other P2"
+  ],
+  "formal_character_configuration": {
+    "occupations": 2,
+    "skills": 29,
+    "age_min": 15,
+    "age_max": 89
+  },
+  "last_frozen_attempt": {
+    "run": "long-c39",
+    "room_id": "df2c2033-42e6-4158-8121-4e2578646c33",
+    "players": [
+      "周衡",
+      "沈岚"
+    ],
+    "status": "passed within batch20 scope",
+    "counts_not_combined_with_previous_attempts": true
+  },
+  "short_c20": {
+    "fixture": "read-only copy of long-c19 with labelled normal snapshot selections",
+    "timed_long_game": false,
+    "model_calls": 196,
+    "copied_calls": 145,
+    "snapshot": "63b57e06-acb1-40ce-87c5-3ab8fd7fbfd3",
+    "full_source_recall": 1424,
+    "treatment_failure": 1447,
+    "npc_answers": [
+      1471,
+      1499
+    ],
+    "compound_arrival": 1581,
+    "stealth_check": {
+      "seq": 1709,
+      "roll": 77,
+      "target": 5,
+      "success": false
+    },
+    "position_recall": 1746,
+    "recall_new_operations": [],
+    "preserved_failed_stealth_attempts": [
+      1647,
+      1678
+    ]
+  },
+  "short_c22": {
+    "kind": "fresh initialization short flow",
+    "timed_long_game": false,
+    "room_id": "2f9b8d44-4e64-43b5-ae5b-33eb8f4c2e79",
+    "model_calls": 5,
+    "initial_failure": {
+      "seq": 39,
+      "roll": 93,
+      "target": 70
+    },
+    "actual_initial_receipt": 43,
+    "accurate_recall": 76,
+    "recall_new_operations": [],
+    "snapshot": "d93257ec-1355-4b7c-bdb1-b4b7f148f4b2"
+  },
+  "short_c21": {
+    "kind": "read-only copy of long-c20; cross-version debugging",
+    "model_calls": 55,
+    "copied_calls": 22,
+    "restore_comparison": "8 of 8",
+    "preserved_fallback_failure": 329,
+    "corrected_fallback": 386,
+    "actual_give": 435,
+    "actual_light_on": 464,
+    "accurate_recall": 498,
+    "recall_new_operations": [],
+    "snapshot": "a82bea82-59df-4aad-ae0b-6b93a5395631"
+  },
+  "long_c21_failure": {
+    "run": "long-c21",
+    "room_id": "d42f54a2-fc4f-4282-914f-940bd23949ae",
+    "status": "failed",
+    "wall_seconds": 2386.260176,
+    "pause_seconds": 82.540001,
+    "active_seconds": 2303.720175,
+    "player_inputs": 19,
+    "model_calls": 94,
+    "summary_rebuilt": 21,
+    "restore_comparison": "8 of 8",
+    "cause": "Event 570 placed published scene-7 remains into actual scene 5; references were correct.",
+    "evidence": [
+      380,
+      418,
+      536,
+      570,
+      597
+    ],
+    "manifest_sha256": "d1c9a06f4d4799092f903174b9397fe1cf46124be9646864a94c4f2712c45867"
+  },
+  "short_c23": {
+    "kind": "read-only source copy of failed long-c21; short regression",
+    "inputs": 3,
+    "total_model_calls": 107,
+    "copied_calls": 94,
+    "actual_current_scene": 925,
+    "repeated_observation": 984,
+    "accurate_location_recall": 1012,
+    "recall_new_operations": [],
+    "restore_comparison": "8 of 8",
+    "snapshot": "4fb46284-cb8a-473d-9a43-5424bbb88d00"
+  },
+  "long_c22_failure": {
+    "room_id": "1892bf1e-c640-486d-a145-4afc628c1528",
+    "first_input_utc": "2026-09-14T10:33:12.338658+00:00",
+    "last_interaction_utc": "2026-09-14T10:50:39.350202+00:00",
+    "wall_seconds": 1047.0115439891815,
+    "active_seconds": 1047.0115439891815,
+    "player_inputs": 10,
+    "model_calls": 49,
+    "run": "long-c22",
+    "status": "failed",
+    "pauses_seconds": 0,
+    "summary_rebuilt": 8,
+    "cause": "KP medicine proposal rejected because the selected remains parent differed from its time-of-death detail.",
+    "failure_event": 406,
+    "actual_check_executed": false,
+    "manifest_sha256": "1af0677188bf4109e46bf28616c8fc3dd2a8d2cd2fdd1f2de7ef4ceff92d96a7",
+    "snapshot": "737f9b0d-9224-4615-a7f9-09a9ca242234",
+    "restore_comparison": null
+  },
+  "short_c24": {
+    "kind": "read-only copy of long-c22; short regression",
+    "inputs": 3,
+    "total_model_calls": 64,
+    "copied_calls": 49,
+    "actual_medicine_check": 560,
+    "accurate_recall": 596,
+    "recall_new_operations": [],
+    "restore_comparison": "8 of 8",
+    "snapshot": "b227ea80-a899-436c-b6a9-befe5c77ee4b"
+  },
+  "long_c23_failure": {
+    "run": "long-c23",
+    "room_id": "839a4470-af0e-4365-9f1d-1333c5c64563",
+    "status": "failed",
+    "wall_seconds_to_failure": 3869.572717,
+    "pause_seconds": 57.007332,
+    "active_seconds_to_failure": 3812.565385,
+    "completed_interactions_active_seconds": 3747.6569311618805,
+    "inputs": 39,
+    "model_calls": 161,
+    "summary_rebuilt": 36,
+    "restore_comparison": "8 of 8",
+    "failures": {
+      "omitted_handover_recall": 1386,
+      "context_budget_failure": 1399
+    },
+    "manifest_sha256": "03b7d23a45820baf688cb641d8e4feb1426bc4c31a395666a37430531204f8cb",
+    "snapshot": "07ffe372-6de1-4b45-8b10-c6ef76c8e423"
+  },
+  "short_c25": {
+    "kind": "read-only copy of failed long-c23; development short regression",
+    "inputs": 6,
+    "total_model_calls": 183,
+    "copied_calls": 161,
+    "actual_handover_recall": 1491,
+    "corrected_initial_recall": 1552,
+    "correction_followup": 1581,
+    "recall_new_operations": [],
+    "preserved_failed_retrieval": 1519,
+    "restore_comparison": "8 of 8",
+    "snapshot": "7f2045f9-e8f8-4281-a7a6-ee802e70b1df"
+  },
+  "long_c24_failure": {
+    "run": "long-c24",
+    "room_id": "046dacef-11c9-4607-86e4-0f98c87f352a",
+    "status": "failed",
+    "wall_seconds": 47.96100687980652,
+    "pause_seconds": 0,
+    "active_seconds": 47.96100687980652,
+    "inputs": 1,
+    "model_calls": 3,
+    "summary_rebuilt": 0,
+    "snapshot": "40091c04-8b3d-4b1e-9fe1-b06cb58afaf3",
+    "manifest_sha256": "d1b4143932cd20a90fb00099c95376c3278ae5a86ad9702c6ff05aecdf5b9e63",
+    "failure": "explicit initial physical inspection classified readonly; back was never inspected"
+  },
+  "short_c26": {
+    "kind": "read-only copy of failed long-c24; development short regression",
+    "inputs": 3,
+    "total_model_calls": 13,
+    "copied_calls": 3,
+    "actual_inspection": 99,
+    "source_recall": 133,
+    "recall_new_operations": [],
+    "preserved_failed_operation": 71,
+    "restore_comparison": "8 of 8",
+    "snapshot": "b412d62b-c831-4819-9595-389a74bcdc5d"
+  },
+  "long_c25_failure": {
+    "run": "long-c25",
+    "room_id": "414eadf4-42ec-4f88-9150-482bbd8d3a58",
+    "status": "failed",
+    "wall_seconds": 1164.245977,
+    "pause_seconds": 0,
+    "active_seconds": 1164.245977,
+    "completed_interactions_active_seconds": 1110.7274148464203,
+    "inputs": 12,
+    "model_calls": 51,
+    "summary_rebuilt": 8,
+    "snapshot": "cb935fdd-a538-4bdd-b44d-d96465c7c82e",
+    "manifest_sha256": "ab49f754e714779fd13270c1877a2fac989e3307aed7b7acec5ca537c5023b34",
+    "failure": "search_plan_missing repair carried only code; server-authored actionable instruction discarded"
+  },
+  "short_c27": {
+    "kind": "development copy of long-c25",
+    "inputs": 3,
+    "total_model_calls": 65,
+    "copied_calls": 51,
+    "snapshot": "8053a827-a470-418f-92d9-9ad1fc3160e9",
+    "original_model_replays": {
+      "c1": "failed search_plan_missing",
+      "c2": "valid plan; diagnostic UUID print failed",
+      "c3": "captured correct proposed_check lost during restoration"
+    },
+    "exact_candidate_replay": "original-selected-search-target-replay.json; passes after final fix without new model call",
+    "historical_snapshot_note": "Prepared public reveals/corrections are intentionally monotonic; selecting an older snapshot in an already explored copy does not remove known clues. Not used to assert a fresh undiscovered search."
+  },
+  "short_c28": {
+    "kind": "fresh read-only copy of original failed long-c25; final search regression",
+    "inputs": 2,
+    "total_model_calls": 62,
+    "copied_calls": 51,
+    "actual_search_check": 482,
+    "actual_roll": "6/60 success",
+    "source_publication": 491,
+    "accurate_recall": 549,
+    "recall_new_operations": [],
+    "restore_comparison": "8 of 8",
+    "snapshot": "84e370c1-761d-4913-8da3-e2b6b09251e6"
+  },
+  "long_c26_failure": {
+    "run": "long-c26",
+    "room_id": "f26f9a38-811a-461a-aebd-8dacc304266d",
+    "status": "failed",
+    "wall_seconds": 4607.106472015381,
+    "pause_seconds": 151.8477818965912,
+    "active_seconds": 4455.25869011879,
+    "inputs": 40,
+    "model_calls": 169,
+    "summary_rebuilt": 41,
+    "manifest_sha256": "c828222b554db790bb566b2fdb93631c90bb348b4d630316a146321290ddd444",
+    "failure": "Mixed late recall #1266 omitted original front; #1492 omitted actual panel unlock. Lexical matches in prior actions/testimony displaced the requested original source or actual result before generation.",
+    "targeted_followup": 1294,
+    "diagnosis": "late-mixed-recall-diagnosis.json",
+    "original_logs_retained": true,
+    "completed_ending": false,
+    "recovery": {
+      "midgame": "8 of 8",
+      "late": "8 of 8"
+    },
+    "final_save": {
+      "id": "5d1d0d4c-1782-4f78-916c-5835dea2c654",
+      "name": "自由互动中途重启",
+      "creator_id": "64c2da55-975c-4fc7-9448-0a6a1a7877f3",
+      "event_seq": 1500,
+      "format_version": 1,
+      "created_at": "2026-09-14T15:04:02.147655+00:00"
+    }
+  },
+  "short_c29": {
+    "kind": "read-only copy of failed frozen long-c26",
+    "inputs": 2,
+    "total_model_calls": 176,
+    "copied_calls": 169,
+    "new_calls": 7,
+    "restore_comparison": "8 of 8",
+    "answers": [
+      1525,
+      1553
+    ],
+    "new_operations": [],
+    "snapshot": "9d11f540-de3d-4be6-bdb2-28928930a6d5",
+    "offline_original_late_questions": "all-late-questions-replay.json; 9 actual questions, source database unchanged"
+  },
+  "long_c27_failure": {
+    "run": "long-c27",
+    "room_id": "eb2c2b58-a792-4d66-8249-ebea5bd03148",
+    "status": "failed",
+    "wall_seconds": 50.034428119659424,
+    "active_seconds": 50.034428119659424,
+    "pause_seconds": 0,
+    "inputs": 1,
+    "model_calls": 2,
+    "summary_rebuilt": 0,
+    "snapshot": "543e7752-6779-4449-b014-6fcede6b02fe",
+    "manifest_sha256": "d830e15a2d387624af715cc4089851035ba04d24bbac3f3e6df2b0e41e86d60a",
+    "failure": "Opening #40 published front only: final inspection clause retained target and search capability but observe intent bypassed its approved prepared interaction."
+  },
+  "short_c30": {
+    "kind": "read-only copy of failed frozen long-c27",
+    "inputs": 2,
+    "total_model_calls": 9,
+    "copied_calls": 2,
+    "new_calls": 7,
+    "restore_comparison": "8 of 8",
+    "actual_interaction": 68,
+    "source_publication": 74,
+    "accurate_recall": 102,
+    "recall_new_operations": [],
+    "snapshot": "f767f845-3b12-4ced-b87b-56570e5b05a1",
+    "original_plan_replay": "original-clipped-plan-replay.json; same clauses and target, no new reveal"
+  },
+  "long_c28_failure": {
+    "run": "long-c28",
+    "room_id": "6e1f7c33-2f2b-467e-aa79-7fb1765f8cba",
+    "status": "failed",
+    "wall_seconds": 521.7027339935303,
+    "active_seconds": 521.7027339935303,
+    "pause_seconds": 0,
+    "inputs": 5,
+    "model_calls": 22,
+    "summary_rebuilt": 0,
+    "snapshot": "bfe3389c-a483-4810-837f-002dee350d56",
+    "manifest_sha256": "f8801b22d5cc05c203e7bdf146cc3385dda1cd89534e31ac66ce7a807b8fb1e6",
+    "failure": "Actual self handover followed by a teammate request was rewritten wholly as teammate speech; no transfer occurred. #220 truthfully kept peer empty but the legal action was blocked.",
+    "initial_results": {
+      "human": "16/60 hard success; actual phone, light off",
+      "peer": "99/40 fumble; no item"
+    },
+    "completed_ending": false
+  },
+  "short_c31": {
+    "kind": "read-only copy of failed long-c28",
+    "inputs": 3,
+    "total_model_calls": 40,
+    "copied_calls": 22,
+    "new_calls": 18,
+    "actual_give": 246,
+    "actual_light": 329,
+    "accurate_recall": 362,
+    "recall_new_operations": [],
+    "restore_comparison": "8 of 8",
+    "snapshot": "a93329c2-2ffc-4e87-9789-e4ce85732667"
+  },
+  "short_c32": {
+    "kind": "read-only long-c26 copy selecting its real midgame snapshot; historical public reveals remain monotonic",
+    "selected_snapshot": "01093f2c-073d-4d10-9dda-75f23cfbb10c",
+    "inputs": 4,
+    "total_model_calls": 181,
+    "copied_calls": 169,
+    "new_calls": 12,
+    "npc_spoke": [
+      1554,
+      1583
+    ],
+    "accurate_recall": 1611,
+    "all_four_turns_new_resource_operations": [],
+    "historical_selection_comparison": "7/8; original 6 checks identical, 2 later fixed checks retained as cancelled",
+    "normal_current_save_restart_comparison": "8/8",
+    "snapshot": "eed713f9-edf3-48f5-95c6-f704f6187eb8",
+    "proves": [
+      "actual empty inventory observation",
+      "accessible NPC greeting and sourced key answer",
+      "original two-side note and initial failure recall"
+    ],
+    "does_not_prove": [
+      "fresh undiscovered clue gating",
+      "new-room timed acceptance"
+    ]
+  },
+  "long_c29_failure": {
+    "status": "failed",
+    "p1_memory_long": false,
+    "save_restore": true,
+    "frozen_manifest_sha256": "d4b9ff0c89cfecf52444727dd1e9b4adf723ec10758611e69d339d502f910df7",
+    "room_id": "5355a288-b94c-474c-8465-8dafc02e5c9a",
+    "first_input_utc": "2026-09-14T16:04:43.778287+00:00",
+    "last_interaction_utc": "2026-09-14T17:10:03.704609+00:00",
+    "wall_seconds": 3919.9263219833374,
+    "pauses": [
+      {
+        "from": 1789403653.400341,
+        "to": 1789403867.803042,
+        "seconds": 214.4027009010315
+      },
+      {
+        "from": 1789405577.824513,
+        "to": 1789405649.348618,
+        "seconds": 71.52410507202148
+      }
+    ],
+    "active_seconds": 3633.9995160102844,
+    "player_inputs": 33,
+    "model_calls": 150,
+    "natural_summaries": 35,
+    "final_save": "e285f011-8876-4745-a60f-0c371fa1f725",
+    "failure": {
+      "event_seq": 1337,
+      "missing_source_seq": 414,
+      "cause": "Long check purposes and generic repeated testimony displaced explicitly requested revealed document text before generation.",
+      "body_ids_consistent": true,
+      "source_events_preserved": true
+    },
+    "passed_observations": [
+      "both natural initial failures and empty inventory",
+      "actual NPC greetings, mixed first aid and question, alias and followup",
+      "original note sides and actual NPC quotes after summaries and two normal reloads",
+      "actual key search, pickup, handover and use by holder",
+      "local stealth attempted and failed; actual worn-shoe diversion and correct arrival",
+      "six fact recalls without new operations",
+      "both normal reload comparisons 8/8"
+    ],
+    "remaining_late_checks": "Route, correction and full current panel recall not completed after failure; do not claim them passed.",
+    "caveats": [
+      "One extra initial teammate request before first actual roll",
+      "One local stealth clarification",
+      "Repeated luggage proposal/detail after scene change",
+      "Generic rejection narration for an extra attempted transition during local observation; current position unchanged"
+    ],
+    "ending_completed": false
+  },
+  "short_c33": {
+    "source": "readonly copy of failed long-c29 current save",
+    "player_inputs": 5,
+    "source_model_calls": 150,
+    "new_model_calls": 15,
+    "restore": "8/8",
+    "save": "933e76b0-b8f1-4708-b718-dea317f554f1",
+    "answers": [
+      1369,
+      1397,
+      1425,
+      1453,
+      1481
+    ],
+    "recalls_with_new_operations": 0,
+    "result": "passed",
+    "artifact": "data/prepared/changan/batch-20/short-c33/audit.json"
+  },
+  "long_c30_failure": {
+    "status": "failed",
+    "p0_mainline": false,
+    "p1_memory_long": "not completed",
+    "save_restore": true,
+    "frozen_manifest_sha256": "6eccf7a43e25c8c3dd50e03cc1bf6c74842848e1be8e9cbe1ad161590034e01a",
+    "room_id": "7ea97c7b-98b6-4a9a-82fe-b05f63103a26",
+    "first_input_utc": "2026-09-14T17:27:44.101844+00:00",
+    "last_interaction_utc": "2026-09-14T18:26:16.216032+00:00",
+    "wall_seconds": 3512.1141879558563,
+    "pauses": [
+      {
+        "from": 1789408777.773767,
+        "to": 1789408868.212029,
+        "seconds": 90.43826198577881
+      }
+    ],
+    "active_seconds": 3421.6759259700775,
+    "player_inputs": 33,
+    "model_calls": 154,
+    "natural_summaries": 36,
+    "final_save": "2cc13bf0-46c7-4fbf-b183-c0e85d89a7aa",
+    "failure": [
+      {
+        "trigger": 1345,
+        "answer": 1366,
+        "requested_actor": "程岚",
+        "model_called": false,
+        "measured_final_context": 6539,
+        "budget": 6092,
+        "cause": "Adding behavior history exceeded the final teammate context gate; fallback pass left the legal panel request unexecuted."
+      },
+      {
+        "trigger": 1372,
+        "answer": 1393,
+        "requested_actor": "程岚",
+        "actual_focus_actor": "许衡",
+        "model_called": false,
+        "measured_final_context": 6108,
+        "budget": 6092,
+        "cause": "Direct request parser omitted temporal adverbs; follow-up lost addressee and was treated as requester action, with no valid item use."
+      }
+    ],
+    "passed_observations": [
+      "NPC actual replies including mixed aid/question and alias/followup",
+      "original note sides and actual NPC quotes after natural summaries",
+      "normal midgame restore 8/8 and accurate location/inventory recall",
+      "human failed bag search and independent teammate successful search, actual pickup and handover",
+      "legitimate local stealth attempted and failed, actual worn-shoe diversion, correct arrival",
+      "actual key holder opened cab door",
+      "four fact recalls without new operations"
+    ],
+    "panel_unlocked": false,
+    "ending_completed": false,
+    "late_fact_questions_completed": false,
+    "original_initial_results": {
+      "许衡": "57/50 failed, no items",
+      "程岚": "45/50 passed, phone"
+    },
+    "original_log_kept": true
+  },
+  "short_c34": {
+    "source": "readonly copy of failed long-c30 current save",
+    "player_inputs": 8,
+    "source_model_calls": 154,
+    "new_model_calls": 34,
+    "restore": "8/8",
+    "save": "a50ece9e-6053-49a4-a0f6-86c4485b1dc4",
+    "actual_panel_unlock": 1450,
+    "recall_answers": [
+      1483,
+      1511,
+      1540,
+      1568,
+      1597,
+      1625,
+      1653
+    ],
+    "recalls_with_new_operations": 0,
+    "result": "passed",
+    "new_model_request_prompt_chars": 6043,
+    "unchanged_prompt_budget": 6092,
+    "artifact": "data/prepared/changan/batch-20/short-c34/audit.json"
+  },
+  "long_c31_failure": {
+    "status": "failed",
+    "p0_mainline": false,
+    "p1_memory_long": "not reached",
+    "save_restore": "not reached",
+    "frozen_manifest_sha256": "e18ce740b7ce868d9a5f54a027ab52787e5a4f4ce9ed75bdbd8608d896b4cb1e",
+    "room_id": "f9172e00-b6eb-4d8e-9a61-0d297375c018",
+    "first_input_utc": "2026-09-14T18:50:50.802540+00:00",
+    "last_interaction_utc": "2026-09-14T18:54:43.826256+00:00",
+    "wall_seconds": 233.0237159729004,
+    "pauses": [],
+    "active_seconds": 233.0237159729004,
+    "player_inputs": 2,
+    "model_calls": 11,
+    "natural_summaries": 0,
+    "final_save": "45a47b6a-3183-4700-89fc-eddaf1107477",
+    "failure": {
+      "event_seq": 106,
+      "text": "我看看自己的口袋，发现除了手机外，还有一支随身手电筒。这可能对探索车厢有帮助。",
+      "later_rejection_seq": 131,
+      "actual_holders": {
+        "沈川": "phone, light off",
+        "顾遥": "undetermined, no item"
+      },
+      "cause": "Own inventory probe recognized, but lexical kinds contained observe without search; normalizing pending discovery was skipped before publication.",
+      "referenced_human_item_result": 98,
+      "execution_layer_rejected": true,
+      "publication_already_incorrect": true
+    },
+    "original_logs_preserved": true,
+    "ending_completed": false
+  },
+  "short_c36": {
+    "status": "passed",
+    "fixture": "readonly copy of failed long-c31; original records retained",
+    "player_inputs": 5,
+    "source_model_calls": 11,
+    "new_model_calls": 19,
+    "actual_peer_check": {
+      "request": 161,
+      "roll": 184,
+      "result": "42/55 success",
+      "settlement": 187
+    },
+    "correction": 219,
+    "correction_followup": 245,
+    "actual_human_light": 268,
+    "per_instance_light_recall": [
+      301,
+      303
+    ],
+    "recall_new_operations": 0,
+    "normal_stop_reload": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "save": "9aeba6e0-4dc8-476c-8635-a079d24e7ad6",
+    "both_initial_checks": "human 56/75 success in source; peer first actual check 42/55 success in short",
+    "invented_torch_not_held": true,
+    "source_logs_unmodified": true
+  },
+  "short_c35": {
+    "status": "failed development short",
+    "artifact": "data/prepared/changan/batch-20/short-c35/final-verdict.json"
+  },
+  "long_c32_failure": {
+    "status": "failed",
+    "p0_mainline": false,
+    "p1_memory_long": "not completed",
+    "save_restore": "not reached",
+    "frozen_manifest_sha256": "5a97f6bd76d2b246a6bc9b04ae6a27a65961ff4a8384e9d02c3657d5601faa7f",
+    "room_id": "ef6f51c1-bcfb-4bbd-8d59-a2e7e3d95543",
+    "first_input_utc": "2026-09-14T19:26:52.920157+00:00",
+    "last_interaction_utc": "2026-09-14T19:41:57.659422+00:00",
+    "wall_seconds": 904.7392649650574,
+    "pauses": [],
+    "active_seconds": 904.7392649650574,
+    "player_inputs": 9,
+    "model_calls": 46,
+    "natural_summaries": 6,
+    "final_save": "77659bfd-ff84-44ee-b4c6-4aa607f190c9",
+    "failures": [
+      {
+        "event_seq": 372,
+        "cause": "KP medicine check selected, but paraphrased time-of-death question did not bind parent remains to its approved detail; intent_target_mismatch prevented any roll."
+      },
+      {
+        "event_seq": 401,
+        "cause": "Explicit approach/check was classified as pure question; declared_action missed the approach prefix, so output only described action and no check occurred."
+      }
+    ],
+    "original_logs_preserved": true,
+    "ending_completed": false
+  },
+  "short_c37": {
+    "status": "passed",
+    "source": "independent readonly copy of long-c32 failed save",
+    "player_inputs": 2,
+    "source_model_calls": 46,
+    "new_model_calls": 6,
+    "actual_check_seq": 433,
+    "roll": 63,
+    "target": 1,
+    "result": "failed actual check; no hidden result granted",
+    "initial_copy_load_comparison": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "normal_stop_reload_of_new_final_save": "not performed in this short; final new-room test separate",
+    "final_save": "26dd9853-49c7-40cb-abd9-7adef18e753e",
+    "original_source_preserved": true,
+    "recall_seq": 469,
+    "recall_new_operations": 0,
+    "recall": "check failure, current scene and empty inventory correct"
+  },
+  "short_c38": {
+    "status": "passed",
+    "source": "independent readonly copy of long-c32 failed save",
+    "player_inputs": 1,
+    "source_model_calls": 46,
+    "new_model_calls": 3,
+    "actual_check_seq": 433,
+    "roll": 42,
+    "target": 1,
+    "result": "failed actual check; no hidden result granted",
+    "initial_copy_load_comparison": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "normal_stop_reload_of_new_final_save": "not performed in this short; final new-room test separate",
+    "final_save": "9de31763-652a-491b-9cb1-d5ab9304453e",
+    "original_source_preserved": true
+  },
+  "long_c33_failure": {
+    "status": "failed",
+    "p0_mainline": false,
+    "p1_memory_long": "not reached",
+    "save_restore": "not reached",
+    "frozen_manifest_sha256": "6835b1b9e11c834dfa135ed8344dbb785454647362f6a9c85cf395354098fd85",
+    "room_id": "07fe9ce9-dc0b-42cb-b832-d9afd0f8be25",
+    "first_input_utc": "2026-09-14T20:02:34.284010+00:00",
+    "last_interaction_utc": "2026-09-14T20:09:35.225695+00:00",
+    "wall_seconds": 420.94168496131897,
+    "pauses": [],
+    "active_seconds": 420.94168496131897,
+    "player_inputs": 5,
+    "model_calls": 18,
+    "natural_summaries": 0,
+    "final_save": "7924b4db-a1ae-4323-a04f-966627086691",
+    "failure": {
+      "event_seq": 193,
+      "requested": "observe route diagram markings",
+      "actual": "old note text",
+      "cause": "Full action retained but old note focus selected; explicit-observation no-op was outside search target repair."
+    },
+    "original_logs_preserved": true,
+    "ending_completed": false
+  },
+  "short_c39": {
+    "status": "passed",
+    "source": "readonly copy of failed long-c33",
+    "player_inputs": 2,
+    "source_model_calls": 18,
+    "new_model_calls": 10,
+    "actual_check_seq": 223,
+    "roll": "35/60 success",
+    "true_result_seq": 232,
+    "recall_answers": [
+      286,
+      288
+    ],
+    "recall_new_operations": 0,
+    "initial_copy_load_comparison": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "final_save": "2ecbfe6a-7c99-4311-a00f-87976aace38b",
+    "new_final_save_stop_reload": "not performed in short; final long game assessed separately",
+    "original_source_preserved": true
+  },
+  "long_c34_failure": {
+    "status": "failed",
+    "p0_mainline": false,
+    "p1_memory_long": "not completed",
+    "save_restore": "not reached",
+    "frozen_manifest_sha256": "be9fb9bf1a4a822eebebdbf41d423987fca25ad88c21f39d3e3a2a91ae06c9d8",
+    "room_id": "43eada10-0591-4e58-aca9-7bf0dd0dff7b",
+    "first_input_utc": "2026-09-14T20:25:50.379521+00:00",
+    "last_interaction_utc": "2026-09-14T20:58:56.828378+00:00",
+    "wall_seconds": 1986.4488570690155,
+    "pauses": [],
+    "active_seconds": 1986.4488570690155,
+    "player_inputs": 18,
+    "model_calls": 84,
+    "natural_summaries": 18,
+    "final_save": "c8c16834-190a-4aaf-a9d7-c049e19ad171",
+    "failure": {
+      "event_seq": 764,
+      "question": "师傅，能听见我说话吗？这里出了什么事，你现在感觉怎么样？",
+      "npc_spoke": 0,
+      "actual_reply": "你向沈砚说出了这番话。",
+      "cause": "First honorific did not resolve to sole accessible NPC; planner selected its own speaker as addressee."
+    },
+    "actual_phone_handover": 580,
+    "actual_receiver_use": 638,
+    "correct_handover_recall": 672,
+    "original_logs_preserved": true,
+    "ending_completed": false
+  },
+  "short_c40": {
+    "status": "failed development short",
+    "source": "readonly copy of long-c34",
+    "player_inputs": 1,
+    "source_model_calls": 84,
+    "new_model_calls": 3,
+    "npc_answer_seq": 797,
+    "npc_answer": "Responded about injury; no authoritative recovery result.",
+    "failed_narration_seq": 796,
+    "false_holder": "NPC",
+    "actual_holder": "沈砚",
+    "cause": "Named possessive screen/glow phrase fell outside action/effect verb patterns.",
+    "final_save": "324bf3cc-4d7c-4526-86ee-d82765be1b4e",
+    "original_source_preserved": true
+  },
+  "short_c41": {
+    "status": "failed",
+    "source": "readonly clone; not a new continuous long game",
+    "player_inputs": 6,
+    "source_model_calls": 84,
+    "new_model_calls": 21,
+    "failure": "当前结果和持有状态问句未识别为回顾，错误接续NPC并只给含糊回应。",
+    "failure_event_seq": 954,
+    "initial_load": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "final_new_save_stop_reload": "not performed",
+    "actual_resources_preserved": true
+  },
+  "short_c42": {
+    "status": "failed",
+    "source": "readonly clone; not a new continuous long game",
+    "player_inputs": 1,
+    "source_model_calls": 105,
+    "new_model_calls": 4,
+    "failure": "状态问句已进入回顾，但治疗回执未关联原包扎动作，回答遗漏实际治疗结果。",
+    "failure_event_seq": 986,
+    "initial_load": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "final_new_save_stop_reload": "not performed",
+    "actual_resources_preserved": true
+  },
+  "short_c43": {
+    "status": "passed",
+    "source": "readonly copy of failed short-c41 (original long-c34)",
+    "player_inputs": 2,
+    "source_model_calls": 105,
+    "new_model_calls": 8,
+    "actual_state_answer": 986,
+    "post_restart_originals_and_speech_answer": 1018,
+    "recall_new_operations": 0,
+    "normal_stop_restart_load": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "restored_save": "e597e34d-8259-4a24-8601-b24c2d81d52e",
+    "actual_treatment": "original first aid success retained; not performed again",
+    "source_database_unchanged": true,
+    "not_counted_as_continuous_long_game": true
+  },
+  "long_c35": {
+    "status": "failed",
+    "p0": "failed",
+    "p1": "incomplete",
+    "reason": "授权层遗漏批准出口参数，将明确复合跨场景移动错判为本场景内移动。",
+    "failure_event_seq": 329,
+    "room_id": "f45c4906-6d2b-4200-8720-a48974cf1a76",
+    "player_inputs": 9,
+    "model_calls": 34,
+    "active_seconds": 792.210480928421,
+    "pauses": [],
+    "summary_events": 3,
+    "normal_reload": "not performed",
+    "final_save": "c66c3a35-66ca-4f99-8f5f-6047da221a0b",
+    "initial_belongings": "both naturally failed (74/45 and 96/70); empty inventory",
+    "map_check": "66/60 failed; no hidden conclusion",
+    "recall_answers": [
+      190,
+      192
+    ],
+    "recall_new_operations": 0,
+    "freeze_sha256": "96e8375ee87f6329e0cdfc550ca587c00b6826a9063120b598f9b36f913a8629",
+    "freeze_files_unchanged": true,
+    "npc_dialogue": "not reached",
+    "ending": "not reached"
+  },
+  "short_c44": {
+    "status": "passed",
+    "source": "readonly copy of failed long-c35",
+    "player_inputs": 2,
+    "source_model_calls": 34,
+    "new_model_calls": 10,
+    "actual_transition": 367,
+    "arrival_narration": 373,
+    "independent_peer_check": "399: 1/60 critical success",
+    "discovery_narration": 407,
+    "location_route_and_finding_recall": 434,
+    "recall_new_operations": 0,
+    "initial_copy_load_comparison": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "final_new_save_stop_reload": "not performed; final long game assessed separately",
+    "final_save": "f939a52a-eea5-40f4-b8ec-1b4983794398",
+    "source_database_unchanged": true
+  },
+  "long_c36": {
+    "status": "failed",
+    "p0": "main route operations reached panel unlock; repetitive peer proposals recorded",
+    "p1": "failed",
+    "reason": "晚期指定2号车厢经过时，证据选择遗漏实际投鞋诱导，混入5号搜索与手机交接。",
+    "failure_event_seq": 1440,
+    "missing_receipt_seq": 1179,
+    "room_id": "bcbedbd9-c8aa-4075-90ff-91852852d13f",
+    "player_inputs": 36,
+    "model_calls": 165,
+    "first_input_utc": "2026-09-14T22:16:10.949728+00:00",
+    "last_interaction_utc": "2026-09-14T23:19:29.296966+00:00",
+    "wall_seconds": 3798.3472380638123,
+    "active_seconds": 3684.40669298172,
+    "pauses": [
+      {
+        "from": 1789426297.979846,
+        "to": 1789426411.920391,
+        "seconds": 113.94054508209229
+      }
+    ],
+    "summary_events": 37,
+    "normal_reload": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "mid_save": "955aabce-c81c-45b2-8292-e5f4c2671de9",
+    "final_save": "5c75dc4f-3f67-4620-b972-61691d64b2a1",
+    "freeze_sha256": "decb03fa6f4ff5b640705ff4b13a1f340753ab982bcd007da0e27a3249a20537",
+    "freeze_files_unchanged": true,
+    "npc_speech": [
+      692,
+      736,
+      764,
+      792
+    ],
+    "actual_phone_transfer": 546,
+    "actual_recipient_phone_use": 604,
+    "actual_key_pickup": 995,
+    "actual_key_transfer": 1025,
+    "actual_stealth_failure": 1145,
+    "actual_shoe_result": 1179,
+    "actual_forward_arrival": 1211,
+    "actual_cab_unlock": 1293,
+    "actual_panel_unlock": 1350,
+    "late_originals_and_npc": [
+      1383,
+      1385
+    ],
+    "late_documents": 1412,
+    "late_route": 1440,
+    "pure_recalls_new_operations": 0,
+    "false_premise_correction": "not reached",
+    "ending": "not reached",
+    "repetitive_peer_proposals": {
+      "events": [
+        500,
+        643,
+        950,
+        1095,
+        1219
+      ],
+      "effect": "clarification only; no actual wrong transition; separate residual interaction quality issue"
+    }
+  },
+  "short_c45": {
+    "status": "passed",
+    "source": "readonly copy of failed long-c36",
+    "player_inputs": 6,
+    "source_model_calls": 165,
+    "new_model_calls": 19,
+    "route_answer": 1472,
+    "wrong_route_correction": 1500,
+    "wrong_initial_items_correction": 1528,
+    "correction_followup": [
+      1556,
+      1558
+    ],
+    "actual_current_door_panel_state": 1585,
+    "post_restart_route_answer": 1617,
+    "recall_new_operations": 0,
+    "normal_stop_restart_load": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "restored_save": "111bf7e8-cccc-4b70-b9ed-3a9ec796231a",
+    "source_database_unchanged": true,
+    "not_counted_as_continuous_long_game": true
+  },
+  "long_c37": {
+    "status": "failed",
+    "p0": "operations reached successful first aid and responsive NPC followups",
+    "p1": "failed",
+    "reason": "复合实际结果问题漏急救回执；通用问句字串使无关日期检定先于明确动作证据。",
+    "failure_event_seq": 826,
+    "missing_receipt_seq": 713,
+    "room_id": "8c2ee288-9812-4d6a-b610-1ccef666e867",
+    "player_inputs": 20,
+    "model_calls": 98,
+    "first_input_utc": "2026-09-14T23:41:22.711228+00:00",
+    "last_interaction_utc": "2026-09-15T00:19:14.618189+00:00",
+    "wall_seconds": 2271.9069612026215,
+    "active_seconds": 2271.9069612026215,
+    "pauses": [],
+    "summary_events": 18,
+    "normal_reload": "not reached",
+    "final_save": "2a85acdf-8de5-499b-b7f5-e321d255ce9f",
+    "freeze_sha256": "b37f53184c8323040d7c4580e867ae24b26261350c7c3086a0ec57120b6deb93",
+    "freeze_files_unchanged": true,
+    "npc_speech": [
+      698,
+      742,
+      769,
+      798
+    ],
+    "actual_phone_transfer": 545,
+    "actual_recipient_phone_use": 602,
+    "actual_compound_move_to_5": 409,
+    "actual_treatment": 713,
+    "actual_date_check": {
+      "seq": 513,
+      "roll": 44,
+      "target": 20,
+      "passed": false
+    },
+    "date_revealed": false,
+    "pure_recalls_new_operations": 0,
+    "ending": "not reached",
+    "early_peer_invalid_plan": {
+      "cycle": "c92ab7ce-96d7-48a9-9e9a-aa3542d35f57",
+      "effect": "5 tools exceeded 4; rejected honestly before any peer initial roll; explicit request completed first real check"
+    },
+    "repeated_legal_phone_use": [
+      642,
+      665
+    ],
+    "first_npc_reservation": "confirmed hearing and unable to explain; not a detailed accident answer"
+  },
+  "short_c46": {
+    "status": "passed",
+    "source": "readonly copy of failed long-c37",
+    "player_inputs": 3,
+    "source_model_calls": 98,
+    "new_model_calls": 11,
+    "original_result_answer": 858,
+    "original_note_and_npc": 886,
+    "post_restart_result_answer": 918,
+    "recall_new_operations": 0,
+    "normal_stop_restart_load": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "restored_save": "5c6ee22a-f7a4-4bdb-b918-ec7b04a7beb3",
+    "source_database_unchanged": true,
+    "not_counted_as_continuous_long_game": true
+  },
+  "long_c38": {
+    "room_id": "dd0080ef-0588-4e3d-a738-2120f5b79565",
+    "first_input_utc": "2026-09-15T00:34:28.643103+00:00",
+    "last_interaction_utc": "2026-09-15T01:37:27.713887+00:00",
+    "wall_seconds": 3779.0707840919495,
+    "active_seconds": 3700.7132601737976,
+    "pauses": [
+      {
+        "from": 1789434440.753909,
+        "to": 1789434519.111433,
+        "seconds": 78.35752391815186
+      }
+    ],
+    "player_inputs": 38,
+    "model_calls": 176,
+    "restore_comparison": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "status": "failed",
+    "p0": "legal branch reached head car; actual keys search failures retained",
+    "p1": "failed",
+    "reason": "晚期多人黑包搜索回顾遗漏林夏90/70失败，未回答当前钥匙持有。",
+    "failure_event_seq": [
+      1510,
+      1512
+    ],
+    "missing_receipt_seq": 1031,
+    "summary_events": 41,
+    "final_save": "b81f15cf-8cfc-42a2-8bf1-2df4940fcda2",
+    "mid_save": "5bb11f00-9cb5-47da-866c-26d468be700d",
+    "freeze_sha256": "384b2ff1086205dd560be8f4ce64b5d41822b00f619b2cee06215a3b586c1840",
+    "freeze_files_unchanged": true,
+    "npc_speech": [
+      694,
+      738,
+      766,
+      794
+    ],
+    "npc_reservation": "first greeting and unnamed mobility followup acknowledged but reserved; not detailed mobility answer",
+    "treatment": {
+      "seq": 709,
+      "roll": 73,
+      "target": 30,
+      "passed": false,
+      "hp_before": 3,
+      "hp_after": 3
+    },
+    "actual_phone_transfer": 1115,
+    "actual_recipient_phone_use": 1144,
+    "phone_holder": "陈砚",
+    "key_checks": [
+      971,
+      1031
+    ],
+    "keys_acquired": false,
+    "changed_search_method_result": 1065,
+    "actual_stealth_failure": 1240,
+    "actual_shoe_result": 1274,
+    "actual_forward_arrival": 1306,
+    "cab_door_remains_locked": 1368,
+    "actual_cab_unlock": false,
+    "actual_panel_unlock": false,
+    "late_originals_and_npc": 1396,
+    "late_documents": [
+      1424,
+      1426
+    ],
+    "late_route": [
+      1453,
+      1455
+    ],
+    "late_initial_and_transfer": 1482,
+    "pure_recalls_new_operations": 0,
+    "false_premise_correction": "not reached",
+    "ending": "not reached",
+    "repeated_legal_phone_use": [
+      315,
+      435,
+      639,
+      915
+    ],
+    "delayed_peer_proposal": {
+      "seq": 1314,
+      "effect": "observation and preparation only; no false transition"
+    }
+  },
+  "short_c47": {
+    "status": "failed",
+    "source": "readonly copy of long-c38",
+    "player_inputs": 9,
+    "source_model_calls": 176,
+    "new_model_calls": 36,
+    "active_seconds": 709.8467950820923,
+    "failure_event_seq": 1772,
+    "reason": "当前公开驾驶室门的上锁状态未优先进入纯回顾，仅返回相关经过。",
+    "prior_checks_passed": {
+      "two_actor_results": [
+        1543,
+        1545
+      ],
+      "note_and_npc": 1572,
+      "investigated_documents": [
+        1600,
+        1602
+      ],
+      "route": [
+        1629,
+        1631
+      ],
+      "initial_and_transfer": [
+        1658,
+        1660
+      ],
+      "wrong_items_correction": [
+        1687,
+        1689
+      ],
+      "correction_followup": 1716,
+      "wrong_route_correction": 1744
+    },
+    "pure_recalls_new_operations": 0,
+    "normal_stop_restart_load": "not reached after new save",
+    "initial_copy_load": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "final_save": "92ddd7e4-a35b-4af4-a5d6-278d47570987",
+    "source_database_unchanged": true,
+    "not_counted_as_continuous_long_game": true
+  },
+  "short_c48": {
+    "status": "passed",
+    "source": "readonly copy of failed short-c47, from long-c38",
+    "player_inputs": 5,
+    "source_model_calls": 212,
+    "new_model_calls": 21,
+    "current_door_answer": 1804,
+    "plural_search_and_current_inventory": [
+      1832,
+      1834
+    ],
+    "treatment_and_inventory": [
+      1861,
+      1863
+    ],
+    "post_restart_door": [
+      1894,
+      1896
+    ],
+    "post_restart_route": [
+      1923,
+      1925
+    ],
+    "recall_new_operations": 0,
+    "normal_stop_restart_load": {
+      "characters": true,
+      "module_runtime": true,
+      "combat": true,
+      "time_receipts": true,
+      "game_minute": true,
+      "game_round": true,
+      "sanity_day": true,
+      "checks": true
+    },
+    "restored_save": "256614e8-d6a7-44c5-a438-5caf8245066a",
+    "source_database_unchanged": true,
+    "not_counted_as_continuous_long_game": true
+  },
+  "long_c39": {
+    "room_id": "df2c2033-42e6-4158-8121-4e2578646c33",
+    "first_input_utc": "2026-09-15T02:18:09.991181+00:00",
+    "last_interaction_utc": "2026-09-15T03:43:35.207311+00:00",
+    "wall_seconds": 5125.216130018234,
+    "active_seconds": 4678.10284280777,
+    "pauses": [
+      {
+        "from": 1789439961.461978,
+        "to": 1789440252.567204,
+        "seconds": 291.1052260398865,
+        "reason": "只读核对未配置报纸拿取方法、旧焦点及批准包范围；暂停期间无游戏操作，正式包和冻结代码未改。"
+      },
+      {
+        "from": 1789441199.542928,
+        "to": 1789441283.150654,
+        "seconds": 83.60772609710693
+      },
+      {
+        "from": 1789443445.711295,
+        "to": 1789443518.11163,
+        "seconds": 72.40033507347107
+      }
+    ],
+    "player_inputs": 45,
+    "model_calls": 203,
+    "status": "passed within batch20 scope",
+    "p0_mainline": "passed",
+    "p1_memory_long": "passed",
+    "acceptance_basis": "Actual answer bodies reviewed against original public text, NPC speech, receipts and current projections; time/counts alone are insufficient.",
+    "final_save": "db67cd15-6e5c-4b3a-8f58-d354bebedec4",
+    "mid_save": "47b82287-a691-4b7d-a923-57a9422ff320",
+    "correction_save": "bd23bd46-d04c-4f6f-923c-0fc5ef558ab9",
+    "normal_stop_restart_load": {
+      "mid": {
+        "characters": true,
+        "module_runtime": true,
+        "combat": true,
+        "time_receipts": true,
+        "game_minute": true,
+        "game_round": true,
+        "sanity_day": true,
+        "checks": true
+      },
+      "correction": {
+        "characters": true,
+        "module_runtime": true,
+        "combat": true,
+        "time_receipts": true,
+        "game_minute": true,
+        "game_round": true,
+        "sanity_day": true,
+        "checks": true
+      }
+    },
+    "freeze": {
+      "manifest_sha256": "3abaeb0beb7f381566b33d6a956cc0abd9a964bd1ee1d4bae768363f8e99aab5",
+      "checked_files": 207,
+      "changed": []
+    },
+    "source_originals_preserved": {
+      "game.db": true,
+      "knowledge.db": true,
+      "checkpoint.db": true,
+      "formal_package": true
+    },
+    "summary_rebuilds": 48,
+    "summary_range_index": "summary-range-index.json",
+    "pure_recall_rounds": 18,
+    "pure_recall_new_operations": 0,
+    "initial_inventory": {
+      "players": [
+        "周衡",
+        "沈岚"
+      ],
+      "rolls": [
+        {
+          "seq": 95,
+          "total": 16,
+          "target": 15,
+          "passed": false
+        },
+        {
+          "seq": 155,
+          "total": 31,
+          "target": 30,
+          "passed": false
+        }
+      ],
+      "settled_none": [
+        99,
+        158
+      ]
+    },
+    "npc_speech": {
+      "greeting": 628,
+      "mixed_treatment_question": 672,
+      "honorific_alias": 700,
+      "unnamed_followup": 729
+    },
+    "npc_content_review": "Greeting answers hearing, leg injury and a qualified accident guess; mixed/alias questions name both keys and black-bag location. Followup answers cannot walk but repeats the greeting. Alias adds a redundant reservation. NPC guesses remain claims.",
+    "treatment": {
+      "actor": "周衡",
+      "roll_seq": 641,
+      "total": 83,
+      "target": 30,
+      "passed": false,
+      "receipt_seq": 645,
+      "hp_before": 3,
+      "hp_after": 3
+    },
+    "earlier_peer_aid_clue": {
+      "seq": 592,
+      "total": 18,
+      "target": 30,
+      "passed": true,
+      "scope": "approved public aid clue; not a human treatment HP receipt"
+    },
+    "actual_map_check": {
+      "seq": 218,
+      "total": 62,
+      "target": 60,
+      "passed": false
+    },
+    "paper_search": {
+      "human": {
+        "seq": 402,
+        "total": 73,
+        "target": 60,
+        "passed": false
+      },
+      "peer": {
+        "seq": 462,
+        "total": 27,
+        "target": 60,
+        "passed": true
+      },
+      "public_body": 470
+    },
+    "paper_date": {
+      "seq": 497,
+      "total": 92,
+      "target": 20,
+      "passed": false,
+      "date_revealed": false
+    },
+    "key_search": {
+      "actor": "周衡",
+      "seq": 903,
+      "total": 23,
+      "target": 70,
+      "passed": true,
+      "peer_independent_roll": false
+    },
+    "keys": {
+      "instance_id": "679b7134-97f1-492e-b5a8-ce279e09b462",
+      "acquired": 965,
+      "transferred": 996,
+      "from_member": "周衡",
+      "to_member": "沈岚",
+      "holder": "沈岚",
+      "door_use": 1244,
+      "panel_use": 1300
+    },
+    "navigation": {
+      "arrivals": [
+        250,
+        308,
+        340,
+        559,
+        842,
+        1058,
+        1159
+      ],
+      "stealth": {
+        "seq": 1094,
+        "total": 84,
+        "target": 5,
+        "passed": false
+      },
+      "shoe_result": 1128,
+      "final_scene": "先头车厢"
+    },
+    "late_blind": {
+      "note_npc": [
+        1333,
+        1335
+      ],
+      "documents": [
+        1362,
+        1364
+      ],
+      "route": [
+        1391
+      ],
+      "initial_transfer": [
+        1419,
+        1421
+      ],
+      "black_bag": [
+        1448,
+        1450
+      ],
+      "current_state": [
+        1563,
+        1565
+      ]
+    },
+    "correction": {
+      "false_initial_items": [
+        1477,
+        1479
+      ],
+      "item_followup": [
+        1506
+      ],
+      "false_paper_number_route": [
+        1534,
+        1536
+      ]
+    },
+    "post_correction_restart": {
+      "route": [
+        1596
+      ],
+      "note_npc": [
+        1624
+      ],
+      "initial_transfer": [
+        1652,
+        1654
+      ],
+      "current_state": [
+        1681
+      ]
+    },
+    "limitations": [
+      "Optional paper pickup #533 was not completed: approved item has interactions=[]; old date focus produced an unhelpful clue-condition response, but repeat check/reveal were rejected and no item was granted. Formal package unchanged.",
+      "Repeated peer follow proposals #348/#1167 did not complete (#374/#1193), did not move the party again and did not block explicit next actions.",
+      "Some answers repeat source speech or include irrelevant true receipts; wording remains verbose.",
+      "Stealth failure #1094 did not grant passage; hidden-target tool #1098 was rejected before any effect.",
+      "No train-control ending, A/C full route, all random combat branches or MP example was replayed in this final game."
+    ],
+    "count_scope": "Fresh single room, one frozen version; previous rooms and short-copy calls/time are not combined."
+  },
+  "historical_save_restore_before_final": {
+    "short_comparison": "short-c19: 8 of 8 comparisons passed; 65 model calls include original 50",
+    "final_frozen_game": "long-c19: 8 of 8 state comparisons passed independently; gameplay semantic acceptance failed"
+  },
+  "evidence_root": "data/prepared/changan/batch-20/",
+  "final_documents": [
+    "docs/batch-20-report.md",
+    "docs/batch-20-public.md",
+    "docs/batch-20-host-debug.md",
+    "docs/batch-20-checklist.md"
+  ]
+}

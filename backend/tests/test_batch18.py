@@ -1363,7 +1363,7 @@ def test_fallback_prompt_keeps_rule_conditions_and_original_failures_without_dup
     context = {
         "module_context_audit": {"context_mode": "local_fallback"},
         "structure_navigation": False,
-        "triggering_action": {"seq": 290, "payload": {"text": "我把钥匙交给队友。"}},
+        "triggering_action": {"seq": 290, "payload": {"text": "我搜索附近遗失的手机。"}},
         "approved_exits": [{"transition_id": "exit", "target_scene_node_id": "next"}],
         "module": {
             "outgoing_transitions": [{"transition_id": "exit"}],

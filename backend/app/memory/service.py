@@ -16,6 +16,21 @@ from app.persistence.agent_models import AgentMemory
 from app.rooms.service import Identity, require
 
 
+def prompt_context_size(context):
+    """Count the keeper's transmitted audit view, retaining the full server ledger."""
+    if context.get("phase") in {"plan_keeper_action", "decide_teammates"}:
+        # Use the same view as the final gate. Raw run records contain audit
+        # fields and duplicate inventory that are never sent to this model.
+        from app.agents.action_runtime import generation_prompt
+        from app.agents.adjudication_schemas import KeeperPlan, TeammateDecision
+
+        schema = KeeperPlan if context["phase"] == "plan_keeper_action" else TeammateDecision
+        return len(json.dumps(generation_prompt(context, schema), ensure_ascii=False))
+    # Auxiliary phases do not share the plan/teammate grammar. Count their
+    # complete envelope rather than assuming the same audit compaction.
+    return len(json.dumps(context, ensure_ascii=False))
+
+
 def memory_view(memory):
     return {
         "epistemic_status": "derived_summary_not_fact_authority"
@@ -194,6 +209,9 @@ async def build_context(
             for card in cards
         ]
     text = str(trigger["payload"] if trigger else "")
+    from app.memory.facts import readonly_recall, select_facts
+
+    question = (trigger or {}).get("payload", {}).get("text", "")
     ranked = sorted(
         visible_memories,
         key=lambda m: (
@@ -220,6 +238,40 @@ async def build_context(
         "phase": phase,
         **(additions or {}),
     }
+    context["readonly_recall"] = readonly_recall(question) and not cycle.state.get("dialogue_npc")
+    if context["readonly_recall"]:
+        context["characters"] = [
+            {
+                k: v
+                for k, v in card.items()
+                if k not in {"skill_values", "effective_attributes", "occupation"}
+            }
+            for card in context["characters"]
+        ]
+        cards = context["characters"]
+    # Reserve original evidence before allocating summaries or optional prose.
+    revealed_entities = await service.entities.public(session, room.id)
+    context["fact_evidence"] = select_facts(
+        all_events,
+        revealed_entities,
+        question,
+        budget=1700 if context["readonly_recall"] else 450,
+        members=context["current_participants"]["members"],
+    )
+    from app.preparation.inventory import inventory_context
+
+    context["inventory_state"] = await inventory_context(service, session, room, question)
+    if context["readonly_recall"]:
+        from app.memory.facts import bounded_facts, recalled_entity_states, recalled_location
+        from app.preparation.inventory import recalled_inventory
+
+        context["fact_evidence"] = (
+            recalled_location(room.session_state, question)
+            + recalled_inventory(context["inventory_state"], question)
+            + recalled_entity_states(revealed_entities, question)
+            + context["fact_evidence"]
+        )
+        context["fact_evidence"] = bounded_facts(context["fact_evidence"])
     # Reserve a small conversation window before ordinary event budget trimming.
     # Speech remains attributed testimony, never an authoritative world fact.
     recent_dialogue = [
@@ -379,22 +431,14 @@ async def build_context(
     # Select from the full permission-filtered active branch before dialogue and
     # summary trimming, so an older public improvisation remains available.
     navigation = await service.navigation.state(session, room.id)
-    memory_base = {
-        k: v for k, v in context.items() if not navigation or k not in {"module", "public_entities"}
-    }
     incidental = relevant_incidental_memories(
         all_events,
         (trigger or {}).get("payload", {}).get("text", ""),
         prepared.current_scene if prepared else module.state["scene_id"],
-        budget=min(
-            1400,
-            max(
-                0,
-                budget
-                - len(json.dumps(memory_base, ensure_ascii=False))
-                - (2300 if navigation else 1600),
-            ),
-        ),
+        # Select the relevant original quote before the final measured trimming.
+        # The untrimmed history can fill the budget even when most of it will
+        # immediately be removed; it must not prevent all quote retrieval.
+        budget=1400,
     )
     if incidental:
         context["incidental_memories"] = incidental
@@ -426,11 +470,12 @@ async def build_context(
             recent_action=(trigger or {}).get("payload", {}).get("text", ""),
             budget=max(scene_floor, budget - base_size - 1300),
             cycle=cycle if keeper else None,
+            shared_inventory=context["inventory_state"],
         )
         if keeper:
             # Navigation audit and public IDs vary after transitions/restores.
             # Budget the complete envelope, leaving room for rule-routing keys.
-            remaining = budget - 300 - len(json.dumps({**context, **resolved}, ensure_ascii=False))
+            remaining = budget - 300 - prompt_context_size({**context, **resolved})
             if remaining < 0:
                 resolved = await service.module_context.resolve(
                     session,
@@ -439,8 +484,18 @@ async def build_context(
                     recent_action=(trigger or {}).get("payload", {}).get("text", ""),
                     budget=max(scene_floor, resolved["module_context_audit"]["budget"] + remaining),
                     cycle=cycle,
+                    shared_inventory=context["inventory_state"],
                 )
         context.update(resolved)
+        from app.memory.facts import recall_context_view
+
+        context = recall_context_view(context, binding.member_id)
+        if context["readonly_recall"]:
+            # Exact selected excerpts are already reserved in fact_evidence.
+            # A second broad list of historical entity descriptions can crowd
+            # them out after restoring a long archive. Validation still reads
+            # the original room entities; current state remains in module.
+            context["public_entities"] = []
         if narrator:
             # Narration uses public receipts/claims and current participants.
             # These adjudication fields are also removed by the action runtime;
@@ -516,7 +571,7 @@ async def build_context(
                 context,
                 min(
                     int(budget * 0.3),
-                    max(0, budget - len(json.dumps(context, ensure_ascii=False)) - 100),
+                    max(0, budget - prompt_context_size(context) - 100),
                 ),
             )
             context["knowledge_enabled"] = True
@@ -536,7 +591,7 @@ async def build_context(
                         **context,
                         "PUBLIC_CLAIM_OPTIONS": [*context.get("PUBLIC_CLAIM_OPTIONS", []), option],
                     }
-                    if len(json.dumps(proposed, ensure_ascii=False)) <= budget - 400:
+                    if prompt_context_size(proposed) <= budget - 400:
                         context = proposed
     selected = []
     for memory in ranked:
@@ -545,19 +600,17 @@ async def build_context(
             for k, v in memory_view(memory).items()
             if k in {"kind", "scope", "content", "source_event_ids", "epistemic_status"}
         }
+        if memory.kind == "summary":
+            from app.memory.facts import summary_sources
+
+            candidate["content"] = summary_sources(all_events, memory.source_event_ids)
         proposed = {**context, "memories": [*context["memories"], candidate]}
-        if len(json.dumps(proposed, ensure_ascii=False)) > budget - 1200:
+        if prompt_context_size(proposed) > budget - 1200:
             continue
         context["memories"].append(candidate)
         selected.append(memory.id)
     dialogue_seqs = {e["seq"] for e in recent_dialogue}
-    summary_seqs = {
-        seq
-        for m in ranked
-        if m.kind == "summary" and m.id in selected
-        for seq in m.source_event_ids
-    }
-    window = [e for e in history_events if e["seq"] not in dialogue_seqs | summary_seqs][
+    window = [e for e in history_events if e["seq"] not in dialogue_seqs][
         -service.settings.agent_event_window :
     ]
     if narrator:
@@ -607,7 +660,7 @@ async def build_context(
     pending_blocked = False
     for event in pending_window:
         proposed = {**context, "events": [*context["events"], event]}
-        if len(json.dumps(proposed, ensure_ascii=False)) > budget:
+        if prompt_context_size(proposed) > budget:
             pending_blocked = True
             break
         context = proposed
@@ -616,23 +669,18 @@ async def build_context(
         if event["seq"] in chosen_seqs:
             continue
         proposed = {**context, "events": [event, *context["events"]]}
-        if len(json.dumps(proposed, ensure_ascii=False)) <= budget:
+        if prompt_context_size(proposed) <= budget:
             context["events"].insert(0, event)
             chosen_seqs.add(event["seq"])
     context["events"].sort(key=lambda e: e["seq"])
     # Completed public interactions and current holders outrank older optional
     # improvisations. Pre-context rule routing can consume the space that was
     # available when those memories were selected above.
-    while (
-        context.get("incidental_memories") and len(json.dumps(context, ensure_ascii=False)) > budget
-    ):
+    while context.get("incidental_memories") and prompt_context_size(context) > budget:
         context["incidental_memories"] = context["incidental_memories"][:-1]
     # Retrieval metadata is added after scene allocation. A duplicate source
     # block must not make a valid action fail before the final planning budget.
-    while (
-        context.get("module", {}).get("blocks")
-        and len(json.dumps(context, ensure_ascii=False)) > budget
-    ):
+    while context.get("module", {}).get("blocks") and prompt_context_size(context) > budget:
         module_context = dict(context["module"])
         module_context["blocks"] = module_context["blocks"][:-1]
         audit = dict(context.get("module_context_audit", {}))
@@ -640,7 +688,7 @@ async def build_context(
         audit["omitted_block_count"] = audit.get("omitted_block_count", 0) + 1
         audit["budget_used"] = len(json.dumps(module_context, ensure_ascii=False))
         context = {**context, "module": module_context, "module_context_audit": audit}
-    if len(json.dumps(context, ensure_ascii=False)) > budget:
+    if prompt_context_size(context) > budget:
         import logging
 
         logging.getLogger(__name__).warning(
@@ -649,7 +697,7 @@ async def build_context(
             {k: len(json.dumps(v, ensure_ascii=False)) for k, v in context.items()},
         )
     require(
-        len(json.dumps(context, ensure_ascii=False)) <= budget,
+        prompt_context_size(context) <= budget,
         "当前模组和角色超过上下文预算，请提高上下文限制或减少席位",
         422,
     )
@@ -678,11 +726,13 @@ async def build_context(
     ordered["recent_dialogue"] = (
         [] if context.get("summary_status", {}).get("stale") else recent_dialogue
     )
-    while ordered.get("events") and len(json.dumps(ordered, ensure_ascii=False)) > budget:
+    while ordered.get("events") and prompt_context_size(ordered) > budget:
         ordered["events"] = ordered["events"][1:]
-    while (
-        len(ordered["recent_dialogue"]) > 2
-        and len(json.dumps(ordered, ensure_ascii=False)) > budget
-    ):
+    while ordered["recent_dialogue"] and prompt_context_size(ordered) > budget:
         ordered["recent_dialogue"] = ordered["recent_dialogue"][1:]
+    require(
+        prompt_context_size(ordered) <= budget,
+        "当前行动资料超过上下文预算，无法加入更多历史对话",
+        422,
+    )
     return await service.sanitize(session, room, ordered), all_events, selected

@@ -11,6 +11,30 @@ def response_brief(plan, context, results, *, withdrawal=None):
     focus = plan.focus
     intent = plan.parsed_intent
     raw = context["triggering_action"].get("payload", {}).get("text", intent.evidence_quote)
+    from app.agents.action_policy import explicit_movement, local_scene_movement
+    from app.preparation.inventory import inventory_probe
+
+    scene = context.get("module", {}).get("current_scene") or context.get("module", {}).get(
+        "scene", {}
+    )
+    movement_requested = (
+        (
+            intent.type == "move"
+            or bool(
+                re.search(
+                    r"(?:进入|走进|前往|返回|回到)[^，。！？；,.!?;\n]{0,24}(?:车厢|房间|大厅|厅|室)",
+                    raw,
+                )
+            )
+        )
+        and explicit_movement(raw)
+        and not local_scene_movement(
+            raw,
+            [{"type": "scene", "title": scene.get("title", "")}],
+            context.get("module", {}).get("outgoing_transitions", []),
+        )
+    )
+
     attempt = focus.action if focus else intent.evidence_quote
     attempt = attempt if attempt in raw else ""
     question = focus.question if focus and focus.question in raw else raw
@@ -53,8 +77,28 @@ def response_brief(plan, context, results, *, withdrawal=None):
         ]
     # A profile is portrayal, not testimony or evidence that a conversation happened.
     facts = [c for c in options if not npc or npc["id"] not in c["entity_ids"]]
+    written_sources = []
+    if not npc and re.search(r"看|观察|检查|文字|记号|字迹|读|原文|内容|写", raw):
+        for entity in context.get("public_entities", []):
+            if (
+                entity.get("type") == "clue"
+                and entity.get("fact_scope", "current_scene") == "current_scene"
+                and (
+                    any(
+                        name and name in raw
+                        for name in [entity["title"], *entity.get("aliases", [])]
+                    )
+                    or focus
+                    and focus.action_target_id == entity["id"]
+                    or entity["id"] in result_ids
+                )
+            ):
+                if entity.get("public_summary"):
+                    written_sources.append(entity["public_summary"])
     return {
         "trigger_seq": context["triggering_action"]["seq"],
+        "inventory_probe": inventory_probe(raw),
+        "movement_requested": movement_requested,
         "speaker_id": intent.actor_member_id,
         "question": question,
         "purpose": focus.action if focus and focus.action in raw and focus.action else question,
@@ -75,7 +119,8 @@ def response_brief(plan, context, results, *, withdrawal=None):
         if addressee in people
         else {"kind": "keeper"},
         "allowed_facts": [{"id": c["claim_id"], "text": c["statement"]} for c in facts],
-        "current_scene": context.get("module", {}).get("scene", {}),
+        "source_quotes": list(dict.fromkeys(written_sources))[:3],
+        "current_scene": scene,
         "current_inventory": context.get("item_holders", []),
         "current_state": [
             r
@@ -100,7 +145,7 @@ def response_brief(plan, context, results, *, withdrawal=None):
                 ],
             )
         ),
-    }, options
+    }, facts
 
 
 def action_lead(intent, results):
@@ -166,6 +211,12 @@ class NarrationValidator:
             "转场尚未发生",
             422,
         )
+        if not transitions and results.get("failed_tools"):
+            require(
+                not re.search(r"(?:已经|已|成功)(?:到达|抵达|进入|穿过)", text),
+                "失败的转场不能叙述为已经到达",
+                422,
+            )
         if checks:
             passed = checks.get(output.check_result_reference, next(iter(checks.values())))[
                 "result"
@@ -191,7 +242,16 @@ class NarrationValidator:
         }
 
 
-def fallback_narration(intent_type, results, public_scene, *, rejected=False, brief=None):
+def fallback_narration(
+    intent_type, results, public_scene, *, rejected=False, brief=None, inventory_state=None
+):
+    interactions = [
+        e["payload"].get("text")
+        for e in results["events"]
+        if e["type"] == "module.interaction" and e["payload"].get("text")
+    ]
+    if interactions:
+        return "\n".join(dict.fromkeys(interactions))
     if (brief or {}).get("resource_gate") == "unconfirmed_item" and not any(
         e["type"] == "check.resolved" for e in results["events"]
     ):
@@ -224,14 +284,37 @@ def fallback_narration(intent_type, results, public_scene, *, rejected=False, br
         )
     if transitions:
         return transitions[-1].get("scene_summary") or "你已抵达当前场景，可以继续查看周围。"
+    if results.get("blocked_operations"):
+        return "这次动作没有完成，当前状态未因这次尝试改变。"
+    if (brief or {}).get("movement_requested"):
+        return (
+            "本次没有完成转场；当前位置仍是"
+            + brief.get("current_scene", {}).get("title", "原场景")
+            + "。"
+        )
     if reveals:
         return "你查看了眼前的目标。\n" + "\n".join(reveals)
+    if results.get("blocked_discovery"):
+        return "这次尚未确认新的线索内容，仍需满足该目标的调查条件。"
     brief = brief or {}
+    if brief.get("responder", {}).get("kind") == "teammate" and not brief.get("attempt"):
+        return "你向" + brief["responder"].get("name", "队友") + "说出了这番话。"
+    topic = " ".join(str(brief.get(k, "")) for k in ("attempt", "question", "purpose"))
+    if inventory_state is not None and (
+        re.search(r"照明|屏幕|点亮|光|交接|递给|交给|随身|口袋", topic)
+        or any(
+            name and name in topic
+            for item in inventory_state.get("known_items", []) for name in item["names"]
+        )
+    ):
+        from app.preparation.inventory import recalled_inventory
+
+        current = recalled_inventory(inventory_state, "当前持有物品")
+        return "这次没有完成新的物品操作。\n" + "\n".join(r["text"] for r in current)
     facts = [f["text"] for f in brief.get("allowed_facts", []) if f.get("text")]
-    memories = [
-        f"{m['speaker']}先前提到：{m['text']}" for m in brief.get("incidental_memories", [])[:2]
-    ]
-    available = list(dict.fromkeys(facts[:3] + memories)) or (
+    # A failed generation cannot recover by republishing an unchecked old
+    # improvisation. Ordinary generation still receives those attributed memories.
+    available = list(dict.fromkeys(facts[:3])) or (
         [public_scene] if public_scene else []
     )
     directions = (

@@ -386,6 +386,18 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         receipt["text"] = result_text + (
             f"；剩余次数 {use_result['uses_after']}" if use_result["uses_after"] is not None else ""
         )
+    if rule.inventory_operation == "initial":
+        from app.preparation.inventory import initial_inventory_summary
+
+        initial = state.module_runtime.initial_belongings[actor]
+        titles = [
+            (await agents.entities.entity(session, room.id, eid)).snapshot["title"]
+            for eid in initial.get("item_ids", [])
+        ]
+        members = {m.id: m.display_name for m in await agents.rooms.members(session, room)}
+        receipt["source_result_text"] = receipt["text"]
+        receipt["initial_inventory_result"] = {"actor_member_id": actor, "retained_items": titles}
+        receipt["text"] = initial_inventory_summary(members[actor], titles)
     if rule.observation_effect_id:
         observation = {
             "actor_member_id": actor,
@@ -468,6 +480,11 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             "text": receipt["text"],
             "source_event_seq": seq,
             "cycle_id": cycle.id if cycle else None,
+            **(
+                {"initial_inventory_result": receipt["initial_inventory_result"]}
+                if "initial_inventory_result" in receipt
+                else {}
+            ),
         },
     )
     agents.rooms.append(session, room, "module.interaction_receipt", actor, receipt, "host_only")

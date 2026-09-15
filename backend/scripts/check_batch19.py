@@ -12,7 +12,7 @@ import check_batch13 as driver
 from module_package import ROOT, read, settings_for, write
 
 
-def main():
+def main(batch=19):
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command", choices=["serve", "setup", "turn", "status", "save", "load", "export"]
@@ -21,8 +21,9 @@ def main():
     parser.add_argument("--port", type=int, default=8019)
     parser.add_argument("--text", default="")
     args = parser.parse_args()
-    directory = (ROOT / "data/prepared/changan/batch-19" / args.run).resolve()
-    assert directory.is_relative_to((ROOT / "data/prepared/changan/batch-19").resolve())
+    batch_directory = ROOT / f"data/prepared/changan/batch-{batch}"
+    directory = (batch_directory / args.run).resolve()
+    assert directory.is_relative_to(batch_directory.resolve())
     assert (directory / "load-info.json").exists()
     driver.DIRECTORY, driver.BASE, driver.HOST = (
         directory,
@@ -57,6 +58,13 @@ def main():
                     "model_name",
                     "model_context_limit",
                     "model_output_limit",
+                    "model_temperature",
+                    "model_think",
+                    "model_keep_alive",
+                    "summary_event_threshold",
+                    "summary_context_threshold",
+                    "agent_context_chars",
+                    "agent_event_window",
                 )
             },
         )
@@ -68,7 +76,7 @@ def main():
 
         def named(method, path, body=None, **kwargs):
             if method == "POST" and path == "/rooms":
-                body = {**body, "name": "第十九批 · " + args.run}
+                body = {**body, "name": f"Batch {batch} · " + args.run}
             return original(method, path, body, **kwargs)
 
         driver.request = named
@@ -131,6 +139,27 @@ def main():
         room = request("GET", prefix, player=True)
         cycle = (room.get("game") or {}).get("cycle") or {}
         checks = request("GET", prefix + "/checks", player=True)
+        if batch == 20:
+            pending_combat = (room.get("combat") or {}).get("pending")
+            if pending_combat and pending_combat.get("stage") == "treatment_roll":
+                combat_key = (pending_combat["id"], "treatment_roll")
+                if combat_key not in handled:
+                    body = {
+                        "action_id": pending_combat["id"],
+                        "operation": "roll",
+                        "stage": "treatment_roll",
+                    }
+                    response = request("POST", prefix + "/combat/step", body, player=True)
+                    log(
+                        {
+                            "kind": "player_rule",
+                            "path": "/combat/step",
+                            "body": body,
+                            "result": response,
+                        }
+                    )
+                    handled.add(combat_key)
+                    continue
         for c in checks:
             if c["status"] != "pending" or c.get("target_member_id") != session["player_id"]:
                 continue
@@ -184,7 +213,18 @@ def main():
                 e["type"],
                 p.get("text") or p.get("scene_summary") or p.get("display_text") or p,
             )
-    print("RESOURCES", json.dumps(room["session_state"]["characters"], ensure_ascii=False))
+    print(
+        "RESOURCES",
+        json.dumps(
+            {
+                sid: {k: c.get(k) for k in ("hp", "mp", "san", "luck")}
+                for sid, c in room["session_state"]["characters"].items()
+            }
+            if batch == 20
+            else room["session_state"]["characters"],
+            ensure_ascii=False,
+        ),
+    )
     print("ITEMS", json.dumps(room.get("inventory"), ensure_ascii=False))
     print("CYCLE", cycle)
     log(

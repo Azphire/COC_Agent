@@ -285,10 +285,18 @@ class ActionAdjudicationService:
             facts.available_transition_ids = set(state.available_transition_ids)
         # An object named in the public scene can be addressed before revealing its content.
         public_scene_text = room.session_state.get("scene_summary", "")
+        from app.preparation.dialogue import public_npc_name
+
         facts.visible_entity_ids.update(
             eid
             for eid, e in facts.approved_entities.items()
-            if eid in facts.local_entity_ids and e.get("title") and e["title"] in public_scene_text
+            if eid in facts.local_entity_ids
+            and e.get("title")
+            and (
+                e["title"] in public_scene_text
+                or e.get("type") == "npc"
+                and public_npc_name(e, public_scene_text)
+            )
         )
         supplied = run.context.get("module", {})
         # A prepared search can target an undiscovered object without declaring

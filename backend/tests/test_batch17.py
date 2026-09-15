@@ -493,6 +493,10 @@ def test_initial_item_copies_reuse_each_actor_identity(client, module_battle):  
                 "FIXTURE_DIE"
             ]
             assert await public_inventory(svc, session, room) == []  # Still hidden: no DTO leak.
+            from app.preparation.inventory import inventory_context
+
+            view = await inventory_context(svc, session, room)
+            assert all("starting_items" not in member for member in view["members"])
 
     client.portal.call(verify)
 

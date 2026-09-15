@@ -328,3 +328,64 @@ def test_host_global_fallback_and_local_budget(client, navigation_game, monkeypa
     assert context["module_context_audit"]["scene_summary_truncated"]
     assert context["module"]["interaction_state"]["flags"]["panel_open"]
     assert "FUTURE_SECRET" not in json.dumps(context)
+
+
+def test_structure_budget_deduplicates_only_the_same_reserved_inventory(
+    client, navigation_game, monkeypatch
+):
+    from copy import deepcopy
+
+    svc = client.app.state.agent_service
+    holdings = [
+        dict(
+            instance_id=str(uuid4()),
+            item_id=str(uuid4()),
+            title=title,
+            holder_id=str(uuid4()),
+            holder_name="调查员",
+            remaining_uses=uses,
+        )
+        for title, uses in [("随身手机", None), ("铜灯", 2), ("黑色包里的两把钥匙", None)]
+    ]
+    shared = dict(
+        holders=holdings,
+        members=[dict(id="actor", held=[])],
+        dropped_items=[dict(instance_id="dropped", scene_node_id="current", remaining_uses=1)],
+    )
+    before = deepcopy(shared)
+
+    async def actual_inventory(*args):
+        return deepcopy(holdings)
+
+    monkeypatch.setattr("app.preparation.inventory.public_inventory", actual_inventory)
+
+    async def resolve():
+        async with svc.rooms.transaction() as session:
+            room = await svc.rooms.room(session, navigation_game["room"]["id"])
+            room.session_state = {
+                **room.session_state,
+                "module_runtime": {
+                    "flags": {"phone_light": True},
+                    "inventory": {h["instance_id"]: h["holder_id"] for h in holdings},
+                    "doors": {"east": True},
+                },
+            }
+            compact = await svc.module_context.resolve(
+                session, room, "keeper", budget=900, shared_inventory=shared
+            )
+            standalone = await svc.module_context.resolve(session, room, "keeper", budget=2500)
+            with pytest.raises(RoomError, match="结构上下文预算"):
+                await svc.module_context.resolve(
+                    session, room, "keeper", budget=900, shared_inventory={"holders": []}
+                )
+            return compact, standalone
+
+    compact, standalone = client.portal.call(resolve)
+    assert compact["module_context_audit"]["budget_used"] <= 900
+    assert compact["module_context_audit"]["inventory_in_shared_context"]
+    assert compact["module"]["interaction_state"] == {
+        "flags": {"phone_light": True},
+        "doors": {"east": True},
+    }
+    assert standalone["module"]["interaction_state"]["held_items"] == holdings
+    assert shared == before and "FUTURE_SECRET" not in json.dumps(compact)

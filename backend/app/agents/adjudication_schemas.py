@@ -163,6 +163,7 @@ class NPCSpeech(DomainModel):
 
 class KeeperNarration(DomainModel):
     schema_version: Literal[1] = 1
+    fact_ids: list[str] = Field(default_factory=list, max_length=6)
     public_narration: str = Field(
         default="",
         max_length=2000,
@@ -219,6 +220,8 @@ class TeammateDecision(DomainModel):
     novelty_keys: list[str] = Field(default_factory=list, max_length=8)
     confidence: float = Field(ge=0, le=1)
     short_term_goal: str | None = Field(default=None, max_length=200)
+    fact_ids: list[str] = Field(default_factory=list, max_length=6)
+    item_instance_ids: list[str] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def has_output(self):

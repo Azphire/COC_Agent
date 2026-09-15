@@ -17,13 +17,15 @@ SCOPE_PREFIXES = {
 
 
 def recalling(text):
-    return bool(re.search(r"回顾|回想|先前|之前|此前|旧线索|记得|曾经|早先", text))
+    from app.memory.facts import recall_question
+
+    return recall_question(text) or bool(re.search(r"先前|之前|此前|旧线索|曾经|早先", text))
 
 
 def explicit_recall(text):
-    return bool(re.match(r"\s*我(?:们)?(?:想|要|只)?(?:回顾|回想|复述)", text)) and not re.search(
-        r"进入|前往|移动|离开|尝试|使用|拿起|打开|交谈|询问|掷骰|检定|检查", text
-    )
+    from app.memory.facts import readonly_recall
+
+    return readonly_recall(text)
 
 
 def scoped_statement(entity, text):
@@ -45,6 +47,47 @@ def relevant_public_facts(entities, action, target=None):
         )
         or (recalling(action) and not mentioned)
     ]
+
+
+def nonlocal_source_claims(text, entities):
+    """Detect a distinctive published clue copied into current observation prose.
+
+    This does not certify all prose. It protects existing located evidence;
+    ordinary unsourced detail and explicitly attributed recollection remain free.
+    """
+    from app.knowledge.text import normalize
+
+    current = "\n".join(
+        normalize(e.get("public_summary", "")).replace(" ", "")
+        for e in entities if e.get("fact_scope", "current_scene") == "current_scene"
+    )
+    clauses = []
+    for sentence in re.split(r"[。；;\n]", text):
+        if re.match(
+            r"\s*(?:先前|之前|此前|当时|刚才|曾经|回忆|"
+            r"(?:你们?|我)(?:向.{1,20})?(?:想起|回想|记得|转述|引用|复述|念出))", sentence
+        ):
+            continue
+        clauses += [
+            normalize(c).replace(" ", "") for c in re.split(r"[，,]", sentence)
+            if not re.search(r"没有|未见|看不到|并非|不是", c)
+        ]
+    conflicts = []
+    for entity in entities:
+        if entity.get("type") not in {"clue", "location"} or entity.get("fact_scope") not in {
+            "historical", "unknown"
+        }:
+            continue
+        spans = {
+            phrase[i:i + 8]
+            for raw in re.split(r"[，。；：！？,.!?;:\n]", entity.get("public_summary", ""))
+            for phrase in [normalize(raw).replace(" ", "")]
+            for i in range(len(phrase) - 7)
+            if phrase[i:i + 8] not in current
+        }
+        if any(span in clause for span in spans for clause in clauses):
+            conflicts.append(entity["id"])
+    return conflicts
 
 
 async def public_fact_scopes(agents, session, room_id, entities):
