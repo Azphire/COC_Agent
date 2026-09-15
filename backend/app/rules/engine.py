@@ -5,6 +5,7 @@ from app.dice.service import parse_dice
 from app.domain.character import CharacterData, PointBalances, ValidationIssue, ValidationResult
 from app.rules.age import adjust_for_age, age_band, expected_rolls
 from app.rules.schemas import CalculationRule, RuleSet
+from app.rules.specializations import character_skills
 
 
 def calculate(rule: CalculationRule, values: Mapping[str, float]) -> float | str:
@@ -52,6 +53,7 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
     def issue(field: str, code: str, message: str) -> None:
         issues.append(ValidationIssue(field=field, code=code, message=message))
 
+    definitions = character_skills(character, ruleset, issue)
     if not character.name.strip():
         issue("name", "required", "请填写角色姓名")
     values = {key: item.value for key, item in character.attributes.items()}
@@ -181,13 +183,14 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
         if occupation.skill_groups or occupation.point_formula:
             from app.rules.character_options import occupation_choices
 
-            allowed = occupation_choices(character, ruleset, occupation, issue) | {"credit_rating"}
-    definitions = {item.key: item for item in ruleset.skills}
+            allowed = occupation_choices(
+                character, ruleset, occupation, issue, definitions.values()
+            ) | {"credit_rating"}
     selected = character.selected_specializations
     if len(selected) != len(set(selected)) or any(
         k not in definitions or not definitions[k].specialization_group for k in selected
     ):
-        issue("selected_specializations", "selection", "专业必须唯一且来自支持目录")
+        issue("selected_specializations", "selection", "专业必须唯一且来自目录或本卡自定义专业")
     active_specializations = set(selected) | allowed
     for field in ("occupation_skills", "interest_skills"):
         for key, allocation in getattr(character, field).items():

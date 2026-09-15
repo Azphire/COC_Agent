@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import type { Character, EditableFields, RuleSet, SkillGroup } from '../../api/characters'
+import type { Character, CustomSpecialization, EditableFields, RuleSet, SkillGroup } from '../../api/characters'
+import { characterSkills, normalizedName, specializationLabels } from './specializations'
 
 export default function SkillAllocator({ ruleset, character, value, onChange }: {
   ruleset: RuleSet; character: Character; value: EditableFields
@@ -8,11 +9,36 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
   const [occupationSearch, setOccupationSearch] = useState('')
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('')
+  const [customGroup, setCustomGroup] = useState<CustomSpecialization['group']>('language')
+  const [customName, setCustomName] = useState('')
+  const [customError, setCustomError] = useState('')
+  const custom = value.custom_specializations ?? []
+  const skills = characterSkills(ruleset, custom)
+  function addCustom() {
+    const name = customName.normalize('NFKC').trim()
+    if (!name || name.length > 40 || /[\p{C}()<>{}[\]]/u.test(name)) {
+      setCustomError('请输入 1–40 字的专业名称，不含括号或控制字符。'); return
+    }
+    if (skills.some(s => s.specialization_group === customGroup && normalizedName(s.display_name.split('（').at(-1)!.replace(/）$/, '')) === normalizedName(name))) {
+      setCustomError('该专业已存在，请在技能列表中选择。'); return
+    }
+    const id = `custom_${customGroup}_${Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('')}`
+    onChange({ ...value, custom_specializations: [...custom, { id, group: customGroup, name }], selected_specializations: [...value.selected_specializations, id] })
+    setCustomName(''); setCustomError('')
+  }
+  function removeCustom(id: string) {
+    const occupationSkills = { ...value.occupation_skills }, interestSkills = { ...value.interest_skills }
+    delete occupationSkills[id]; delete interestSkills[id]
+    onChange({ ...value, custom_specializations: custom.filter(s => s.id !== id),
+      selected_specializations: value.selected_specializations.filter(k => k !== id),
+      occupation_group_choices: Object.fromEntries(Object.entries(value.occupation_group_choices).map(([g, keys]) => [g, keys.filter(k => k !== id)])),
+      occupation_skills: occupationSkills, interest_skills: interestSkills })
+  }
   const occupation = ruleset.occupations.find(o => o.key === value.occupation)
   const allowed = new Set([...(occupation?.fixed_skills ?? []), ...value.selected_occupation_skills,
     ...Object.values(value.occupation_group_choices).flat(), 'credit_rating'])
-  const name = (key: string) => ruleset.skills.find(s => s.key === key)?.display_name ?? key
-  const options = (g: SkillGroup) => ruleset.skills.filter(s => s.allocatable && s.key !== 'credit_rating'
+  const name = (key: string) => skills.find(s => s.key === key)?.display_name ?? key
+  const options = (g: SkillGroup) => skills.filter(s => s.allocatable && s.key !== 'credit_rating'
     && s.eras.includes(value.era) && (g.any_skill || g.skills.includes(s.key) || !!s.specialization_group && g.specialization_groups.includes(s.specialization_group)))
   const formula = occupation?.point_formula
   const attributes = character.effective_attributes
@@ -37,6 +63,24 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
           <option key={o.key} value={o.key}>{o.display_name}</option>)}
       </select></label>
     </div>
+    {!!Object.keys(ruleset.custom_specialization_templates ?? {}).length && <fieldset>
+      <legend>自定义专业</legend>
+      <p>分别分配和检定；基础值和上限沿用所选类别。已有专业请直接选择。删除会退回投入点数并清理职业分组选择。</p>
+      <div className="field-grid">
+        <label>专业类别<select id="custom-skill-group" value={customGroup} onChange={e => setCustomGroup(e.target.value as CustomSpecialization['group'])}>
+          {Object.keys(ruleset.custom_specialization_templates).map(g => <option key={g} value={g}>{specializationLabels[g as CustomSpecialization['group']]}</option>)}
+        </select></label>
+        <label>专业名称<input id="custom-skill-name" value={customName} maxLength={40} onChange={e => setCustomName(e.target.value)} placeholder="例如：葡萄牙语、陶艺、地球物理学" /></label>
+      </div>
+      <button type="button" disabled={custom.length >= 50} onClick={addCustom}>添加专业</button>
+      {customError && <p role="alert">{customError}</p>}
+      {custom.map(s => <div key={s.id} className="choice-row">
+        <label>{specializationLabels[s.group]}<input aria-label={`修改${s.name}名称`} value={s.name} maxLength={40}
+          onChange={e => onChange({ ...value, custom_specializations: custom.map(c => c.id === s.id ? { ...c, name: e.target.value } : c) })} /></label>
+        <button type="button" onClick={() => removeCustom(s.id)}>删除 {s.name}</button>
+      </div>)}
+      {character.validation.issues.filter(i => i.field.startsWith('custom_specializations')).map((i, n) => <p className="field-error" key={n}>{i.message}</p>)}
+    </fieldset>}
     {occupation && <>
       <p>固定职业技能：{occupation.fixed_skills.map(name).join('、') || '无'}。{occupation.source}</p>
       <p>职业点数：{formula?.display ?? '按规则配置计算'}；信用评级 {occupation.credit_rating_minimum}–{occupation.credit_rating_maximum}。</p>
@@ -63,9 +107,9 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
     </>}
     <details><summary>选择额外专业（兴趣技能）</summary>
       <p>每个专业分别分配和检定；职业固定或分组所选的专业已自动加入下表。</p>
-      {[...new Set(ruleset.skills.map(s => s.specialization_group).filter(Boolean))].map(group => <fieldset key={group}>
+      {[...new Set(skills.map(s => s.specialization_group).filter(Boolean))].map(group => <fieldset key={group}>
         <legend>{({ language: '语言', art_craft: '艺术与手艺', science: '科学', fighting: '格斗', firearms: '射击', pilot: '驾驶', survival: '生存', lore: '学问' } as Record<string, string>)[group!] ?? group}</legend>
-        <div className="choice-row">{ruleset.skills.filter(s => s.specialization_group === group && s.eras.includes(value.era)).map(s => <label key={s.key}>
+        <div className="choice-row">{skills.filter(s => s.specialization_group === group && s.eras.includes(value.era)).map(s => <label key={s.key}>
           <input type="checkbox" id={`specialization-${s.key}`} checked={allowed.has(s.key) || value.selected_specializations.includes(s.key)} disabled={allowed.has(s.key)}
             onChange={e => onChange({ ...value, selected_specializations: e.target.checked ? [...value.selected_specializations, s.key] : value.selected_specializations.filter(k => k !== s.key) })} />{s.display_name}
         </label>)}</div>
@@ -75,10 +119,10 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
       <small>公式使用已保存的年龄调整后属性；修改属性后请保存重算。后端已保存余额：职业 {character.remaining_points.occupation}，兴趣 {character.remaining_points.interest}。</small></p>
     <div className="field-grid"><label>搜索技能<input type="search" value={search} onChange={e => setSearch(e.target.value)} /></label>
       <label>技能分类<select value={category} onChange={e => setCategory(e.target.value)}><option value="">全部分类</option>
-        {[...new Set(ruleset.skills.map(s => s.category))].map(c => <option key={c}>{c}</option>)}
+        {[...new Set(skills.map(s => s.category))].map(c => <option key={c}>{c}</option>)}
       </select></label></div>
     <div className="table-scroll"><table><thead><tr><th>技能 / 基础值</th><th>职业投入</th><th>兴趣投入</th><th>合计 / 上限</th></tr></thead>
-      <tbody>{ruleset.skills.filter(s => (!category || s.category === category) && (s.display_name + s.key).toLowerCase().includes(search.toLowerCase())
+      <tbody>{skills.filter(s => (!category || s.category === category) && (s.display_name + s.key).toLowerCase().includes(search.toLowerCase())
         && (!s.specialization_group || allowed.has(s.key) || value.selected_specializations.includes(s.key) || value.occupation_skills[s.key]?.points || value.interest_skills[s.key]?.points)).map(s => {
         const base = character.skill_base_values[s.key] ?? s.base_value
         const total = base + (value.occupation_skills[s.key]?.points ?? 0) + (value.interest_skills[s.key]?.points ?? 0)

@@ -1,4 +1,5 @@
 import type { Room } from '../api/rooms'
+import { specializationLabels } from './character/specializations'
 
 const injuryLabels: Record<string, string> = {
   major_wound: '重伤', unconscious: '昏迷', dying: '濒死', dead: '死亡', stabilized: '伤势已稳定',
@@ -28,6 +29,7 @@ export default function RuntimeCards({ room }: { room: Room }) {
           <small>（实例：{item.instance_id}）</small>
         </li>)}</ul>}
         {slot?.character_snapshot && <details><summary>原始角色资料</summary>
+          {!!slot.character_snapshot.custom_specializations?.length && <p>自定义专业：{slot.character_snapshot.custom_specializations.map(s => `${specializationLabels[s.group]}（${s.name}） ${slot.character_snapshot!.skill_values[s.id]}`).join('、')}</p>}
           <p>原有装备：{slot.character_snapshot.equipment?.map(e => `${e.name} ×${e.quantity}${e.notes ? `（${e.notes}）` : ''}`).join('、') || '未记载'}</p>
           {slot.character_snapshot.finances && <p>车卡资产：{slot.character_snapshot.finances.currency} {slot.character_snapshot.finances.assets.toLocaleString()} · 现金 {slot.character_snapshot.finances.cash.toLocaleString()}</p>}
           {slot.character_snapshot.background && Object.entries({ appearance: '外貌', beliefs: '信念', people: '重要之人', places: '地点', possessions: '宝贵之物', traits: '特质' }).map(([key, label]) => {

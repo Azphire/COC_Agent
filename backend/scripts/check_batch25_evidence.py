@@ -42,9 +42,12 @@ def summary_body(content):
 
 
 def preserved_summaries(expected, saved, active):
-    return bool(expected) and expected == saved and {
-        key: summary_body(value) for key, value in expected.items()
-    } == {key: summary_body(value) for key, value in active.items()}
+    return (
+        bool(expected)
+        and expected == saved
+        and {key: summary_body(value) for key, value in expected.items()}
+        == {key: summary_body(value) for key, value in active.items()}
+    )
 
 
 def database_evidence(path, room_id):
@@ -239,6 +242,32 @@ def continued_action(step, events, destination):
     )
 
 
+def formal_retest_status(config, calls, status, blocked=False):
+    """A provider selection or successful transport alone is not a formal retest."""
+    if config.get("provider") != "openai":
+        return "not_run"
+    if not calls:
+        return "blocked" if blocked else "not_run"
+    from urllib.parse import urlsplit
+
+    url = urlsplit(config.get("base_url", ""))
+    valid = (
+        url.scheme == "https"
+        and url.netloc == "api.openai.com"
+        and url.path.rstrip("/") == "/v1"
+        and not url.query
+        and not url.fragment
+        and all(
+            c.get("provider") == "openai"
+            and c.get("model") == config.get("model")
+            and c.get("response_model")
+            and c.get("token_usage")
+            for c in calls
+        )
+    )
+    return status if valid else "failed"
+
+
 def audit(directory):
     directory = Path(directory).resolve()
     result = read(directory / "result.json")
@@ -426,8 +455,12 @@ def audit(directory):
         facts += [
             result.get("restore_record", {}).get("before", room)["session_state"]["scene_title"]
         ]
-        board = result.get("restore_record", {}).get("before", {}).get("game", {}).get(
-            "public_entities", read(public_path) if public_path.exists() else [])
+        board = (
+            result.get("restore_record", {})
+            .get("before", {})
+            .get("game", {})
+            .get("public_entities", read(public_path) if public_path.exists() else [])
+        )
         facts += [e.get("public_summary", "") for e in board if e.get("type") != "scene"]
         hidden = result.get("hidden_facts", [])
         forbidden = [f["text"] for f in hidden if f["id"] not in {e["id"] for e in board}]
@@ -549,14 +582,6 @@ def audit(directory):
         item(
             "post_restore_" + name, condition, [f"step-{stage}.json", "restore.json", "events.json"]
         )
-    item(
-        "openai_formal_retest",
-        None,
-        ["result.json#/configuration"],
-        missing="blocked",
-        detail="Requires explicit authorization for necessary module context, isolated room state "
-        "and test actions to https://api.openai.com/v1/",
-    )
     required = [
         v["status"]
         for k, v in rows.items()
@@ -573,6 +598,19 @@ def audit(directory):
             else "not_run"
         )
     )
+    item(
+        "openai_formal_retest",
+        missing=formal_retest_status(config, calls, status, result.get("status") == "blocked"),
+        sources=[
+            "result.json#/configuration",
+            "game.db#agent_model_calls",
+            "verified-evidence.json#/rows",
+        ],
+        detail="Based on provider, destination, actual calls and formal scenario checks. "
+        "Other providers are not_run; this audit does not grant external transmission permission.",
+    )
+    if config["provider"] == "openai":
+        status = rows["openai_formal_retest"]["status"]
     return dict(
         status=status,
         rows=rows,

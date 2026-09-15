@@ -3,10 +3,10 @@
 from app.domain.character_details import Finances
 
 
-def group_options(group, ruleset, era):
+def group_options(group, ruleset, era, skills=None):
     return {
         s.key
-        for s in ruleset.skills
+        for s in (ruleset.skills if skills is None else skills)
         if s.allocatable
         and s.key != "credit_rating"
         and era in s.eras
@@ -18,7 +18,8 @@ def group_options(group, ruleset, era):
     }
 
 
-def occupation_choices(character, ruleset, occupation, issue):
+def occupation_choices(character, ruleset, occupation, issue, skills=None):
+    skills = ruleset.skills if skills is None else skills
     if (
         character.selected_occupation_skills
         and not character.occupation_group_choices
@@ -42,12 +43,12 @@ def occupation_choices(character, ruleset, occupation, issue):
             issue(field, "selection_count", f"{group.display_name}须选择 {group.count} 项")
         if len(selected) != len(set(selected)) or set(selected) & allowed:
             issue(field, "duplicate", "职业技能不得在固定项或不同分组重复计数")
-        options = group_options(group, ruleset, character.era)
+        options = group_options(group, ruleset, character.era, skills)
         if not set(selected) <= options:
             issue(field, "selection", "所选技能不符合本组或年代要求")
         # Mixed direction groups count "fighting" or "language" only once.
         directions = [
-            next(s.specialization_group for s in ruleset.skills if s.key == k)
+            next(s.specialization_group for s in skills if s.key == k)
             for k in selected
             if k in options and k not in group.skills
         ]

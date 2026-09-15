@@ -80,13 +80,17 @@ def select_model(provider, model=None, base_url=None, output_mode=None, authoriz
 
 
 class Batch25(ApiCheck):
+    batch_directory = BATCH
+    audit_report = staticmethod(audit)
+
     def persist(self):
         write(self.directory / "result.json", self.result)
 
     def __init__(self, args):
         self.args = args
-        self.directory = (BATCH / args.run).resolve()
-        assert self.directory.is_relative_to(BATCH.resolve()) and self.directory != BATCH.resolve()
+        batch = self.batch_directory.resolve()
+        self.directory = (batch / args.run).resolve()
+        assert self.directory.is_relative_to(batch) and self.directory != batch
         self.directory.mkdir(parents=True, exist_ok=args.resume)
         assert hashlib.sha256(PACKAGE.read_bytes()).hexdigest() == PACKAGE_HASH
         initial, selected, credential = select_model(
@@ -662,7 +666,7 @@ class Batch25(ApiCheck):
                     log.close()
                 self.http.close()
                 if (self.directory / "final-room.json").exists():
-                    report = audit(self.directory)
+                    report = self.audit_report(self.directory)
                     write(self.directory / "verified-evidence.json", report)
                     self.result["acceptance"] = report["status"]
                     self.result["game_usage"] = report["tokens"]

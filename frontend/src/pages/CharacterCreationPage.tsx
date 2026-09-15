@@ -7,11 +7,13 @@ import SkillAllocator from '../components/character/SkillAllocator'
 import ValidationSummary from '../components/character/ValidationSummary'
 import JsonTransfer from '../components/character/JsonTransfer'
 import CharacterDetails from '../components/character/CharacterDetails'
+import { characterSkills } from '../components/character/specializations'
 
 const empty: EditableFields = {
   name: '', player_name: null, age: 25, occupation: null, selected_occupation_skills: [],
   attributes: {}, occupation_skills: {}, interest_skills: {}, age_deductions: {},
   occupation_attribute: null, occupation_group_choices: {}, selected_specializations: [], era: '1920s',
+  custom_specializations: [],
   background: { appearance: '', beliefs: '', people: '', places: '', possessions: '', traits: '', key_connection: null },
   asset_details: [], equipment: [],
 }
@@ -32,7 +34,7 @@ function obviousInvalid(form: EditableFields, ruleset: RuleSet, saved: Character
   }
   const occupation = ruleset.occupations.find(item => item.key === form.occupation)
   if (!occupation || form.selected_occupation_skills.length !== occupation.required_selection_count) return true
-  return ruleset.skills.some(skill => {
+  return characterSkills(ruleset, form.custom_specializations).some(skill => {
     const values = [form.occupation_skills[skill.key]?.points || 0, form.interest_skills[skill.key]?.points || 0]
     return values.some(value => !Number.isInteger(value) || value < 0)
       || (saved.skill_base_values[skill.key] ?? skill.base_value) + values[0] + values[1] > skill.maximum
@@ -108,6 +110,7 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
         age_deductions: form.age_deductions,
         occupation_attribute: form.occupation_attribute, occupation_group_choices: form.occupation_group_choices,
         selected_specializations: form.selected_specializations, era: form.era, background: form.background,
+        custom_specializations: form.custom_specializations,
         asset_details: form.asset_details, equipment: form.equipment,
       }
       if (saved.creation_mode === 'point_buy') body.attributes = form.attributes

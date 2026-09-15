@@ -998,7 +998,7 @@ class AgentService:
         check = s.PendingCheck(
             **args.model_dump(),
             display_name=resolve_check_name(
-                args.name, args.kind, slot.character_snapshot["ruleset_id"]
+                args.name, args.kind, slot.character_snapshot["ruleset_id"], slot.character_snapshot
             )["display_name"],
             ruleset_id=slot.character_snapshot["ruleset_id"],
             policy_fingerprint=policy.state_fingerprint,

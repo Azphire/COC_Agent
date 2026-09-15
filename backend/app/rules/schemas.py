@@ -209,6 +209,7 @@ class RuleSet(DomainModel):
     derived_values: list[DerivedDefinition] = Field(default_factory=list, max_length=100)
     points: PointConfiguration | None = None
     skills: list[SkillDefinition] = Field(default_factory=list, max_length=300)
+    custom_specialization_templates: dict[Key, Key] = Field(default_factory=dict)
     occupations: list[OccupationDefinition] = Field(default_factory=list, max_length=100)
     age_rules: AgeConfiguration | None = None
 
@@ -271,6 +272,16 @@ class RuleSet(DomainModel):
                 isinstance(row.value, str) for row in skill.base_rule.lookup_table
             ):
                 raise ValueError("技能基础值必须为数值")
+        for group, key in self.custom_specialization_templates.items():
+            template = next((s for s in self.skills if s.key == key), None)
+            if (
+                group not in {"language", "art_craft", "science"}
+                or not template
+                or template.specialization_group != group
+                or template.base_rule
+                or not template.allocatable
+            ):
+                raise ValueError("自定义专业模板必须引用同类别的可分配固定基础值技能")
         if self.age_rules:
             attributes = {item.key for item in self.attributes}
             if self.age_rules.education_attribute not in attributes:

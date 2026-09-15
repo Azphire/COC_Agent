@@ -162,6 +162,7 @@ async def build_context(
             cards.append({"member_id": slot.member_id, **slot.public_summary})
         elif keeper or slot.member_id == binding.member_id:
             from app.rules.checks import prompt_skills
+            from app.rules.specializations import snapshot_skill_names
 
             card = {
                 **slot.character_snapshot,
@@ -174,6 +175,7 @@ async def build_context(
                     "member_id": slot.member_id,
                     "slot_id": slot.id,
                     "runtime": runtime_context(room, slot.id),
+                    "custom_skill_names": snapshot_skill_names(slot.character_snapshot),
                     **{
                         k: card[k]
                         for k in ("name", "occupation", "effective_attributes", "skill_values")

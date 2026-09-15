@@ -72,7 +72,9 @@ class CharacterService:
                 unknown("occupation")
         for key in character.attributes.keys() - {item.key for item in ruleset.attributes}:
             unknown(f"attributes.{key}")
-        skills = {item.key for item in ruleset.skills}
+        from app.rules.specializations import character_skills
+
+        skills = set(character_skills(character, ruleset))
         for field in ("occupation_skills", "interest_skills"):
             for key in getattr(character, field).keys() - skills:
                 unknown(f"{field}.{key}")
@@ -210,6 +212,7 @@ class CharacterService:
             "occupation_attribute",
             "occupation_group_choices",
             "selected_specializations",
+            "custom_specializations",
         }
         if details:
             events.append(("character_details_updated", {"fields": sorted(details)}))

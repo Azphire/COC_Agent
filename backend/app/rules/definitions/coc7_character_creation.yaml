@@ -243,6 +243,10 @@ age_rules:
     - con
     - dex
     movement_penalty: 5
+custom_specialization_templates:
+  language: language_latin
+  art_craft: art_acting
+  science: science_astronomy
 skills:
 - key: accounting
   display_name: 会计

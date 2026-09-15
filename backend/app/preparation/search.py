@@ -399,6 +399,37 @@ def searchable_entity_ids(entities, local, scene):
     return result
 
 
+def complete_automatic_discovery(value, context):
+    """Complete a selected, eligible observation through the normal reveal tool.
+
+    Eligibility comes from current preparation facts. This is a proposal only:
+    context supplements, action authority and reveal prerequisites still apply.
+    """
+    from app.preparation.action_authority import NON_ACTION, declared_action
+
+    focus = value.get("focus") or {}
+    action = focus.get("action", "")
+    kinds = set(action_kinds(action))
+    if (
+        context.get("readonly_recall")
+        or value.get("needs_clarification")
+        or value.get("needs_host_review")
+        or value.get("proposed_transition_id")
+        or value.get("proposed_check")
+        or value["parsed_intent"]["type"] not in {"observe", "investigate", "interact"}
+        or not kinds
+        or kinds - {"observe", "search"}
+        or NON_ACTION.search(action) and not declared_action(action)
+    ):
+        return
+    target = focus.get("action_target_id")
+    eligible = {r["entity_id"] for r in context.get("automatic_discoveries", [])}
+    if target in eligible:
+        value["proposed_reveal_entity_ids"] = list(
+            dict.fromkeys([*value.get("proposed_reveal_entity_ids", []), target])
+        )
+
+
 def repair_observation_target(value, context):
     """Restore explicit visual observation before the primary plan is validated.
 

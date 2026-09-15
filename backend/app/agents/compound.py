@@ -50,7 +50,9 @@ class CompoundCheckService:
                 "difficulty": "regular",
                 "bonus_dice": bonus,
                 "penalty_dice": penalty,
-                "display_name": resolve_check_name(name, kind)["display_name"],
+                "display_name": resolve_check_name(
+                    name, kind, snapshot=slot.character_snapshot
+                )["display_name"],
                 "dice": None,
                 "result": None,
                 "settlement": None,
@@ -73,7 +75,9 @@ class CompoundCheckService:
                     },
                     {
                         "name": second.name,
-                        "display_name": resolve_check_name(second.name, "skill")["display_name"],
+                        "display_name": resolve_check_name(
+                            second.name, "skill", snapshot=slot.character_snapshot
+                        )["display_name"],
                         "value": value,
                         "difficulty": second.difficulty,
                     },

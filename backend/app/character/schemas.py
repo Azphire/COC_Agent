@@ -4,6 +4,7 @@ from pydantic import Field, StrictInt, model_validator
 
 from app.domain.character import BoundedInt, CharacteristicValue, DomainModel, SkillAllocation
 from app.domain.character_details import AssetDetail, Background, EquipmentEntry
+from app.domain.specializations import CustomSpecialization
 
 
 class CreateCharacterRequest(DomainModel):
@@ -33,6 +34,7 @@ class PatchCharacterRequest(DomainModel):
     occupation_attribute: str | None = Field(default=None, max_length=64)
     occupation_group_choices: dict[str, list[str]] | None = None
     selected_specializations: list[str] | None = Field(default=None, max_length=200)
+    custom_specializations: list[CustomSpecialization] | None = Field(default=None, max_length=50)
     era: Literal["1920s", "modern"] | None = None
     background: Background | None = None
     asset_details: list[AssetDetail] | None = Field(default=None, max_length=100)
@@ -49,6 +51,7 @@ class PatchCharacterRequest(DomainModel):
             "age_deductions",
             "occupation_group_choices",
             "selected_specializations",
+            "custom_specializations",
             "era",
             "background",
             "asset_details",

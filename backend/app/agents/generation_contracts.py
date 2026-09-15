@@ -670,6 +670,11 @@ def restore_output(output, schema, context):
                 reason=focus["action"],
                 uncertainty=focus["obstacle"],
             )
+        # Run after unnecessary model checks have been removed. A discarded
+        # check must not suppress the selected object's ordinary discovery.
+        from app.preparation.search import complete_automatic_discovery
+
+        complete_automatic_discovery(value, context)
     acknowledgement = False
     if schema is KeeperPlan:
         from app.preparation.inventory import held_item_acknowledgement

@@ -32,7 +32,13 @@ def display_names():
     return names
 
 
-def resolve_check_name(name, kind="skill", ruleset_id="coc7-character-creation"):
+def resolve_check_name(name, kind="skill", ruleset_id="coc7-character-creation", snapshot=None):
+    if snapshot is not None and kind == "skill":
+        from app.rules.specializations import snapshot_skill_names
+
+        label = snapshot_skill_names(snapshot).get(name)
+        if label:
+            return dict(skill_id=name, display_name=label, ruleset_id=ruleset_id, english_name=None)
     if (ruleset_id, kind, name) == ("coc7-character-creation", "attribute", "luck"):
         return {
             "skill_id": "luck",

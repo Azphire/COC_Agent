@@ -37,7 +37,7 @@ def prompt_skills(snapshot, action=""):
         chosen.update(occupation.fixed_skills)
     for field in ("occupation_skills", "interest_skills"):
         chosen.update(k for k, v in snapshot.get(field, {}).items() if v.get("points"))
-    return {
+    result = {
         s.key: values[s.key]
         for s in rules.skills
         if s.key in values
@@ -48,6 +48,10 @@ def prompt_skills(snapshot, action=""):
             or s.display_name.split("（")[-1].rstrip("）") in action
         )
     }
+    from app.rules.specializations import snapshot_skill_names
+
+    result.update({k: values[k] for k in snapshot_skill_names(snapshot)})
+    return result
 
 
 def check_value(snapshot: dict, kind: str, name: str) -> int:

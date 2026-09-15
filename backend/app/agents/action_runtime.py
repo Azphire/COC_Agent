@@ -45,6 +45,9 @@ PLAN_INSTRUCTION = (
     "incidental_memories是先前公开的KP即兴，保留说话人和地点以便续聊，不能当作关键发现；私有知识仍受公开条件限制。"
     "conversation_parent是等待事项：放弃未掷尝试填pending_action=withdraw，改方法replace，独立交流independent，依赖原结果defer；同句问题仍保留。"
     "发现和转场必须对应当前动作与批准条件；proposed_transition_id从approved_exits选，旧模组用已有移动工具。"
+    "automatic_discoveries是尚未公开、已满足免检定条件的本地候选。按实际观察范围选择action_target_id，"
+    "并在proposed_reveal_entity_ids填写同一ID，读取资料本身不是公开发现。玩家不必预先知道隐藏对象名称。"
+    "看见对象与识别其隐藏细节是不同任务；仅观察外观时不要提议揭示check_requirements中的隐藏细节。"
     "module_interactions列出当前批准交互。拿物品、开锁、操作装置、诱导怪物时，"
     "在proposed_tool_calls填apply_module_action，arguments填entity_id、interaction_id及本轮evidence_quote。"
     "发现物品不代表已持有；无交互回执不能宣布获得物品、解锁或结局。host_review=true的特殊方法先交KP确认。"
@@ -916,6 +919,15 @@ class ActionRuntimeMixin:
                     ]
                 from app.agents.check_policy import entity_access
 
+                context["automatic_discoveries"] = [
+                    {"entity_id": eid, "title": e["title"], "aliases": e.get("aliases", [])}
+                    for eid, e in facts.approved_entities.items()
+                    if eid in facts.local_entity_ids
+                    and eid not in facts.revealed_entity_ids
+                    and e["type"] in {"item", "clue", "location"}
+                    and entity_access(e) == "automatic"
+                    and not facts.reveal_errors.get(eid)
+                ]
                 context["check_requirements"] = [
                     {
                         "entity_id": eid,
