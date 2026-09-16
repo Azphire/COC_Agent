@@ -20,6 +20,8 @@ export default function RuntimeCards({ room }: { room: Room }) {
         <h3>{slot?.public_summary.name}</h3>
         <p>HP {runtime.hp ?? '—'} / {runtime.hp_max ?? '—'} · MP {runtime.mp ?? '—'} / {runtime.mp_max ?? '—'}</p>
         <p>SAN {runtime.san ?? '—'} / {runtime.san_max ?? '—'} · Luck {runtime.luck ?? '—'}</p>
+        {runtime.sanity.belief && <p>当前状态：{runtime.sanity.belief === 'believer' ? '相信者' : '不信者'}{runtime.sanity.belief_conversion && `；已一次性结算转换代价 ${runtime.sanity.belief_conversion.cost}`}。</p>}
+        {slot?.character_snapshot && <p>当前克苏鲁神话：{Math.min(99, (slot.character_snapshot.skill_values.cthulhu_mythos ?? 0) + (runtime.sanity.mythos_gain ?? 0))}（初始 {slot.character_snapshot.initial_mythos ?? 0} ＋ 运行期 {runtime.sanity.mythos_gain ?? 0}）。</p>}
         {autonomyReason(runtime) && <p role="status">{autonomyReason(runtime)}</p>}
         {runtime.mp != null && runtime.mp_max != null && runtime.mp < runtime.mp_max && <small>MP 自然恢复进度：{runtime.mp_recovery_progress ?? 0} / 60 游戏分钟</small>}
         <p>{conditions.join('、') || '无已记录伤势'}{injury.con_pending ? ' · 待体质检定' : ''}</p>

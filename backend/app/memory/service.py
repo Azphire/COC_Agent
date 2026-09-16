@@ -181,6 +181,9 @@ async def build_context(
                     "custom_skill_names": snapshot_skill_names(slot.character_snapshot),
                     "experience": card.get("experience"),
                     "experience_effects": card.get("experience_effects", {}),
+                    "initial_mythos_sources": card.get("initial_mythos_sources", []),
+                    "initial_belief": card.get("initial_belief"),
+                    "known_spells": card.get("known_spells", []),
                     **{
                         k: card[k]
                         for k in ("name", "occupation", "effective_attributes", "skill_values")

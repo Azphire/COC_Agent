@@ -10,6 +10,8 @@ Number = Annotated[StrictInt, Field(ge=0, le=1_000_000)]
 
 
 class SanityEffect(DomainModel):
+    mythos_evidence: Literal["direct", "otherworldly", "deity_avatar"] | None = None
+    mythos_evidence_basis: str = Field(default="", max_length=500)
     # Exclusive cause, assigned during preparation/approval; never by the action caller.
     # Mixed horror, animation/monsters etc. must remain unclassified or separate effects.
     experience_category: Literal[
@@ -47,6 +49,13 @@ class SanityEffect(DomainModel):
 
     @model_validator(mode="after")
     def exclusive_experience_cause(self):
+        if self.mythos_evidence:
+            if not self.mythos or not self.mythos_evidence_basis.strip():
+                raise ValueError("神话直接证据须有批准的神话效果及具体事实依据")
+            if self.experience_category:
+                raise ValueError("神话直接证据不能同时声明普通人类恐怖的排他免疫类别")
+            if self.mythos_evidence != "direct" and self.perception != "visual":
+                raise ValueError("明显异界生物／神祇化身的例外须明确目击条件")
         if self.experience_category:
             if not self.experience_basis.strip():
                 raise ValueError("经历免疫类别须有原来源支持的独立恐怖原因说明")
@@ -56,6 +65,8 @@ class SanityEffect(DomainModel):
 
 
 class SanityState(DomainModel):
+    belief: Literal["believer", "unbeliever"] | None = None
+    belief_conversion: dict | None = None
     day_start_san: Annotated[StrictInt, Field(ge=0, le=99)] | None = None
     day_loss: Number = 0
     mythos_gain: Annotated[StrictInt, Field(ge=0, le=99)] = 0
@@ -99,6 +110,11 @@ class SanityRoll(DomainModel):
     expected_stage: Literal["san", "loss", "int", "duration"]
 
 
+class VoluntaryBelief(DomainModel):
+    expected_revision: Annotated[StrictInt, Field(ge=1)]
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class SanityManagement(DomainModel):
     damage: Annotated[StrictInt, Field(ge=0, le=1000)] | None = None
     armor_applies: bool = True
@@ -122,7 +138,8 @@ class ResourceCorrection(DomainModel):
 
 
 class SanityProgress(DomainModel):
-    origin: Literal["automatic", "host_review", "host", "kp_ruling"] = "host"
+    belief_conversion: dict | None = None
+    origin: Literal["automatic", "host_review", "host", "kp_ruling", "voluntary"] = "host"
     insanity_kind: str = "none"
     phase: str = "none"
     symptom: str = ""

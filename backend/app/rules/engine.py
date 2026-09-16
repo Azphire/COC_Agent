@@ -252,6 +252,9 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
                 f"{occupation.credit_rating_maximum}",
             )
 
+    from app.rules.mythos import aggregate_initial
+
+    aggregate_initial(character)
     apply_initial_mythos(character)
     apply_san(character)
     character.skill_half_values = {key: value // 2 for key, value in character.skill_values.items()}

@@ -13,6 +13,7 @@ from app.rooms.sanity_schemas import (
     ResourceCorrection,
     SanityManagement,
     SanityRoll,
+    VoluntaryBelief,
 )
 from app.rooms.service import RoomService
 
@@ -26,6 +27,11 @@ def service(request: Request) -> RoomService:
 
 Service = Annotated[RoomService, Depends(service)]
 Token = Annotated[str, Depends(bearer)]
+
+
+@router.post("/{room_id}/sanity/voluntary-belief")
+async def voluntary_belief(room_id: UUID, body: VoluntaryBelief, svc: Service, token: Token):
+    return await svc.command(room_id, token, "agent.sanity.voluntary_belief", body)
 
 
 @router.post("/{room_id}/sanity/encounters")

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Room } from '../api/rooms'
 import EncounterReviewPanel from './EncounterReviewPanel'
+import { autonomyReason } from './autonomy'
 
 const kinds: Record<string, string> = { none: '清醒', temporary: '临时性疯狂', indefinite: '不定性疯狂', permanent: '永久性疯狂' }
 const phases: Record<string, string> = { none: '无发作', awaiting_symptom: '等待主机选择症状', bout: '疯狂发作', underlying: '潜在疯狂' }
@@ -20,6 +21,9 @@ export function SanityPanel({ room, busy, command }: Props) {
   const [effect, setEffect] = useState('')
   const [sourceSeq, setSourceSeq] = useState('')
   const [repeatConfirmed, setRepeatConfirmed] = useState(false)
+  const [beliefReason, setBeliefReason] = useState('')
+  const ownSlot = room.character_slots.find(s => s.member_id === room.self_member_id)
+  const ownRuntime = ownSlot && room.session_state.characters[ownSlot.id]
   const effects = (room.game?.host_entities || []).flatMap(e => (e.sanity_effects || []).map(s => ({ ...s, entity_id: e.id, title: e.title, key: `${e.id}:${s.id}` })))
   const legacyMaximum = (id: string) => {
     const snapshot = room.character_slots.find(s => s.id === id)?.character_snapshot
@@ -28,6 +32,11 @@ export function SanityPanel({ room, busy, command }: Props) {
   return <section><h2>理智与疯狂</h2><p>游戏第 {room.session_state.sanity_day + 1} 天 · 第 {room.session_state.game_minute} 分钟 · 第 {room.session_state.game_round} 轮</p>
     {Object.entries(room.session_state.characters).map(([id, c]) => <article key={id} data-sanity-slot={id}><h3>{room.character_slots.find(s => s.id === id)?.public_summary.name} · Luck {c.luck ?? '—'} · SAN {c.san ?? '—'} / {c.san_max ?? legacyMaximum(id)}</h3><p>{kinds[c.sanity.kind]} · {phases[c.sanity.phase]} · {c.sanity.symptom || '尚无症状记录'}</p><p>本日累计损失 {c.sanity.day_loss}；日初 SAN {c.sanity.day_start_san ?? '首次遭遇时记录'}；临时疯狂结束分钟 {c.sanity.ends_minute ?? '—'}；发作结束 {c.sanity.bout_end_round != null ? `第 ${c.sanity.bout_end_round} 轮` : c.sanity.bout_end_minute != null ? `第 ${c.sanity.bout_end_minute} 分钟` : '—'}</p><details><summary>症状与恢复记录</summary><pre>{JSON.stringify(c.sanity.history, null, 2)}</pre></details></article>)}
     <EncounterReviewPanel room={room} busy={busy} command={command} />
+    {ownRuntime?.sanity.belief === 'unbeliever' && <form onSubmit={e => { e.preventDefault(); void command('/sanity/voluntary-belief', { expected_revision: room.revision, reason: beliefReason }) }}>
+      <p>规则允许玩家自愿成为相信者：立即损失当前克苏鲁神话值，计入本日损失并按正常规则判断疯狂；此选择不能撤回。</p>
+      <label>自愿相信的理由<input id="voluntary-belief-reason" maxLength={500} value={beliefReason} onChange={e => setBeliefReason(e.target.value)} /></label>
+      <button disabled={busy || room.status !== 'running' || !!autonomyReason(ownRuntime) || !beliefReason.trim()}>自愿成为相信者并结算 SAN</button>
+    </form>}
     <p>幸运消耗可选规则：{room.session_state.luck_spending ? '已启用' : '未启用'}</p>
     {room.is_host && <button disabled={busy || !!room.game?.cycle && ['running', 'waiting_for_roll', 'waiting_for_review', 'failed'].includes(room.game.cycle.status)} onClick={() => void command('/check-rules', { expected_revision: room.revision, luck_spending: !room.session_state.luck_spending }, 'PATCH')}>{room.session_state.luck_spending ? '关闭' : '启用'}幸运消耗可选规则</button>}
     {room.is_host && ['running', 'paused'].includes(room.status) && <details><summary>主机：资源更正、游戏时间与恢复</summary><p>时间只随主机推进。不定性疯狂需要记录治疗检定结果或章节结束裁定。症状可按规则表选择；伴随的装备、伤害等后果仍由主机处理。</p><form onSubmit={e => { e.preventDefault(); void command('/sanity/manage', { expected_revision: room.revision, operation, reason, slot_id: slot || null, minute: minute === '' ? null : Number(minute), round: round === '' ? null : Number(round), symptom, mode, recovery_basis: basis }) }}>

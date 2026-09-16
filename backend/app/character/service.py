@@ -187,7 +187,9 @@ class CharacterService:
         from app.rules.experiences import approve_experience, prepare_roll
 
         if not candidate.original_id or (
-            candidate.experience and (
+            candidate.experience
+            and candidate.experience.package != "mythos"
+            and (
                 not character.experience
                 or character.experience.package != candidate.experience.package
             )
@@ -261,7 +263,8 @@ class CharacterService:
             events.append(("character_details_updated", {"fields": sorted(details)}))
         if changes.keys() & {"experience", "experience_skills"}:
             events.append(("experience_updated", {
-                "selection": candidate.experience.model_dump() if candidate.experience else None,
+                "selection": candidate.experience.model_dump(mode="json")
+                if candidate.experience else None,
                 "effects": candidate.experience_effects,
                 "roll_ids": [str(r.id) for r in candidate.experience_rolls.values()],
             }))
@@ -333,6 +336,12 @@ class CharacterService:
     def prepare_import(self, document: CharacterExport) -> CharacterDraft:
         """Recalculate an imported draft without storing it or generating any dice."""
         original = document.character
+        if original.experience and original.experience.package == "mythos":
+            ids = [r.id for r in original.roll_records] + [
+                r.id for r in original.experience_rolls.values()
+            ]
+            if len(ids) != len(set(ids)):
+                raise CharacterError(422, "导入原骰ID重复；不能在重建本地属性记录ID时掩盖冲突")
         if (document.ruleset.id, document.ruleset.version) != (
             original.ruleset_id,
             original.ruleset_version,

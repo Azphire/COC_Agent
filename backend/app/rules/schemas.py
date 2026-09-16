@@ -132,14 +132,15 @@ class ExperienceVariant(DomainModel):
 
 
 class ExperienceDefinition(DomainModel):
-    key: Literal["war", "police", "criminal", "medical"]
+    key: Literal["war", "police", "criminal", "medical", "mythos"]
     display_name: str
     source: str
     qualification: str
     minimum_age: int | None = None
     occupations: list[Key] = Field(default_factory=list)
     points: Annotated[StrictInt, Field(ge=0)]
-    san_loss: Literal["1d10", "1d10+5"]
+    san_loss: Literal["1d10", "1d10+5"] | None = None
+    initial_mythos_roll: Literal["1d10+5"] | None = None
     immunity: list[str]
     variants: dict[Key, ExperienceVariant]
 
@@ -266,7 +267,7 @@ class RuleSet(DomainModel):
     custom_specialization_templates: dict[Key, Key] = Field(default_factory=dict)
     specialization_policies: dict[Key, SpecializationPolicy] = Field(default_factory=dict)
     occupations: list[OccupationDefinition] = Field(default_factory=list, max_length=200)
-    experience_packages: list[ExperienceDefinition] = Field(default_factory=list, max_length=4)
+    experience_packages: list[ExperienceDefinition] = Field(default_factory=list, max_length=5)
     age_rules: AgeConfiguration | None = None
 
     @model_validator(mode="after")

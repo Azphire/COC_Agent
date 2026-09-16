@@ -452,6 +452,7 @@ class RoomService:
                     "agent.retry",
                     "resume",
                     "agent.sanity.request",
+                    "agent.sanity.voluntary_belief",
                     "agent.sanity.roll",
                     "agent.sanity.manage",
                     "agent.resource.correct",
@@ -486,7 +487,10 @@ class RoomService:
         )
         session.add(slot)
         state = SessionStateV1.model_validate(room.session_state)
+        from app.rules.mythos import initial_belief
+
         state.characters[UUID(slot.id)] = CharacterRuntimeV1(
+            sanity={"belief": initial_belief(slot.character_snapshot)},
             hp_max=character.derived_values.get("hp"),
             mp_max=character.derived_values.get("mp"),
             mp_recovery_per_hour=(1 + character.effective_attributes.get("pow", 0) // 100)

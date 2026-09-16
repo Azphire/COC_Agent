@@ -39,6 +39,9 @@ def runtime_context(room, slot_id):
         result["sanity"] = {k: sanity.get(k) for k in ("kind", "phase", "symptom")}
     if sanity.get("mythos_gain"):
         result["mythos_gain"] = sanity["mythos_gain"]
+    if sanity.get("belief") is not None:
+        result["belief"] = sanity["belief"]
+        result["belief_conversion"] = sanity.get("belief_conversion")
     return result
 
 
@@ -93,6 +96,8 @@ def sanity_public(document):
     message += f"；{label}"
     if progress.immunity:
         message += f"；免疫：{progress.immunity['reason']}"
+    if progress.belief_conversion:
+        message += f"；成为相信者，合并神话代价 {progress.belief_conversion['cost']}"
     if progress.insanity_kind != "none":
         kind = {"temporary": "临时性疯狂", "indefinite": "不定性疯狂", "permanent": "永久性疯狂"}
         message += f"；{kind[progress.insanity_kind]}，{progress.symptom or '等待主机确认症状'}"
@@ -113,6 +118,7 @@ def sanity_public(document):
             "loss": progress.loss,
             "immune": progress.immune,
             "immunity": progress.immunity,
+            "belief_conversion": progress.belief_conversion,
             "insanity_kind": progress.insanity_kind,
             "phase": progress.phase,
             "symptom": progress.symptom,
@@ -447,37 +453,37 @@ class SanityService:
             character.sanity.ends_minute = state.game_minute + total * 60
             progress.stage = "symptom"
         if progress.loss is not None and progress.after is None:
-            actual = min(character.san, progress.loss)
-            character.san -= actual
-            character.sanity.day_loss += actual
-            progress.loss, progress.after = actual, character.san
-            trigger = insanity_trigger(
-                character.san,
-                actual,
-                character.sanity.day_start_san or 0,
-                character.sanity.day_loss,
-                character.sanity.kind,
-            )
-            if trigger in {"temporary", "indefinite", "permanent"}:
-                self.start_insanity(state, character, record, progress, trigger)
-            else:
-                progress.stage = "int" if trigger == "int" else "done"
-            character.sanity.history.append(
-                {
-                    "event": "loss",
-                    "check_id": record.id,
-                    "source_event_seq": progress.source_event_seq,
-                    "entity_id": progress.entity_id,
-                    "effect_id": progress.effect.id,
-                    "minute": state.game_minute,
-                    "day": state.sanity_day,
-                    "before": progress.before,
-                    "after": progress.after,
-                    "loss": actual,
-                }
-            )
+            self.settle_loss(room, slot, state, character, record, progress)
         room.session_state = state.model_dump(mode="json")
         await self.finish(session, room, record, check, progress)
+
+    def settle_loss(self, room, slot, state, character, record, progress, voluntary=False):
+        from app.rooms.mythos import conversion_cost
+
+        progress.loss += conversion_cost(
+            character, slot.character_snapshot, progress, record.id,
+            current_check_value(room, slot, "skill", "cthulhu_mythos"),
+            state.game_minute, state.sanity_day, voluntary=voluntary,
+        )
+        actual = min(character.san, progress.loss)
+        character.san -= actual
+        character.sanity.day_loss += actual
+        progress.loss, progress.after = actual, character.san
+        trigger = insanity_trigger(
+            character.san, actual, character.sanity.day_start_san or 0,
+            character.sanity.day_loss, character.sanity.kind,
+        )
+        if trigger in {"temporary", "indefinite", "permanent"}:
+            self.start_insanity(state, character, record, progress, trigger)
+        else:
+            progress.stage = "int" if trigger == "int" else "done"
+        character.sanity.history.append({
+            "event": "loss", "check_id": record.id,
+            "source_event_seq": progress.source_event_seq, "entity_id": progress.entity_id,
+            "effect_id": progress.effect.id, "minute": state.game_minute,
+            "day": state.sanity_day, "before": progress.before,
+            "after": progress.after, "loss": actual,
+        })
 
     def start_insanity(self, state, character, record, progress, kind):
         sanity = character.sanity

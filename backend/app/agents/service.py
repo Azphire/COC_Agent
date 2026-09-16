@@ -364,7 +364,10 @@ class AgentService:
 
     async def apply(self, session, room, identity, action, body, target):
         action = action.removeprefix("agent.")
-        if action not in {"action", "check.roll", "sanity.roll", "check.choice", "check.push_roll"}:
+        if action not in {
+            "action", "check.roll", "sanity.roll", "check.choice", "check.push_roll",
+            "sanity.voluntary_belief",
+        }:
             require(identity.is_host, "仅主机可以执行此操作", 403)
         if action == "check.rules":
             require(body.expected_revision == room.revision, "房间版本已变化")
@@ -412,6 +415,11 @@ class AgentService:
         if action == "sanity.request":
             record = await self.sanity.request(session, room, body)
             return {"check": record.document}
+        if action == "sanity.voluntary_belief":
+            from app.rooms.mythos import voluntarily_believe
+
+            record = await voluntarily_believe(self.sanity, session, room, identity, body)
+            return {"check": self.check_public(record.document)}
         if action == "sanity.review":
             cycle = await self.cycle(session, room.id, active=True)
             await self.sanity.encounters.review(session, room, cycle, body)

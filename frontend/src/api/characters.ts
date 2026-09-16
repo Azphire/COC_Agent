@@ -14,13 +14,14 @@ export type OccupationSkillReplacement = { original_skill: string; replacement_s
 export type InitialMythos = { source: 'occultist'; value: number; reason: string }
 export type OccupationExceptionPolicy = { source: string; note: string }
 export type Experience = {
-  package: 'war' | 'police' | 'criminal' | 'medical'; variant: string; history: string
+  package: 'war' | 'police' | 'criminal' | 'medical' | 'mythos'; variant: string; history: string
+  mythos?: { knowledge: 'reading' | 'direct'; belief: 'believer' | 'unbeliever'; method: 'manual' | 'suggested_roll'; value: number | null; backgrounds: { kind: 'scar' | 'phobia' | 'mania' | 'encounter'; detail: string }[]; spells: SpellCandidate[] } | null
   background_kind: 'scar' | 'phobia' | 'mania'; background_detail: string
   choices: Record<string, string[]>; war_year: number | null; scenario_year: number | null; age_at_war: number | null
 }
 export type ExperienceDefinition = {
   key: Experience['package']; display_name: string; source: string; qualification: string
-  minimum_age: number | null; occupations: string[]; points: number; san_loss: string; immunity: string[]
+  minimum_age: number | null; occupations: string[]; points: number; san_loss: string | null; initial_mythos_roll?: string | null; immunity: string[]
   variants: Record<string, { display_name: string; fixed_skills: string[]; skill_groups: SkillGroup[]; specialty_groups: string[] }>
 }
 export type ExperienceEffects = {
@@ -28,6 +29,7 @@ export type ExperienceEffects = {
   san_loss?: number; san_before?: number; san_after?: number; san_max?: number; approved?: boolean
   immunity_reasons?: string[]; background_kind?: string; background_detail?: string
 }
+export type SpellCandidate = { id: string; name: string; source: string; acquisition: 'experience_mythos' }
 export type RuleSet = {
   id: string; version: string; display_name: string; edition: string; enabled: boolean
   verification_status: string; notice: string
@@ -54,6 +56,9 @@ export type Character = {
   occupation_exception_approvals: Record<string, string>
   effective_occupation_skills: string[]
   initial_mythos: number
+  initial_mythos_sources?: { source: string; value: number; san_cost: number; approved: boolean }[]
+  initial_belief?: 'believer' | 'unbeliever' | null
+  known_spells?: (SpellCandidate & { permission: string; casting_status: 'unsupported' })[]
   experience: Experience | null; experience_skills: Record<string, SkillAllocation>
   experience_approvals: Record<string, string>; experience_effects: ExperienceEffects
   experience_rolls: Record<string, Character['roll_records'][number]>

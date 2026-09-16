@@ -1,13 +1,10 @@
 id: coc7-character-creation
-version: 1.5.0
+version: 1.4.0
 display_name: CoC 第七版角色创建
 edition: coc7
 enabled: true
 verification_status: verified
 source_reference:
-- filename: 克苏鲁的呼唤第七版调查员手册1.20.pdf
-  section: PDF35／印刷62；交叉核对规则书1907 PDF151／印刷150（9.3成为相信者）
-  notes: 第三十三批神话包创建、相信者状态及KP许可的已知法术记录；建议骰非强制数值。通用施法与学习阅读尚未实现。
 - filename: 克苏鲁的呼唤第七版规则书1907.pdf
   section: 第四章，PDF页68–69（印刷页67–68）
   notes: 第十六批仅补模组必需的潜行20、投掷20；旧角色未分配这两项时按核实的基础值判定，不改写原角色快照。
@@ -35,7 +32,7 @@ source_reference:
 - filename: 克苏鲁的呼唤第七版调查员手册1.20.pdf
   section: PDF46／印刷77–78；PDF53／印刷84–85；交叉核对PDF35／61–62及PDF136／223
   notes: 第三十批除魅师一项催眠替换须KP许可；神秘学家个人特长可含初始神话、10%为建议。职业条款未要求等额扣SAN，不能套用经历包相信者条款；初始SAN按规则书PDF25、51、131从POW推导并受99−神话限制。
-notice: 本地规则核对1.5.0：115职业、106目录技能、6类自定义专业、5种可选经历包。神话包含初始神话、相信者状态及已知法术记录，尚不支持施放；五包互斥且须KP许可。职业特例及专业来源限制沿用；15–89岁，购点460；未分配技能点确认时放弃。
+notice: 本地规则核对1.4.0：115职业、106目录技能、6类自定义专业。除魅师催眠替换与神秘学家初始神话须KP许可；驾驶须核对载具年代，学问须KP引入且不代替神话。四种非神话经历包可选且最多一包，须KP许可；15–89岁，购点460；未分配技能点确认时放弃。
 reroll_policy: none
 attributes:
 - key: str
@@ -5451,14 +5448,6 @@ specialization_policies:
     - cthulhu_mythos
 
 experience_packages:
-- key: mythos
-  display_name: 神话经历包
-  source: 调查员手册1.20 PDF35／印刷62；规则书1907 PDF151／印刷150（成为相信者）
-  qualification: 与KP讨论经读书研究或实际经历取得的神话知识，并写入背景；读书来源可选择不信者。增加两项相关背景，初始法术由KP决定，可不选。
-  points: 0
-  initial_mythos_roll: 1d10+5
-  immunity: []
-  variants: {}
 - key: war
   display_name: 战场经历包
   qualification: 曾作为军队士兵参加战争；填写参战年份、当时年龄及模组年份，当前年龄须与之相符。1920年代最可能是一战，仅为背景建议。

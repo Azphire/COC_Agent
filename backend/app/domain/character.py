@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from app.domain.character_details import AssetDetail, Background, EquipmentEntry, Finances
+from app.domain.mythos import InitialMythosSource, KnownSpell, MythosExperience
 from app.domain.specializations import CustomSpecialization
 
 
@@ -37,7 +38,7 @@ class RollRecord(DomainModel):
     rolled_at: datetime = Field(default_factory=utc_now)
     source: Literal["system", "imported"] = "system"
     purpose: Literal[
-        "attribute", "luck", "education_check", "education_gain", "experience_san"
+        "attribute", "luck", "education_check", "education_gain", "experience_san", "initial_mythos"
     ] = "attribute"
     multiplier: Annotated[StrictInt, Field(ge=1, le=100)] = 1
 
@@ -61,7 +62,8 @@ class PointBalances(DomainModel):
 
 
 class ExperienceSelection(DomainModel):
-    package: Literal["war", "police", "criminal", "medical"]
+    package: Literal["war", "police", "criminal", "medical", "mythos"]
+    mythos: MythosExperience | None = None
     variant: str = Field(default="", max_length=32)
     history: str = Field(default="", max_length=2000)
     background_kind: Literal["scar", "phobia", "mania"] = "scar"
@@ -104,9 +106,12 @@ class CharacterData(DomainModel):
     occupation_exception_approvals: dict[str, str] = Field(default_factory=dict, max_length=2)
     effective_occupation_skills: list[str] = Field(default_factory=list)
     initial_mythos: Annotated[StrictInt, Field(ge=0, le=99)] = 0
+    initial_mythos_sources: list[InitialMythosSource] = Field(default_factory=list)
+    initial_belief: Literal["believer", "unbeliever"] | None = None
+    known_spells: list[KnownSpell] = Field(default_factory=list)
     experience: ExperienceSelection | None = None
     experience_skills: dict[str, SkillAllocation] = Field(default_factory=dict)
-    experience_rolls: dict[str, RollRecord] = Field(default_factory=dict, max_length=4)
+    experience_rolls: dict[str, RollRecord] = Field(default_factory=dict, max_length=5)
     experience_approvals: dict[str, str] = Field(default_factory=dict, max_length=1)
     experience_effects: dict = Field(default_factory=dict)
     era: Literal["1920s", "modern"] = "1920s"

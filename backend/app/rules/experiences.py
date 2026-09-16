@@ -32,8 +32,13 @@ def policy_for(character, ruleset):
 def prepare_roll(character, ruleset, dice):
     policy = policy_for(character, ruleset)
     if policy and policy.key not in character.experience_rolls:
-        record = dice.roll(policy.san_loss, "experience_" + policy.key)
-        record.purpose = "experience_san"
+        mythos = character.experience.mythos
+        if policy.key == "mythos" and (not mythos or mythos.method != "suggested_roll"):
+            return
+        record = dice.roll(
+            policy.initial_mythos_roll or policy.san_loss, "experience_" + policy.key
+        )
+        record.purpose = "initial_mythos" if policy.key == "mythos" else "experience_san"
         character.experience_rolls[policy.key] = record
 
 
@@ -49,11 +54,12 @@ def validate_rolls(character, ruleset, issue):
         if not policy:
             issue("experience_rolls", "unsupported", "此规则版本没有该经历包骰来源")
             continue
-        dice = parse_dice(policy.san_loss)
+        formula = policy.initial_mythos_roll or policy.san_loss
+        dice = parse_dice(formula)
         if not (
             record.attribute == "experience_" + key
-            and record.purpose == "experience_san"
-            and record.formula == policy.san_loss
+            and record.purpose == ("initial_mythos" if key == "mythos" else "experience_san")
+            and record.formula == formula
             and record.multiplier == 1
             and record.modifier == dice.modifier
             and len(record.dice) == dice.count
@@ -87,8 +93,12 @@ def review_requirements(character, ruleset):
     payload.update(
         rule_id=ruleset.id,
         rule_version=ruleset.version,
-        policy=policy.model_dump(mode="json"),
-        experience=character.experience.model_dump(mode="json"),
+        policy=policy.model_dump(mode="json", exclude={"initial_mythos_roll"})
+        if policy.initial_mythos_roll is None else policy.model_dump(mode="json"),
+        # Exclude the new empty option to preserve existing 1.4 consent hashes.
+        experience=character.experience.model_dump(mode="json", exclude={"mythos"})
+        if character.experience.mythos is None
+        else character.experience.model_dump(mode="json"),
         custom=[s.model_dump() for s in character.custom_specializations],
         mythos=character.initial_mythos_proposal.model_dump()
         if character.initial_mythos_proposal
@@ -124,6 +134,8 @@ def evaluate(character, ruleset, definitions, issue):
     from app.rules.character_options import group_options
 
     character.experience_effects = {}
+    character.initial_belief = None
+    character.known_spells = []
     validate_rolls(character, ruleset, issue)
     policy = policy_for(character, ruleset)
     requirements = review_requirements(character, ruleset)
@@ -136,6 +148,12 @@ def evaluate(character, ruleset, definitions, issue):
         issue("experience", "unsupported", "此规则版本不支持所选经历包")
         return 0, set()
     selection = character.experience
+    if policy.key == "mythos":
+        from app.rules.mythos import evaluate_package
+
+        return evaluate_package(character, policy, issue)
+    if selection.mythos is not None:
+        issue("experience.mythos", "unsupported", "非神话包不支持神话来源、相信者或法术字段")
     if policy.minimum_age and (character.age or 0) < policy.minimum_age:
         issue("experience", "age", f"{policy.display_name}初始年龄不能低于{policy.minimum_age}岁")
     if policy.occupations and character.occupation not in policy.occupations:
@@ -216,6 +234,8 @@ def apply_san(character):
         return
     before = character.effective_attributes["pow"]
     maximum = max(0, 99 - character.initial_mythos)
+    if effects.get("package") == "mythos":
+        character.derived_values["san_max"] = maximum
     # Subtract the package loss from initial POW, then enforce the mythos ceiling.
     after = min(maximum, max(0, before - effects["san_loss"]))
     character.derived_values["san"] = after

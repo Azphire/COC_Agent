@@ -194,7 +194,7 @@ def test_handbook_formula_and_group_shapes(client, occupation, attribute, choice
 
 def test_catalog_coverage_and_archive_are_distinct():
     r = load_rulesets()["coc7-character-creation"]
-    assert (r.version, len(r.occupations), len(r.skills)) == ("1.4.0", 115, 106)
+    assert (r.version, len(r.occupations), len(r.skills)) == ("1.5.0", 115, 106)
     old = archived_ruleset(r.id, "1.1.0")
     assert (len(old.occupations), len(old.skills), len(old.custom_specialization_templates)) == (
         31,
