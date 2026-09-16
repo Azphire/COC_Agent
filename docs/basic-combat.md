@@ -45,7 +45,9 @@
 | 原 `/checks/.../push-review` | `consequence.kind=damage`，骰前固定 `damage_formula` 和护甲适用性。失败后自动进入统一伤势处理，再恢复原叙事。 |
 | 原 `/checks/.../consequence`、`/sanity/manage` | 已确认后果可携带 `damage`、`armor_applies`；SAN仅允许确认 symptom 时伤害。叙事不能改数值。 |
 
-最小武器为 `id/name/skill/kind/damage/impale/quantity/ammo/capacity/reserve/malfunction/jammed/ready/source`。公式支持整数或既有骰子解析器的单组 `NdM±K`；不会执行表达式。主机面板提供徒手、小棍棒、小刀、.38左轮与.38自动手枪，依据 PDF88、372–373；更宽的数据配置使用 setup 接口。不会从 NPC 描写推断技能或 HP。
+最小武器为 `id/name/skill/kind/damage/impale/quantity/ammo/capacity/reserve/malfunction/jammed/ready/source`，第29批新增可选 `template_id/uses_db/base_range`。`id`是实际实例，模板ID不能替代它进行攻击或装填。公式支持整数或单组`NdM±K`。原冻结武器按原值读取，不从新目录补写；旧近战默认仍加DB，旧射程为空。矛按本地两表1d8+1、不加DB，其他新剑斧加完整DB。
+
+主机面板与车卡共用`/api/character-equipment`：14种武器加徒手，新增剑、斧、矛及普通单发步枪。来源与33项装备的逐项覆盖见[装备覆盖表](equipment-coverage.md)。主机setup可用`weapon_loadout:[{template_id,ammo,reserve,ready}]`让服务端解析模板并生成实例；原明确`weapons`入口保留，二者不能混填。NPC按所选武器填写对应技能，调查员沿用冻结技能；缺技能不能退回斗殴／手枪。基础射程只展示，面板距离档位传原`range_band`，不引入地图测距。
 
 `CharacterRuntimeV1` 增加 `hp_max/armor/injury/weapons`；`SessionStateV1.combat` 保存参战者、轮次、顺序、当前行动、待裁决事项、冻结依据和操作回执。旧存档缺失字段时默认无战斗、无伤势、护甲0、徒手；最大HP从角色派生值补齐，不改变原当前HP。
 

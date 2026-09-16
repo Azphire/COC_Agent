@@ -27,11 +27,11 @@ def character_service(request: Request) -> CharacterService:
 Service = Annotated[CharacterService, Depends(character_service)]
 
 
-@router.get('/character-equipment')
-async def equipment_catalog():
-    from app.rules.equipment import CATALOG
+@router.get("/character-equipment")
+async def equipment_catalog(include_unarmed: bool = False):
+    from app.rules.equipment import CATALOG, weapon_definition
 
-    return CATALOG
+    return ([weapon_definition("unarmed")] if include_unarmed else []) + CATALOG
 
 
 @router.get("/character-rulesets", response_model=list[RuleSet])

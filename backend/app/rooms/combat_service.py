@@ -56,6 +56,7 @@ def capable(p):
 def weapon_for(p, weapon_id):
     weapon = next((w for w in p.weapons if w.id == weapon_id), None)
     require(weapon and weapon.quantity > 0, "武器不存在或数量不足", 422)
+    require(weapon.skill in p.skills, "缺少武器对应技能", 422)
     return weapon
 
 
@@ -69,7 +70,7 @@ class CombatService:
         return bool(
             room.session_state.get("combat", {}).get("active")
             or re.search(
-                r"攻击|挥拳|出拳|一拳|开枪|射击|拔枪|砍向|刺向|打向|掏枪|战斗|急救|包扎|医学治疗",
+                r"攻击|挥拳|出拳|一拳|开(?:一|1)?枪|开火|射击|拔枪|砍向|刺向|打向|掏枪|战斗|急救|包扎|医学治疗",
                 text,
             )
         )
@@ -126,16 +127,44 @@ class CombatService:
         module = await self.agents.module(session, room.id)
         require(module, "请先绑定模组")
         scene = module.state["scene_id"]
+        weapons = body.weapons if body.member_id else body.npc.weapons
+        if body.weapon_loadout is not None:
+            from app.rules.equipment import equipment_weapon
+
+            weapons = []
+            for selection in body.weapon_loadout:
+                try:
+                    weapon = equipment_weapon(
+                        selection.template_id,
+                        str(uuid4()),
+                        ammo=selection.ammo,
+                        reserve=selection.reserve,
+                        ready=selection.ready,
+                    )
+                except ValueError as error:
+                    require(False, str(error), 422)
+                require(weapon is not None, "武器目录条目不存在", 422)
+                weapons.append(weapon)
+            require(len({w.id for w in weapons}) == len(weapons), "武器实例不能重复", 422)
+            if not any(w.id == "unarmed" for w in weapons):
+                weapons.insert(0, unarmed())
         if body.member_id:
             slot = await self.agents.sanity.slot(session, room, member_id=str(body.member_id))
             c = state.characters[UUID(slot.id)]
-            c.armor, c.weapons = body.armor, body.weapons
+            require(
+                all(w.skill in slot.character_snapshot["skill_values"] for w in weapons),
+                "冻结角色缺少武器对应技能",
+                422,
+            )
+            c.armor, c.weapons = body.armor, weapons
             p = self.member_profile(
                 slot, state, scene, team=body.team, stats_public=body.stats_public
             )
             p.source += f"；主机配置:{body.reason}"
         else:
             p = body.npc.model_copy(deep=True)
+            require(all(w.skill in p.skills for w in weapons), "NPC缺少武器对应技能", 422)
+            p.weapons = weapons
             require(p.scene_id == scene, "NPC必须位于当前场景", 422)
             require(
                 p.id not in {m.id for m in await self.rooms.members(session, room)},
@@ -260,11 +289,19 @@ class CombatService:
         def key(pid):
             p = combat.participants[pid]
             ready = [
-                w for w in p.weapons if w.kind == "firearm" and w.ready and w.ammo and not w.jammed
+                w
+                for w in p.weapons
+                if w.kind == "firearm"
+                and w.ready
+                and w.ammo
+                and not w.jammed
+                and w.skill in p.skills
             ]
             if ready:
                 priority.append(pid)
-            skill = max((p.skills[w.skill] for w in ready or p.weapons), default=0)
+            skill = max(
+                (p.skills[w.skill] for w in ready or p.weapons if w.skill in p.skills), default=0
+            )
             return (-p.attributes["dex"] - (50 if ready else 0), -skill, pid)
 
         if remaining:

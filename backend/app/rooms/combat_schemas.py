@@ -13,11 +13,15 @@ Stat = Annotated[StrictInt, Field(ge=0, le=999)]
 
 class Weapon(DomainModel):
     id: str = Field(min_length=1, max_length=80)
+    template_id: str | None = Field(default=None, max_length=64)
     name: str = Field(min_length=1, max_length=100)
     skill: str = Field(min_length=1, max_length=80)
     kind: Literal["melee", "firearm"] = "melee"
     damage: str = "1d3"
     impale: StrictBool = False
+    # Old snapshots retain their original melee DB behavior and unknown range.
+    uses_db: StrictBool = True
+    base_range: str | None = Field(default=None, max_length=80)
     quantity: Number = 1
     ammo: Number = 0
     capacity: Number = 0
@@ -105,7 +109,9 @@ class Combatant(DomainModel):
     def stats(self):
         if self.hp > self.hp_max or len({w.id for w in self.weapons}) != len(self.weapons):
             raise ValueError("HP或武器ID不合法")
-        if any(w.skill not in self.skills for w in self.weapons):
+        # A frozen older investigator may receive a weapon whose specialty did
+        # not exist in that ruleset. Carry it unchanged; reject its use later.
+        if not self.slot_id and any(w.skill not in self.skills for w in self.weapons):
             raise ValueError("武器技能必须来自角色数值")
         return self
 
@@ -125,7 +131,8 @@ def missing_values(profile, operation):
     missing += [key for key in attributes if key not in profile.attributes]
     if operation in {"attack", "combat"}:
         missing += [] if profile.weapons else ["weapons"]
-        missing += [w.skill for w in profile.weapons if w.skill not in profile.skills]
+        if not getattr(profile, "slot_id", None):
+            missing += [w.skill for w in profile.weapons if w.skill not in profile.skills]
     return missing
 
 
@@ -178,18 +185,28 @@ class CombatState(DomainModel):
     reason: str = ""
 
 
+class WeaponLoadout(DomainModel):
+    template_id: str = Field(min_length=1, max_length=64)
+    ammo: Annotated[StrictInt, Field(ge=0, le=1000)] = 0
+    reserve: Annotated[StrictInt, Field(ge=0, le=1000)] = 0
+    ready: StrictBool = False
+
+
 class CombatSetup(DomainModel):
     expected_revision: int
     member_id: UUID | None = None
     npc: Combatant | None = None
     armor: Number = 0
     weapons: list[Weapon] = Field(default_factory=lambda: [unarmed()], min_length=1, max_length=20)
+    weapon_loadout: list[WeaponLoadout] | None = Field(default=None, min_length=1, max_length=19)
     team: str = Field(default="investigators", min_length=1, max_length=80)
     stats_public: StrictBool = False
     reason: str = Field(min_length=1, max_length=500)
 
     @model_validator(mode="after")
     def target(self):
+        if self.weapon_loadout is not None and "weapons" in self.model_fields_set:
+            raise ValueError("目录配装与明确武器配置不能同时提交")
         if bool(self.member_id) == bool(self.npc):
             raise ValueError("指定成员或主机创建NPC之一")
         if self.npc and (self.npc.member_id or self.npc.slot_id):

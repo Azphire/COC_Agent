@@ -27,7 +27,7 @@ def damage_plan(weapon, bonus, result, *, counter=False, difficulty="regular"):
     if weapon.kind == "firearm" and difficulty == "extreme":
         extra = result["level"] == "critical"
     formulas = [weapon.damage]
-    if weapon.kind == "melee":
+    if weapon.kind == "melee" and weapon.uses_db:
         formulas.append(bonus)
     if extra:
         maximum = sum(damage_bounds(f)[1] for f in formulas)

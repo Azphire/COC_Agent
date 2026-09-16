@@ -92,7 +92,12 @@ async def initialize_equipment(agents, session, room):
                 iid = str(uuid5(NAMESPACE_URL, f"{eid}:{index}"))
                 state.module_runtime.item_instances[iid] = eid
                 state.module_runtime.inventory[iid] = slot.member_id
-                weapon = equipment_weapon(entry["catalog_id"], iid)
+                weapon = equipment_weapon(
+                    entry.get("catalog_id"),
+                    iid,
+                    ammo=entry.get("initial_ammo", 0),
+                    reserve=entry.get("initial_reserve", 0),
+                )
                 if weapon:
                     state.module_runtime.equipment_weapons[iid] = weapon.model_dump()
         agents.rooms.append(

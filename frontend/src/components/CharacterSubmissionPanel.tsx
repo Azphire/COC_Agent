@@ -30,6 +30,9 @@ function CharacterPreview({ character: c }: { character: Character }) {
     <h4>自定义专业（本卡 {c.custom_specializations.length} 项）</h4>
     {c.custom_specializations.length === 0 ? <p>无</p> : <ul>{c.custom_specializations.map(s => <li key={s.id}>{skillName(s.id)}：{c.skill_values[s.id]}</li>)}</ul>}
     <details><summary>全部技能与投入</summary><table><thead><tr><th>技能</th><th>职业点</th><th>兴趣点</th><th>最终值</th></tr></thead><tbody>{Object.entries(c.skill_values).map(([k, v]) => <tr key={k}><td>{skillName(k)}</td><td>{c.occupation_skills[k]?.points || 0}</td><td>{c.interest_skills[k]?.points || 0}</td><td>{v}</td></tr>)}</tbody></table></details>
+    <h4>原有装备与初始弹药</h4>
+    <p>开团以模组起始结算为准；遗失规则优先。弹药为每件武器的发数。</p>
+    <ul>{c.equipment.map(e => <li key={e.id}>{e.name} × {e.quantity} · 初始已装弹 {e.initial_ammo ?? 0}／备弹 {e.initial_reserve ?? 0}（每件）{e.notes && ` · ${e.notes}`}</li>)}</ul>
     <details><summary>背景、资产、装备与原骰</summary>
       <pre>{JSON.stringify({ background: c.background, finances: c.finances, asset_details: c.asset_details, equipment: c.equipment, roll_records: c.roll_records }, null, 2)}</pre>
     </details>

@@ -1413,7 +1413,10 @@ def test_automatic_blind_actor_cannot_propose_unperceived_attack_or_untrained_tr
     context = {
         "attack_targets": [],
         "treatment_targets": [{"id": "wounded", "label": "伤者"}],
-        "own": {"skills": {"brawl": 60}, "weapons": [{"id": "bite", "capacity": 0}]},
+        "own": {
+            "skills": {"brawl": 60},
+            "weapons": [{"id": "bite", "capacity": 0, "skill": "brawl"}],
+        },
     }
     schema = automatic_decision_contract(context)
     # Wounded bystanders are not valid attack targets merely because the

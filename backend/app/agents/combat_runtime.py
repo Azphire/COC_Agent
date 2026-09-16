@@ -18,6 +18,7 @@ DECISION = (
     "你是CoC跑团KP，只决定这句玩家原话的实际动作。返回CombatDecision。"
     "attack是真实攻击意图；询问、假设、谈话用talk，调查用investigate。"
     "目标和武器ID只复制候选，不能创造数值或替真人选择。近战选已有近战武器，普通单发射击选已有枪械。"
+    "武器所需skill必须存在于own.skills；缺项不能改用斗殴或手枪，也不能从目录补写冻结技能。"
     "攻击目标只能选attack_targets，不能攻击已经脱离本次战斗的角色；追逐属于后续场景裁定。"
     "没有可攻击目标时可用pass继续侦听或追踪现有声源，不能发明一个可攻击目标。"
     "range_band按场景距离选base/long/extreme/point_blank，不明确距离用base。"
@@ -63,7 +64,12 @@ def automatic_decision_contract(context):
         },
         operation=(Literal[tuple(operations)], ...),
         target_id=(Literal[tuple(sorted(attacks | treatments) + [None])], None),
-        weapon_id=(Literal[tuple([w["id"] for w in own.get("weapons", [])] + [None])], None),
+        weapon_id=(
+            Literal[
+                tuple([w["id"] for w in own.get("weapons", []) if w["skill"] in skills] + [None])
+            ],
+            None,
+        ),
     )
 
 

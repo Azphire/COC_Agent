@@ -44,3 +44,6 @@ class EquipmentEntry(DetailModel):
     name: str = Field(min_length=1, max_length=100)
     quantity: Annotated[StrictInt, Field(ge=1, le=100)] = 1
     notes: str = Field(default="", max_length=1000)
+    # Per physical weapon, not a total shared by `quantity` copies.
+    initial_ammo: Annotated[StrictInt, Field(ge=0, le=1000)] = 0
+    initial_reserve: Annotated[StrictInt, Field(ge=0, le=1000)] = 0

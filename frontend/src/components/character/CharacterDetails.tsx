@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { charactersApi } from '../../api/characters'
 import type { Character, EditableFields, EquipmentDefinition } from '../../api/characters'
+import EquipmentFacts from './EquipmentFacts'
 
 const labels = { appearance: '外貌', beliefs: '思想与信念', people: '重要之人', places: '意义非凡之地', possessions: '宝贵之物', traits: '特质' }
 
@@ -31,17 +32,25 @@ export default function CharacterDetails({ character, value, onChange }: {
       </select></label></div><p className="hint">背景随角色完整保存；房间内沿用角色详细资料的可见权限。</p>
     </section>
     <section><h2>原有装备</h2>
-      <p className="hint">开团时结算实际持有。《常暗之厢》仍按起始遗失与枪械限制处理。自定义装备只记载名称、数量与备注；武器使用已核对模板，枪械初始未装填。</p>
+      <p className="hint">开团时结算实际持有。《常暗之厢》等仍按模组起始遗失与选择规则处理。初始已装弹／备弹均为每件枪械的发数，默认零。普通物品用途不自动增加技能或恢复HP。</p>
       {error && <p role="alert">{error}</p>}
       <div className="action-row"><select aria-label="装备目录" value={selection} onChange={e => setSelection(e.target.value)}><option value="">自定义普通装备</option>
-        {catalog.filter(c => c.eras.includes(value.era)).map(c => <option key={c.id} value={c.id}>{c.name}{c.weapon ? '（武器）' : ''}</option>)}
+        {catalog.filter(c => c.eras.includes(value.era)).map(c => <option key={c.id} value={c.id}>{c.category} · {c.name}</option>)}
       </select><button type="button" onClick={() => { const selected = catalog.find(c => c.id === selection); onChange({ ...value, equipment: [...value.equipment, { id: crypto.randomUUID(), catalog_id: selected?.id ?? null, name: selected?.name ?? '自定义装备', quantity: 1, notes: '' }] }) }}>添加装备</button></div>
-      {value.equipment.map((entry, i) => <div className="field-grid" key={entry.id}>
+      <EquipmentFacts item={catalog.find(c => c.id === selection)} />
+      {value.equipment.map((entry, i) => {
+        const definition = catalog.find(c => c.id === entry.catalog_id)
+        const firearm = definition?.weapon_template?.kind === 'firearm' ? definition.weapon_template : null
+        return <div key={entry.id}><div className="field-grid">
         <label>装备名称<input aria-label={`装备名称${i + 1}`} readOnly={!!entry.catalog_id} maxLength={100} value={entry.name} onChange={e => onChange({ ...value, equipment: value.equipment.map(v => v.id === entry.id ? { ...v, name: e.target.value } : v) })} /></label>
         <label>数量<input type="number" min={1} max={100} value={entry.quantity} onChange={e => onChange({ ...value, equipment: value.equipment.map(v => v.id === entry.id ? { ...v, quantity: Number(e.target.value) } : v) })} /></label>
         <label>备注<input maxLength={1000} value={entry.notes} onChange={e => onChange({ ...value, equipment: value.equipment.map(v => v.id === entry.id ? { ...v, notes: e.target.value } : v) })} /></label>
+        {firearm && <>
+          <label>初始已装弹（每件）<input aria-label={`初始已装弹${i + 1}`} type="number" min={0} max={firearm.capacity} step={1} value={entry.initial_ammo ?? 0} onChange={e => onChange({ ...value, equipment: value.equipment.map(v => v.id === entry.id ? { ...v, initial_ammo: Number(e.target.value) } : v) })} /></label>
+          <label>初始备弹（每件）<input aria-label={`初始备弹${i + 1}`} type="number" min={0} max={1000} step={1} value={entry.initial_reserve ?? 0} onChange={e => onChange({ ...value, equipment: value.equipment.map(v => v.id === entry.id ? { ...v, initial_reserve: Number(e.target.value) } : v) })} /></label>
+        </>}
         <button type="button" onClick={() => onChange({ ...value, equipment: value.equipment.filter(v => v.id !== entry.id) })}>移除此装备</button>
-      </div>)}
+      </div><EquipmentFacts item={definition} /></div>})}
     </section>
   </>
 }
