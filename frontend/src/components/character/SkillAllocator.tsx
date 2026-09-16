@@ -28,12 +28,13 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
     setCustomName(''); setCustomError('')
   }
   function removeCustom(id: string) {
-    const occupationSkills = { ...value.occupation_skills }, interestSkills = { ...value.interest_skills }
-    delete occupationSkills[id]; delete interestSkills[id]
+    const occupationSkills = { ...value.occupation_skills }, interestSkills = { ...value.interest_skills }, experienceSkills = { ...value.experience_skills }
+    delete occupationSkills[id]; delete interestSkills[id]; delete experienceSkills[id]
     onChange({ ...value, custom_specializations: custom.filter(s => s.id !== id),
       selected_specializations: value.selected_specializations.filter(k => k !== id),
       occupation_group_choices: Object.fromEntries(Object.entries(value.occupation_group_choices).map(([g, keys]) => [g, keys.filter(k => k !== id)])),
       approve_specializations: value.approve_specializations?.filter(k => k !== id),
+      experience_skills: experienceSkills, experience: value.experience ? { ...value.experience, choices: Object.fromEntries(Object.entries(value.experience.choices).map(([g, keys]) => [g, keys.filter(k => k !== id)])) } : null,
       occupation_skills: occupationSkills, interest_skills: interestSkills })
   }
   const occupation = ruleset.occupations.find(o => o.key === value.occupation)
@@ -146,6 +147,7 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
         && (!s.specialization_group || allowed.has(s.key) || value.selected_specializations.includes(s.key) || value.occupation_skills[s.key]?.points || value.interest_skills[s.key]?.points)).map(s => {
         const base = character.skill_base_values[s.key] ?? s.base_value
         const total = base + (value.occupation_skills[s.key]?.points ?? 0) + (value.interest_skills[s.key]?.points ?? 0)
+          + (value.experience_skills?.[s.key]?.points ?? 0)
           + (s.key === 'cthulhu_mythos' ? character.initial_mythos ?? 0 : 0)
         return <tr key={s.key}><th scope="row">{s.display_name}<small>{s.category} · 基础 {base}</small></th>
           {(['occupation_skills', 'interest_skills'] as const).map(field => <td key={field}>

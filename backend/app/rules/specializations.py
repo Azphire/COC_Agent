@@ -68,7 +68,9 @@ def review_requirements(character, ruleset, definitions=None):
     occupation = next((o for o in ruleset.occupations if o.key == character.occupation), None)
     if occupation:
         chosen.update(occupation.fixed_skills)
-    for allocations in (character.occupation_skills, character.interest_skills):
+    for allocations in (
+        character.occupation_skills, character.interest_skills, character.experience_skills
+    ):
         chosen.update(k for k, v in allocations.items() if v.points)
     result = {}
     for key in sorted(chosen & definitions.keys()):

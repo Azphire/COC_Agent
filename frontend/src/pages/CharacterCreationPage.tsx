@@ -8,6 +8,7 @@ import ValidationSummary from '../components/character/ValidationSummary'
 import JsonTransfer from '../components/character/JsonTransfer'
 import CharacterDetails from '../components/character/CharacterDetails'
 import { characterSkills } from '../components/character/specializations'
+import ExperiencePackages from '../components/character/ExperiencePackages'
 
 const empty: EditableFields = {
   name: '', player_name: null, age: 25, occupation: null, selected_occupation_skills: [],
@@ -15,6 +16,7 @@ const empty: EditableFields = {
   occupation_attribute: null, occupation_group_choices: {}, selected_specializations: [], era: '1920s',
   custom_specializations: [],
   occupation_skill_replacement: null, initial_mythos_proposal: null,
+  experience: null, experience_skills: {},
   background: { appearance: '', beliefs: '', people: '', places: '', possessions: '', traits: '', key_connection: null },
   asset_details: [], equipment: [],
 }
@@ -83,7 +85,9 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
   const update = (value: EditableFields) => {
     const changed = (['occupation', 'era', 'occupation_group_choices', 'occupation_skill_replacement', 'initial_mythos_proposal', 'attributes'] as const)
       .some(k => JSON.stringify(value[k]) !== JSON.stringify(form[k]))
-    setForm(changed ? { ...value, approve_occupation_exceptions: undefined } : value)
+    const experienceChanged = (['experience', 'experience_skills', 'attributes', 'age_deductions', 'occupation', 'era', 'occupation_group_choices', 'occupation_skills', 'interest_skills', 'selected_specializations', 'custom_specializations', 'initial_mythos_proposal', 'occupation_skill_replacement'] as const)
+      .some(k => JSON.stringify(value[k]) !== JSON.stringify(form[k]))
+    setForm({ ...value, ...(changed ? { approve_occupation_exceptions: undefined } : {}), ...(experienceChanged ? { approve_experience: undefined } : {}) })
     setDirty(true); setNotice(''); setApiIssues([])
   }
   function accept(character: Character, message: string) {
@@ -121,6 +125,8 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
         occupation_skill_replacement: form.occupation_skill_replacement,
         initial_mythos_proposal: form.initial_mythos_proposal,
         approve_occupation_exceptions: form.approve_occupation_exceptions,
+        experience: form.experience, experience_skills: form.experience_skills,
+        approve_experience: form.approve_experience,
         asset_details: form.asset_details, equipment: form.equipment,
       }
       if (saved.creation_mode === 'point_buy') body.attributes = form.attributes
@@ -159,6 +165,7 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
         {mode === 'random' ? '随机生成整组属性并保存草稿' : '创建购点草稿'}
       </button>}
       {!saved && ruleset?.age_rules && <p className="hint">创建时生成幸运与教育检定并锁定年龄。90岁及以上缺少本地完整调整条款，尚不支持；购点采用460点可选规则。</p>}
+      {!saved && !!ruleset?.experience_packages?.length && <p className="hint">如需经历包，请先确定最终年龄：警务至少25岁、罪犯20岁、医务30岁；战场按参战时年龄与模组年份差计算。创建后在下方选包并分配经历点，最多一包，须KP许可。</p>}
       {saved && ruleset && <>
         <CharacteristicEditor character={saved} ruleset={ruleset} values={form.attributes}
           onChange={attributes => update({ ...form, attributes })} />
@@ -172,6 +179,7 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
           </label>)}</div>
         </section>}
         <SkillAllocator character={saved} ruleset={ruleset} value={form} onChange={update} />
+        <ExperiencePackages character={saved} ruleset={ruleset} value={form} onChange={update} />
         <CharacterDetails character={saved} value={form} onChange={update} />
       </>}
     </fieldset>

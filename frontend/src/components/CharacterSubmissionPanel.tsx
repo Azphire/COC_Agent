@@ -5,6 +5,7 @@ import type { CharacterSubmission, Result, Room } from '../api/rooms'
 import { api, requestId } from '../api/session'
 import { specializationName } from './character/specializations'
 import OccupationExceptionSummary from './character/OccupationExceptionSummary'
+import ExperienceSummary from './character/ExperienceSummary'
 
 const statuses = { pending: '待处理', accepted: '已接受', rejected: '已拒绝' }
 const errorText = (error: unknown) => error instanceof Error ? error.message : '请求失败，请重试'
@@ -27,12 +28,13 @@ function CharacterPreview({ character: c }: { character: Character }) {
     {c.validation.issues.filter(i => i.code === 'keeper_approval').map(i => <p key={i.field}>{i.message}</p>)}
     <p>剩余职业点：{c.remaining_points.occupation}；兴趣点：{c.remaining_points.interest}</p>
     <OccupationExceptionSummary character={c} rules={rules} />
+    <ExperienceSummary character={c} />
     {c.ruleset_id === 'coc7-character-creation' && c.derived_values.san === 0 && <p role="status">初始 SAN 为 0：发布／接受后为永久疯狂，不能自主调查或发动战斗行动。</p>}
     <div className="field-grid">{Object.entries(c.effective_attributes).map(([k, v]) => <p key={k}>{rules?.attributes.find(a => a.key === k)?.display_name || k}：{v}</p>)}</div>
     <p>{Object.entries(c.derived_values).map(([k, v]) => `${rules?.derived_values.find(d => d.key === k)?.display_name || k}：${v}`).join(' · ')}</p>
     <h4>自定义专业（本卡 {c.custom_specializations.length} 项）</h4>
     {c.custom_specializations.length === 0 ? <p>无</p> : <ul>{c.custom_specializations.map(s => <li key={s.id}>{skillName(s.id)}：{c.skill_values[s.id]}</li>)}</ul>}
-    <details><summary>全部技能与投入</summary><table><thead><tr><th>技能</th><th>职业点</th><th>兴趣点</th><th>最终值</th></tr></thead><tbody>{Object.entries(c.skill_values).map(([k, v]) => <tr key={k}><td>{skillName(k)}</td><td>{c.occupation_skills[k]?.points || 0}</td><td>{c.interest_skills[k]?.points || 0}</td><td>{v}</td></tr>)}</tbody></table></details>
+    <details><summary>全部技能与投入</summary><table><thead><tr><th>技能</th><th>职业点</th><th>兴趣点</th><th>经历点</th><th>最终值</th></tr></thead><tbody>{Object.entries(c.skill_values).map(([k, v]) => <tr key={k}><td>{skillName(k)}</td><td>{c.occupation_skills[k]?.points || 0}</td><td>{c.interest_skills[k]?.points || 0}</td><td>{c.experience_skills?.[k]?.points || 0}</td><td>{v}</td></tr>)}</tbody></table></details>
     <h4>原有装备与初始弹药</h4>
     <p>开团以模组起始结算为准；遗失规则优先。弹药为每件武器的发数。</p>
     <ul>{c.equipment.map(e => <li key={e.id}>{e.name} × {e.quantity} · 初始已装弹 {e.initial_ammo ?? 0}／备弹 {e.initial_reserve ?? 0}（每件）{e.notes && ` · ${e.notes}`}</li>)}</ul>
@@ -50,6 +52,7 @@ export default function CharacterSubmissionPanel({ room, token, acceptRoom }: { 
   const [selected, setSelected] = useState<CharacterSubmission | null>(null)
   const [reason, setReason] = useState('')
   const [exceptionApprovals, setExceptionApprovals] = useState<string[]>([])
+  const [experienceApproved, setExperienceApproved] = useState(false)
   const pending = useRef<{ fingerprint: string; id: string } | null>(null)
   const input = useRef<HTMLInputElement>(null)
   const prefix = `/rooms/${room.id}/character-submissions`
@@ -61,6 +64,7 @@ export default function CharacterSubmissionPanel({ room, token, acceptRoom }: { 
   const stale = shown && room.character_submissions.find(s => s.member_id === shown.member_id)?.id !== shown.id
   const processed = shown && room.character_submissions.find(s => s.id === shown.id)?.status !== 'pending'
   const pendingExceptions = shown?.character?.validation.issues.filter(i => i.field.startsWith('occupation_exception_approvals.')) ?? []
+  const pendingExperience = shown?.character?.validation.issues.some(i => i.field.startsWith('experience_approvals.')) ?? false
 
   async function mutate(path: string, body: Record<string, unknown>) {
     const fingerprint = JSON.stringify({ path, body })
@@ -103,7 +107,7 @@ export default function CharacterSubmissionPanel({ room, token, acceptRoom }: { 
     <ul>{room.character_submissions.map(s => <li key={s.id}>
       {room.members.find(m => m.id === s.member_id)?.display_name} · 版本 {s.version} · {statuses[s.status]}
       {room.is_host && <button disabled={busy} onClick={async () => {
-        setBusy(true); setError(''); setReason(''); setExceptionApprovals([])
+        setBusy(true); setError(''); setReason(''); setExceptionApprovals([]); setExperienceApproved(false)
         try { setSelected(await api<CharacterSubmission>(`${prefix}/${s.id}`, token)) }
         catch (error) { setError(errorText(error)) } finally { setBusy(false) }
       }}>预览 · {room.members.find(m => m.id === s.member_id)?.display_name}</button>}
@@ -116,15 +120,17 @@ export default function CharacterSubmissionPanel({ room, token, acceptRoom }: { 
       {shown.reason && <p>处理说明：{shown.reason}</p>}
       <CharacterPreview character={shown.character} />
       {room.is_host && editable && shown.status === 'pending' && <>
+        {pendingExperience && <label><input id="review-approve-experience" type="checkbox" checked={experienceApproved} onChange={e => setExperienceApproved(e.target.checked)} />明确核准以上经历资格、{shown.character.experience_effects.pool} 点技能收益、SAN {shown.character.experience_effects.san_before} → {shown.character.derived_values.san}、新增背景及限定免疫。</label>}
         {shown.character.validation.issues.some(i => i.field.startsWith('specialization_approvals.')) && <p>接受并分配同时核准上列待引入专业。请先核对年代、人物背景及游戏范围；不同意可拒绝并说明。</p>}
         {pendingExceptions.map(i => {
           const key = i.field.replace('occupation_exception_approvals.', '')
           return <label key={key}><input type="checkbox" id={`review-approve-${key}`} checked={exceptionApprovals.includes(key)} onChange={e => setExceptionApprovals(e.target.checked ? [...exceptionApprovals, key] : exceptionApprovals.filter(k => k !== key))} />明确核准以上{key === 'initial_mythos' ? `初始神话 ${shown.character!.initial_mythos}、SAN ${shown.character!.derived_values.san} 及上限 ${shown.character!.derived_values.san_max}` : '职业技能替换和点数变化'}</label>
         })}
         <label>处理说明（可选）<textarea maxLength={2000} value={reason} onChange={e => setReason(e.target.value)} /></label>
-        <div className="action-row">{(['accept', 'reject'] as const).map(decision => <button key={decision} disabled={busy || !!stale || !!processed || (decision === 'accept' && (!!existing || !member?.active || pendingExceptions.some(i => !exceptionApprovals.includes(i.field.replace('occupation_exception_approvals.', '')))))} onClick={async () => {
+        <div className="action-row">{(['accept', 'reject'] as const).map(decision => <button key={decision} disabled={busy || !!stale || !!processed || (decision === 'accept' && (!!existing || !member?.active || pendingExperience && !experienceApproved || pendingExceptions.some(i => !exceptionApprovals.includes(i.field.replace('occupation_exception_approvals.', '')))))} onClick={async () => {
           const next = await mutate(`${prefix}/${shown.id}/review`, { expected_version: shown.version, decision, reason,
             approve_specializations: decision === 'accept' ? shown.character!.validation.issues.filter(i => i.field.startsWith('specialization_approvals.')).map(i => i.field.replace('specialization_approvals.', '')) : [],
+            approve_experience: decision === 'accept' && experienceApproved && shown.character!.experience ? [shown.character!.experience.package] : [],
             approve_occupation_exceptions: decision === 'accept' ? exceptionApprovals : [] })
           if (next) { setSelected(next.character_submissions.find(s => s.id === shown.id) || null); setNotice(decision === 'accept' ? '已接受并分配，请玩家准备。' : '已拒绝，玩家可以提交新版本。') }
         }}>{decision === 'accept' ? '接受并分配' : '拒绝提交'}</button>)}</div>

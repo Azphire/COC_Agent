@@ -54,6 +54,9 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
         issues.append(ValidationIssue(field=field, code=code, message=message))
 
     definitions = character_skills(character, ruleset, issue)
+    from app.rules.experiences import apply_san, evaluate
+
+    experience_pool, experience_allowed = evaluate(character, ruleset, definitions, issue)
     if not character.name.strip():
         issue("name", "required", "请填写角色姓名")
     values = {key: item.value for key, item in character.attributes.items()}
@@ -146,6 +149,8 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
         occupation=occupation_pool
         - sum(item.points for item in character.occupation_skills.values()),
         interest=interest_pool - sum(item.points for item in character.interest_skills.values()),
+        experience=experience_pool
+        - sum(item.points for item in character.experience_skills.values()),
     )
     for field, remaining in character.remaining_points.model_dump().items():
         if remaining is not None:
@@ -194,11 +199,11 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
         k not in definitions or not definitions[k].specialization_group for k in selected
     ):
         issue("selected_specializations", "selection", "专业必须唯一且来自目录或本卡自定义专业")
-    active_specializations = set(selected) | allowed
+    active_specializations = set(selected) | allowed | experience_allowed
     from app.rules.specializations import validate_specialization_approvals
 
     validate_specialization_approvals(character, ruleset, definitions, issue)
-    for field in ("occupation_skills", "interest_skills"):
+    for field in ("occupation_skills", "interest_skills", "experience_skills"):
         for key, allocation in getattr(character, field).items():
             if key not in definitions:
                 issue(f"{field}.{key}", "unknown", "规则集中不存在此技能")
@@ -216,6 +221,11 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
                 issue(f"{field}.{key}", "negative", "技能点不能为负数")
             if field == "occupation_skills" and allocation.points and key not in allowed:
                 issue(f"{field}.{key}", "occupation", "该技能未被选为职业技能")
+            if field == "experience_skills" and allocation.points and key not in experience_allowed:
+                issue(
+                    f"{field}.{key}", "experience",
+                    "不在当前经历包白名单内；请退回经历点或修正选择",
+                )
     character.skill_values = {}
     character.skill_base_values = {}
     for key, definition in definitions.items():
@@ -226,9 +236,11 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
         for allocations in (character.occupation_skills, character.interest_skills):
             if key in allocations:
                 total += allocations[key].points
+        if key in experience_allowed and key in character.experience_skills:
+            total += character.experience_skills[key].points
         character.skill_values[key] = total
         if total > definition.maximum:
-            for field in ("occupation_skills", "interest_skills"):
+            for field in ("occupation_skills", "interest_skills", "experience_skills"):
                 issue(f"{field}.{key}", "maximum", f"技能合计不能超过 {definition.maximum}")
     if occupation and occupation.credit_rating_minimum is not None:
         credit = character.skill_values.get("credit_rating", 0)
@@ -241,6 +253,7 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
             )
 
     apply_initial_mythos(character)
+    apply_san(character)
     character.skill_half_values = {key: value // 2 for key, value in character.skill_values.items()}
     from app.rules.character_options import credit_finances
 

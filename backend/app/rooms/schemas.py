@@ -103,6 +103,7 @@ class ReviewCharacterSubmission(DomainModel):
     reason: ShortText = ""
     approve_specializations: list[str] = Field(default_factory=list, max_length=200)
     approve_occupation_exceptions: list[str] = Field(default_factory=list, max_length=2)
+    approve_experience: list[str] = Field(default_factory=list, max_length=1)
     client_request_id: UUID
 
 

@@ -270,7 +270,7 @@ def test_patch_cannot_supply_computed_values_or_approval_flags(client, field, va
 def test_version_semantics_and_legacy_are_immutable(client):
     rules = load_rulesets()["coc7-character-creation"]
     old = archived_ruleset(rules.id, "1.2.0")
-    assert (rules.version, len(rules.skills), len(rules.occupations)) == ("1.3.0", 106, 115)
+    assert (rules.version, len(rules.skills), len(rules.occupations)) == ("1.4.0", 106, 115)
     assert all(not o.skill_replacement and not o.initial_mythos for o in old.occupations)
     card = special_card(client, "occultist", approve=True)
     c = CharacterDraft.model_validate(card)

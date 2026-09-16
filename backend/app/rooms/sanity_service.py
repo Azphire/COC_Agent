@@ -91,6 +91,8 @@ def sanity_public(document):
             else "失败"
         )
     message += f"；{label}"
+    if progress.immunity:
+        message += f"；免疫：{progress.immunity['reason']}"
     if progress.insanity_kind != "none":
         kind = {"temporary": "临时性疯狂", "indefinite": "不定性疯狂", "permanent": "永久性疯狂"}
         message += f"；{kind[progress.insanity_kind]}，{progress.symptom or '等待主机确认症状'}"
@@ -110,6 +112,7 @@ def sanity_public(document):
             "after": progress.after,
             "loss": progress.loss,
             "immune": progress.immune,
+            "immunity": progress.immunity,
             "insanity_kind": progress.insanity_kind,
             "phase": progress.phase,
             "symptom": progress.symptom,
@@ -339,7 +342,13 @@ class SanityService:
             {**sanity_public(record.document), "cycle_id": cycle.id},
             effect.visibility,
         )
+        from app.rules.experiences import matching_immunity
+
+        immunity = matching_immunity(slot.character_snapshot, effect)
         if character.sanity.phase in {"bout", "awaiting_symptom"}:
+            immunity = {"kind": "insanity_bout", "reason": "已有疯狂发作保护"}
+        if immunity:
+            progress.immunity = immunity
             progress.immune, progress.loss, progress.after, progress.stage = (
                 True,
                 0,

@@ -36,7 +36,9 @@ class RollRecord(DomainModel):
     total: Annotated[StrictInt, Field(ge=-10_000, le=110_000)]
     rolled_at: datetime = Field(default_factory=utc_now)
     source: Literal["system", "imported"] = "system"
-    purpose: Literal["attribute", "luck", "education_check", "education_gain"] = "attribute"
+    purpose: Literal[
+        "attribute", "luck", "education_check", "education_gain", "experience_san"
+    ] = "attribute"
     multiplier: Annotated[StrictInt, Field(ge=1, le=100)] = 1
 
 
@@ -55,6 +57,19 @@ class PointBalances(DomainModel):
     attributes: int | None = None
     occupation: int = 0
     interest: int = 0
+    experience: int = 0
+
+
+class ExperienceSelection(DomainModel):
+    package: Literal["war", "police", "criminal", "medical"]
+    variant: str = Field(default="", max_length=32)
+    history: str = Field(default="", max_length=2000)
+    background_kind: Literal["scar", "phobia", "mania"] = "scar"
+    background_detail: str = Field(default="", max_length=1000)
+    choices: dict[str, list[str]] = Field(default_factory=dict, max_length=8)
+    war_year: Annotated[StrictInt, Field(ge=1, le=9999)] | None = None
+    scenario_year: Annotated[StrictInt, Field(ge=1, le=9999)] | None = None
+    age_at_war: Annotated[StrictInt, Field(ge=1, le=150)] | None = None
 
 
 class OccupationSkillReplacement(DomainModel):
@@ -89,6 +104,11 @@ class CharacterData(DomainModel):
     occupation_exception_approvals: dict[str, str] = Field(default_factory=dict, max_length=2)
     effective_occupation_skills: list[str] = Field(default_factory=list)
     initial_mythos: Annotated[StrictInt, Field(ge=0, le=99)] = 0
+    experience: ExperienceSelection | None = None
+    experience_skills: dict[str, SkillAllocation] = Field(default_factory=dict)
+    experience_rolls: dict[str, RollRecord] = Field(default_factory=dict, max_length=4)
+    experience_approvals: dict[str, str] = Field(default_factory=dict, max_length=1)
+    experience_effects: dict = Field(default_factory=dict)
     era: Literal["1920s", "modern"] = "1920s"
     background: Background = Field(default_factory=Background)
     asset_details: list[AssetDetail] = Field(default_factory=list, max_length=100)

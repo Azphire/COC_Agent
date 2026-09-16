@@ -136,10 +136,16 @@ class SubmissionService:
                 require(occupied is None, "提交者已有角色，请先在房间调查员中取消原角色分配")
                 require(len(slots) < 100, "房间最多发布 100 个角色")
                 draft = CharacterDraft.model_validate(row.character)
+                from app.rules.experiences import approve_experience
                 from app.rules.occupation_exceptions import approve_occupation_exceptions
                 from app.rules.specializations import approve_specializations
 
                 try:
+                    approve_experience(
+                        draft,
+                        self.characters.ruleset(draft.ruleset_id, draft.ruleset_version),
+                        body.approve_experience,
+                    )
                     approve_specializations(
                         draft,
                         self.characters.ruleset(draft.ruleset_id, draft.ruleset_version),

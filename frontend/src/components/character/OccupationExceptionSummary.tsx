@@ -15,7 +15,7 @@ export default function OccupationExceptionSummary({ character: c, rules }: { ch
     </>}
     {mythos && <>
       <p>初始克苏鲁神话 {c.initial_mythos}（申请 {mythos.value}）；困难 {c.skill_half_values.cthulhu_mythos} · 极难 {c.skill_fifth_values.cthulhu_mythos}；{status('initial_mythos')}。</p>
-      <p>初始 SAN：POW {c.effective_attributes.pow} → {c.derived_values.san}；SAN 上限 {c.derived_values.san_max ?? 99}。职业条款等额扣减 0，上限约束减少 {Math.max(0, c.effective_attributes.pow - Number(c.derived_values.san))}。职业／兴趣点花费均为 0，占个人特长名额。</p>
+      <p>初始 SAN：POW {c.effective_attributes.pow} → {c.derived_values.san}；SAN 上限 {c.derived_values.san_max ?? 99}。职业条款等额扣减 0；经历包的独立扣减见经历说明。职业／兴趣点花费均为 0，占个人特长名额。</p>
       <p>理由：{mythos.reason}。来源：{occupation?.initial_mythos?.source}。</p>
       <p>{occupation?.initial_mythos?.note}</p>
     </>}

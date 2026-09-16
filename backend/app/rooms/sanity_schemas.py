@@ -10,6 +10,13 @@ Number = Annotated[StrictInt, Field(ge=0, le=1_000_000)]
 
 
 class SanityEffect(DomainModel):
+    # Exclusive cause, assigned during preparation/approval; never by the action caller.
+    # Mixed horror, animation/monsters etc. must remain unclassified or separate effects.
+    experience_category: Literal[
+        "witness_corpse", "witness_severe_injury", "witness_murder", "commit_murder",
+        "witness_human_mutilation"
+    ] | None = None
+    experience_basis: str = Field(default="", max_length=500)
     perception: Literal["visual", "other"] = "other"
     visibility_any_flags: list[str] = Field(default_factory=list, max_length=8)
     id: str = Field(min_length=1, max_length=80)
@@ -37,6 +44,15 @@ class SanityEffect(DomainModel):
     def formula(cls, value):
         loss_bounds(value)
         return value
+
+    @model_validator(mode="after")
+    def exclusive_experience_cause(self):
+        if self.experience_category:
+            if not self.experience_basis.strip():
+                raise ValueError("经历免疫类别须有原来源支持的独立恐怖原因说明")
+            if self.experience_category.startswith("witness_") and self.perception != "visual":
+                raise ValueError("目击类经历免疫须明确视觉遭遇条件")
+        return self
 
 
 class SanityState(DomainModel):
@@ -120,6 +136,7 @@ class SanityProgress(DomainModel):
     formula: str | None = None
     rolls: dict = Field(default_factory=dict)
     immune: bool = False
+    immunity: dict | None = None
 
     @model_validator(mode="after")
     def validate_loss(self):

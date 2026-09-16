@@ -179,6 +179,8 @@ async def build_context(
                     "slot_id": slot.id,
                     "runtime": runtime_context(room, slot.id),
                     "custom_skill_names": snapshot_skill_names(slot.character_snapshot),
+                    "experience": card.get("experience"),
+                    "experience_effects": card.get("experience_effects", {}),
                     **{
                         k: card[k]
                         for k in ("name", "occupation", "effective_attributes", "skill_values")

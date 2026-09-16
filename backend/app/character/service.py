@@ -75,7 +75,7 @@ class CharacterService:
         from app.rules.specializations import character_skills
 
         skills = set(character_skills(character, ruleset))
-        for field in ("occupation_skills", "interest_skills"):
+        for field in ("occupation_skills", "interest_skills", "experience_skills"):
             for key in getattr(character, field).keys() - skills:
                 unknown(f"{field}.{key}")
         for key in set(character.selected_occupation_skills) - skills:
@@ -175,6 +175,7 @@ class CharacterService:
                 "derived_values",
                 "approve_specializations",
                 "approve_occupation_exceptions",
+                "approve_experience",
             },
         )
         if ruleset.age_rules and "age" in changes and changes["age"] != character.age:
@@ -183,6 +184,22 @@ class CharacterService:
             raise CharacterError(422, "随机模式的属性不能修改或重掷")
         candidate = CharacterDraft.model_validate({**character.model_dump(), **changes})
         self.check_known(candidate, ruleset)
+        from app.rules.experiences import approve_experience, prepare_roll
+
+        if not candidate.original_id or (
+            candidate.experience and (
+                not character.experience
+                or character.experience.package != candidate.experience.package
+            )
+        ):
+            prepare_roll(candidate, ruleset, self.dice)
+        # Normalize existing occupation choices before binding a new local consent.
+        recalculate(candidate, ruleset)
+        if request.approve_experience is not None:
+            try:
+                approve_experience(candidate, ruleset, request.approve_experience)
+            except ValueError as error:
+                raise CharacterError(422, str(error)) from error
         if request.approve_specializations is not None:
             from app.rules.specializations import approve_specializations
 
@@ -242,6 +259,14 @@ class CharacterService:
         }
         if details:
             events.append(("character_details_updated", {"fields": sorted(details)}))
+        if changes.keys() & {"experience", "experience_skills"}:
+            events.append(("experience_updated", {
+                "selection": candidate.experience.model_dump() if candidate.experience else None,
+                "effects": candidate.experience_effects,
+                "roll_ids": [str(r.id) for r in candidate.experience_rolls.values()],
+            }))
+        if request.approve_experience:
+            events.append(("experience_approved", {"effects": candidate.experience_effects}))
         if request.approve_specializations:
             events.append(("specializations_approved", {"skills": request.approve_specializations}))
         if request.approve_occupation_exceptions:
@@ -324,6 +349,11 @@ class CharacterService:
                 "status": "draft",
                 "specialization_approvals": {},
                 "occupation_exception_approvals": {},
+                "experience_approvals": {},
+                "experience_rolls": {
+                    key: {**record.model_dump(), "source": "imported"}
+                    for key, record in original.experience_rolls.items()
+                },
                 "version": 1,
                 "created_at": utc_now(),
                 "updated_at": utc_now(),

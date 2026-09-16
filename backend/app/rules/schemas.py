@@ -123,6 +123,27 @@ class OccupationPointFormula(DomainModel):
     display: str
 
 
+class ExperienceVariant(DomainModel):
+    display_name: str
+    fixed_skills: list[Key] = Field(default_factory=list)
+    skill_groups: list[OccupationSkillGroup] = Field(default_factory=list)
+    # An unrestricted specialty direction, e.g. soldier survival or police languages.
+    specialty_groups: list[Key] = Field(default_factory=list)
+
+
+class ExperienceDefinition(DomainModel):
+    key: Literal["war", "police", "criminal", "medical"]
+    display_name: str
+    source: str
+    qualification: str
+    minimum_age: int | None = None
+    occupations: list[Key] = Field(default_factory=list)
+    points: Annotated[StrictInt, Field(ge=0)]
+    san_loss: Literal["1d10", "1d10+5"]
+    immunity: list[str]
+    variants: dict[Key, ExperienceVariant]
+
+
 class OccupationReplacementPolicy(DomainModel):
     target_skill: Literal["hypnosis"] = "hypnosis"
     count: Literal[1] = 1
@@ -245,6 +266,7 @@ class RuleSet(DomainModel):
     custom_specialization_templates: dict[Key, Key] = Field(default_factory=dict)
     specialization_policies: dict[Key, SpecializationPolicy] = Field(default_factory=dict)
     occupations: list[OccupationDefinition] = Field(default_factory=list, max_length=200)
+    experience_packages: list[ExperienceDefinition] = Field(default_factory=list, max_length=4)
     age_rules: AgeConfiguration | None = None
 
     @model_validator(mode="after")
@@ -281,6 +303,23 @@ class RuleSet(DomainModel):
                 if any(isinstance(row.value, str) for row in rule.lookup_table):
                     raise ValueError("技能点不能使用文本查表结果")
         skills = {item.key for item in self.skills}
+        groups = {s.specialization_group for s in self.skills if s.specialization_group}
+        if len({p.key for p in self.experience_packages}) != len(self.experience_packages):
+            raise ValueError("经历包ID重复")
+        for package in self.experience_packages:
+            if not set(package.occupations) <= {o.key for o in self.occupations}:
+                raise ValueError("经历包职业不存在")
+            for variant in package.variants.values():
+                if not set(variant.fixed_skills) <= skills:
+                    raise ValueError("经历包技能不存在")
+                if not set(variant.specialty_groups) <= groups:
+                    raise ValueError("经历包专业不存在")
+                for group in variant.skill_groups:
+                    if (
+                        not set(group.skills) <= skills
+                        or not set(group.specialization_groups) <= groups
+                    ):
+                        raise ValueError("经历包选择组不存在")
         for occupation in self.occupations:
             if not set(occupation.fixed_skills + occupation.selectable_skills) <= skills:
                 raise ValueError("职业引用了不存在的技能")

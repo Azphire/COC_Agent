@@ -88,7 +88,9 @@ def test_point_buy_balances_derived_and_separate_skills(client):
         },
         derived_values={"focus": 900},
     )
-    assert character["remaining_points"] == {"attributes": 0, "occupation": 14, "interest": 7}
+    assert character["remaining_points"] == {
+        "attributes": 0, "occupation": 14, "interest": 7, "experience": 0
+    }
     assert character["derived_values"] == {"endurance": 7, "focus": 14, "capacity": 2}
     character = patch(
         client,
@@ -100,7 +102,9 @@ def test_point_buy_balances_derived_and_separate_skills(client):
         derived_values={"focus": -999},
     )
     assert character["skill_values"]["research"] == 26
-    assert character["remaining_points"] == {"attributes": 0, "occupation": 0, "interest": 0}
+    assert character["remaining_points"] == {
+        "attributes": 0, "occupation": 0, "interest": 0, "experience": 0
+    }
     assert character["validation"]["valid"]
     assert character["derived_values"]["focus"] == 14
 

@@ -13,6 +13,21 @@ export type Background = { appearance: string; beliefs: string; people: string; 
 export type OccupationSkillReplacement = { original_skill: string; replacement_skill: string; reason: string }
 export type InitialMythos = { source: 'occultist'; value: number; reason: string }
 export type OccupationExceptionPolicy = { source: string; note: string }
+export type Experience = {
+  package: 'war' | 'police' | 'criminal' | 'medical'; variant: string; history: string
+  background_kind: 'scar' | 'phobia' | 'mania'; background_detail: string
+  choices: Record<string, string[]>; war_year: number | null; scenario_year: number | null; age_at_war: number | null
+}
+export type ExperienceDefinition = {
+  key: Experience['package']; display_name: string; source: string; qualification: string
+  minimum_age: number | null; occupations: string[]; points: number; san_loss: string; immunity: string[]
+  variants: Record<string, { display_name: string; fixed_skills: string[]; skill_groups: SkillGroup[]; specialty_groups: string[] }>
+}
+export type ExperienceEffects = {
+  package?: string; name?: string; source?: string; pool?: number; allowed_skills?: string[]
+  san_loss?: number; san_before?: number; san_after?: number; san_max?: number; approved?: boolean
+  immunity_reasons?: string[]; background_kind?: string; background_detail?: string
+}
 export type RuleSet = {
   id: string; version: string; display_name: string; edition: string; enabled: boolean
   verification_status: string; notice: string
@@ -20,6 +35,7 @@ export type RuleSet = {
   derived_values: { key: string; display_name: string; visible: boolean }[]
   points: { attribute_pool: number; allow_unspent_points: boolean; attribute_cost_origin: 'minimum' | 'zero'; allow_unspent_attribute_points: boolean } | null
   skills: Skill[]
+  experience_packages: ExperienceDefinition[]
   custom_specialization_templates: Record<string, string>
   specialization_policies: Record<string, { requires_keeper_approval: boolean; custom_only: boolean; note: string }>
   occupations: { key: string; display_name: string; fixed_skills: string[]; selectable_skills: string[]; required_selection_count: number; credit_rating_minimum: number | null; credit_rating_maximum: number | null; eras: string[]; source: string; skill_groups: SkillGroup[]; skill_replacement: (OccupationExceptionPolicy & { target_skill: string }) | null; initial_mythos: (OccupationExceptionPolicy & { selection_group: string; recommended_maximum: number }) | null; point_formula: { fixed: Record<string, number>; choice_attributes: string[]; choice_multiplier: number; display: string } | null }[]
@@ -38,6 +54,9 @@ export type Character = {
   occupation_exception_approvals: Record<string, string>
   effective_occupation_skills: string[]
   initial_mythos: number
+  experience: Experience | null; experience_skills: Record<string, SkillAllocation>
+  experience_approvals: Record<string, string>; experience_effects: ExperienceEffects
+  experience_rolls: Record<string, Character['roll_records'][number]>
   era: '1920s' | 'modern'; background: Background; asset_details: { description: string; value: number }[]; equipment: Equipment[]
   finances: { currency: string; level: string; cash: number; assets: number; spending: number; assets_lower_bound: boolean }
   derived_values: Record<string, number | string>; occupation_skills: Record<string, SkillAllocation>
@@ -46,11 +65,11 @@ export type Character = {
   skill_half_values: Record<string, number>; skill_fifth_values: Record<string, number>
   roll_records: { id: string; attribute: string; formula: string; dice: number[]; modifier: number; total: number; rolled_at: string; source: string; purpose: string; multiplier: number }[]
   validation: { valid: boolean; issues: ValidationIssue[] }
-  remaining_points: { attributes: number | null; occupation: number; interest: number }
+  remaining_points: { attributes: number | null; occupation: number; interest: number; experience: number }
   created_at: string; updated_at: string; version: number
 }
 export type BasicFields = Pick<Character, 'name' | 'player_name' | 'age'>
-export type EditableFields = BasicFields & Pick<Character, 'occupation' | 'selected_occupation_skills' | 'attributes' | 'occupation_skills' | 'interest_skills' | 'age_deductions' | 'occupation_attribute' | 'occupation_group_choices' | 'selected_specializations' | 'custom_specializations' | 'era' | 'background' | 'asset_details' | 'equipment' | 'occupation_skill_replacement' | 'initial_mythos_proposal'> & { approve_specializations?: string[]; approve_occupation_exceptions?: string[] }
+export type EditableFields = BasicFields & Pick<Character, 'occupation' | 'selected_occupation_skills' | 'attributes' | 'occupation_skills' | 'interest_skills' | 'age_deductions' | 'occupation_attribute' | 'occupation_group_choices' | 'selected_specializations' | 'custom_specializations' | 'era' | 'background' | 'asset_details' | 'equipment' | 'occupation_skill_replacement' | 'initial_mythos_proposal' | 'experience' | 'experience_skills'> & { approve_specializations?: string[]; approve_occupation_exceptions?: string[]; approve_experience?: string[] }
 export type CharacterExport = {
   schema_version: number; exported_at: string; character: Character
   ruleset: { id: string; version: string; verification_status: string }

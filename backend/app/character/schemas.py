@@ -6,6 +6,7 @@ from app.domain.character import (
     BoundedInt,
     CharacteristicValue,
     DomainModel,
+    ExperienceSelection,
     InitialMythos,
     OccupationSkillReplacement,
     SkillAllocation,
@@ -46,6 +47,9 @@ class PatchCharacterRequest(DomainModel):
     occupation_skill_replacement: OccupationSkillReplacement | None = None
     initial_mythos_proposal: InitialMythos | None = None
     approve_occupation_exceptions: list[str] | None = Field(default=None, max_length=2)
+    experience: ExperienceSelection | None = None
+    experience_skills: dict[str, SkillAllocation] | None = None
+    approve_experience: list[str] | None = Field(default=None, max_length=1)
     era: Literal["1920s", "modern"] | None = None
     background: Background | None = None
     asset_details: list[AssetDetail] | None = Field(default=None, max_length=100)
@@ -65,6 +69,8 @@ class PatchCharacterRequest(DomainModel):
             "custom_specializations",
             "approve_specializations",
             "approve_occupation_exceptions",
+            "experience_skills",
+            "approve_experience",
             "era",
             "background",
             "asset_details",
