@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Character, CustomSpecialization, EditableFields, RuleSet, SkillGroup } from '../../api/characters'
 import { characterSkills, normalizedName, specializationLabels } from './specializations'
+import OccupationExceptions from './OccupationExceptions'
 
 export default function SkillAllocator({ ruleset, character, value, onChange }: {
   ruleset: RuleSet; character: Character; value: EditableFields
@@ -38,9 +39,15 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
   const occupation = ruleset.occupations.find(o => o.key === value.occupation)
   const allowed = new Set([...(occupation?.fixed_skills ?? []), ...value.selected_occupation_skills,
     ...Object.values(value.occupation_group_choices).flat(), 'credit_rating'])
+  const replacement = value.occupation_skill_replacement
+  if (occupation?.skill_replacement && replacement && allowed.has(replacement.original_skill)
+    && replacement.original_skill !== 'credit_rating' && replacement.replacement_skill === occupation.skill_replacement.target_skill) {
+    allowed.delete(replacement.original_skill); allowed.add(replacement.replacement_skill)
+  }
   const name = (key: string) => skills.find(s => s.key === key)?.display_name ?? key
   const options = (g: SkillGroup) => skills.filter(s => s.allocatable && s.key !== 'credit_rating'
-    && s.eras.includes(value.era) && (g.any_skill || g.skills.includes(s.key) || !!s.specialization_group && g.specialization_groups.includes(s.specialization_group)))
+    && s.eras.includes(value.era) && (g.any_skill || g.skills.includes(s.key) || !!s.specialization_group && g.specialization_groups.includes(s.specialization_group))
+    || s.key === 'cthulhu_mythos' && !!value.initial_mythos_proposal && occupation?.initial_mythos?.selection_group === g.key)
   const formula = occupation?.point_formula
   const attributes = character.effective_attributes
   const occupationPool = formula ? Object.entries(formula.fixed).reduce((sum, [k, n]) => sum + (attributes[k] ?? 0) * n, 0)
@@ -58,7 +65,7 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
       <label>检索职业<input type="search" value={occupationSearch} onChange={e => setOccupationSearch(e.target.value)} placeholder="职业名称或 ID" /></label>
       <label>职业<select id="occupation" value={value.occupation ?? ''} onChange={e => onChange({ ...value,
         occupation: e.target.value || null, occupation_attribute: null, selected_occupation_skills: [],
-        occupation_group_choices: {}, occupation_skills: {} })}>
+        occupation_group_choices: {}, occupation_skills: {}, occupation_skill_replacement: null, initial_mythos_proposal: null })}>
         <option value="">请选择职业</option>
         {ruleset.occupations.filter(o => o.key === value.occupation || o.eras.includes(value.era) && (o.display_name + o.key).toLowerCase().includes(occupationSearch.toLowerCase())).map(o =>
           <option key={o.key} value={o.key}>{o.display_name}</option>)}
@@ -107,6 +114,7 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
         </label>)}</div>
       </>}
     </>}
+    <OccupationExceptions character={character} value={value} ruleset={ruleset} onChange={onChange} />
     <details><summary>选择额外专业（兴趣技能）</summary>
       <p>每个专业分别分配和检定；职业固定或分组所选的专业已自动加入下表。</p>
       {[...new Set(skills.map(s => s.specialization_group).filter(Boolean))].map(group => <fieldset key={group}>
@@ -117,10 +125,10 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
         </label>)}</div>
       </fieldset>)}
     </details>
-    {character.validation.issues.some(i => i.code === 'keeper_approval') && <fieldset>
+    {character.validation.issues.some(i => i.field.startsWith('specialization_approvals.')) && <fieldset>
       <legend>KP 专业引入确认</legend>
       <p>此编辑器由主机管理。请核对具体专业与年代、人物背景及本次游戏的适用范围；学问不能替代克苏鲁神话。</p>
-      {character.validation.issues.filter(i => i.code === 'keeper_approval').map(i => {
+      {character.validation.issues.filter(i => i.field.startsWith('specialization_approvals.')).map(i => {
         const key = i.field.replace('specialization_approvals.', '')
         return <label key={key}><input type="checkbox" aria-label={`KP允许${name(key)}`} checked={value.approve_specializations?.includes(key) ?? false}
           onChange={e => onChange({ ...value, approve_specializations: e.target.checked ? [...(value.approve_specializations ?? []), key] : value.approve_specializations?.filter(k => k !== key) })} />{i.message}</label>
@@ -138,11 +146,13 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
         && (!s.specialization_group || allowed.has(s.key) || value.selected_specializations.includes(s.key) || value.occupation_skills[s.key]?.points || value.interest_skills[s.key]?.points)).map(s => {
         const base = character.skill_base_values[s.key] ?? s.base_value
         const total = base + (value.occupation_skills[s.key]?.points ?? 0) + (value.interest_skills[s.key]?.points ?? 0)
+          + (s.key === 'cthulhu_mythos' ? character.initial_mythos ?? 0 : 0)
         return <tr key={s.key}><th scope="row">{s.display_name}<small>{s.category} · 基础 {base}</small></th>
           {(['occupation_skills', 'interest_skills'] as const).map(field => <td key={field}>
             <input id={`${field}-${s.key}`} aria-label={`${s.display_name}${field === 'occupation_skills' ? '职业' : '兴趣'}投入`} type="number" min={0} max={s.maximum - base}
               disabled={!s.allocatable || !s.eras.includes(value.era) || field === 'occupation_skills' && !allowed.has(s.key)} value={value[field][s.key]?.points ?? 0}
               onChange={e => onChange({ ...value, [field]: { ...value[field], [s.key]: { points: Number(e.target.value) } } })} />
+            {field === 'occupation_skills' && !allowed.has(s.key) && !!value[field][s.key]?.points && <button type="button" onClick={() => onChange({ ...value, occupation_skills: { ...value.occupation_skills, [s.key]: { points: 0 } } })}>退回 {value[field][s.key].points} 职业点</button>}
             {character.validation.issues.filter(i => i.field === `${field}.${s.key}`).map((i, n) => <small className="field-error" key={n}>{i.message}</small>)}
           </td>)}<td>{total} / {s.maximum}<small>困难 {Math.floor(total / 2)} · 极难 {Math.floor(total / 5)}</small></td></tr>
       })}</tbody></table></div>

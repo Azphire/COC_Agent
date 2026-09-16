@@ -424,12 +424,18 @@ class AgentTools:
                 None,
             )
             require(slot is not None, "角色不在本房间", 404)
+            from app.rooms.sanity_service import runtime_skill_values
             from app.rules.checks import available_skills
             from app.rules.specializations import snapshot_skill_names
 
+            skill_values = runtime_skill_values(
+                room, slot, available_skills(slot.character_snapshot)
+            )
             return {
                 **slot.character_snapshot,
-                "skill_values": available_skills(slot.character_snapshot),
+                "skill_values": skill_values,
+                "skill_half_values": {k: v // 2 for k, v in skill_values.items()},
+                "skill_fifth_values": {k: v // 5 for k, v in skill_values.items()},
                 "custom_skill_names": snapshot_skill_names(slot.character_snapshot),
                 "runtime": room.session_state.get("characters", {}).get(slot.id, {}),
             }

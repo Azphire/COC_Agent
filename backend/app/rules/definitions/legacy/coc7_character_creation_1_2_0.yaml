@@ -1,5 +1,5 @@
 id: coc7-character-creation
-version: 1.3.0
+version: 1.2.0
 display_name: CoC 第七版角色创建
 edition: coc7
 enabled: true
@@ -29,10 +29,7 @@ source_reference:
 - filename: 克苏鲁的呼唤第七版规则书1907.pdf
   section: PDF29–31、48、59–60、63、68
   notes: 学术组允许不同专业；驾驶1、生存10、学问1；学问须KP引入，驾驶载具受年代限制。
-- filename: 克苏鲁的呼唤第七版调查员手册1.20.pdf
-  section: PDF46／印刷77–78；PDF53／印刷84–85；交叉核对PDF35／61–62及PDF136／223
-  notes: 第三十批除魅师一项催眠替换须KP许可；神秘学家个人特长可含初始神话、10%为建议。职业条款未要求等额扣SAN，不能套用经历包相信者条款；初始SAN按规则书PDF25、51、131从POW推导并受99−神话限制。
-notice: 本地规则核对1.3.0：115职业、106目录技能、6类自定义专业。除魅师催眠替换与神秘学家初始神话须KP许可；驾驶须核对载具年代，学问须KP引入且不代替神话。15–89岁，购点460；未分配技能点确认时放弃。
+notice: 本地规则核对：115职业、106目录技能、6类自定义专业。驾驶须核对载具年代，学问须KP引入且不代替神话；手册普通职业及特例边界见覆盖表。15–89岁，购点460；未分配技能点确认时放弃。
 reroll_policy: none
 attributes:
 - key: str
@@ -3336,12 +3333,6 @@ occupations:
   source: 调查员手册1.20 PDF 45–46（印刷 75–78）
 - key: deprogrammer
   display_name: 除魅师（现代）
-  skill_replacement:
-    target_skill: hypnosis
-    count: 1
-    scope: fixed_or_selected
-    source: 调查员手册1.20 PDF46／印刷77–78，除魅师技能脚注
-    note: 除魅师可经KP许可用催眠替换一项固定或已选职业技能；原名额与点池不增加，信用评级不替换。
   fixed_skills:
   - drive_auto
   - history
@@ -4265,12 +4256,6 @@ occupations:
   source: 调查员手册1.20 PDF 52（印刷 83–84）
 - key: occultist
   display_name: 神秘学家
-  initial_mythos:
-    selection_group: personal
-    recommended_maximum: 10
-    san_loss: none
-    source: 调查员手册1.20 PDF53／印刷84–85，神秘学家个人特长脚注；理智见规则书1907 PDF25／24、51／50、131／130及手册PDF136／223
-    note: KP确定初始神话值，占个人特长名额，独立获取不消耗职业或兴趣点；建议不超过10%而非强制上限。职业条款未要求等额扣SAN，初始SAN=min(POW,99−神话)。手册PDF35的相信者等额扣减属于未启用的经历包。
   fixed_skills:
   - anthropology
   - history

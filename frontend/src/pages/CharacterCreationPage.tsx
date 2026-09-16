@@ -14,6 +14,7 @@ const empty: EditableFields = {
   attributes: {}, occupation_skills: {}, interest_skills: {}, age_deductions: {},
   occupation_attribute: null, occupation_group_choices: {}, selected_specializations: [], era: '1920s',
   custom_specializations: [],
+  occupation_skill_replacement: null, initial_mythos_proposal: null,
   background: { appearance: '', beliefs: '', people: '', places: '', possessions: '', traits: '', key_connection: null },
   asset_details: [], equipment: [],
 }
@@ -79,7 +80,12 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
   const locked = saved?.status === 'finalized'
   const unavailable = !ruleset?.enabled || (!!saved && saved.ruleset_version !== ruleset.version)
   const band = ruleset?.age_rules?.bands.find(item => form.age !== null && item.minimum <= form.age && form.age <= item.maximum)
-  const update = (value: EditableFields) => { setForm(value); setDirty(true); setNotice(''); setApiIssues([]) }
+  const update = (value: EditableFields) => {
+    const changed = (['occupation', 'era', 'occupation_group_choices', 'occupation_skill_replacement', 'initial_mythos_proposal', 'attributes'] as const)
+      .some(k => JSON.stringify(value[k]) !== JSON.stringify(form[k]))
+    setForm(changed ? { ...value, approve_occupation_exceptions: undefined } : value)
+    setDirty(true); setNotice(''); setApiIssues([])
+  }
   function accept(character: Character, message: string) {
     setSaved(character); setForm(character); setDirty(false); setApiIssues([]); setNotice(message)
   }
@@ -112,6 +118,9 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
         selected_specializations: form.selected_specializations, era: form.era, background: form.background,
         custom_specializations: form.custom_specializations,
         approve_specializations: form.approve_specializations,
+        occupation_skill_replacement: form.occupation_skill_replacement,
+        initial_mythos_proposal: form.initial_mythos_proposal,
+        approve_occupation_exceptions: form.approve_occupation_exceptions,
         asset_details: form.asset_details, equipment: form.equipment,
       }
       if (saved.creation_mode === 'point_buy') body.attributes = form.attributes

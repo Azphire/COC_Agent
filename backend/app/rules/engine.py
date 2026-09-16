@@ -186,6 +186,9 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
             allowed = occupation_choices(
                 character, ruleset, occupation, issue, definitions.values()
             ) | {"credit_rating"}
+    from app.rules.occupation_exceptions import apply_initial_mythos, apply_occupation_options
+
+    allowed = apply_occupation_options(character, ruleset, occupation, allowed, issue)
     selected = character.selected_specializations
     if len(selected) != len(set(selected)) or any(
         k not in definitions or not definitions[k].specialization_group for k in selected
@@ -237,6 +240,7 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
                 f"{occupation.credit_rating_maximum}",
             )
 
+    apply_initial_mythos(character)
     character.skill_half_values = {key: value // 2 for key, value in character.skill_values.items()}
     from app.rules.character_options import credit_finances
 

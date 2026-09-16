@@ -123,6 +123,23 @@ class OccupationPointFormula(DomainModel):
     display: str
 
 
+class OccupationReplacementPolicy(DomainModel):
+    target_skill: Literal["hypnosis"] = "hypnosis"
+    count: Literal[1] = 1
+    scope: Literal["fixed_or_selected"] = "fixed_or_selected"
+    source: str = Field(min_length=1)
+    note: str
+
+
+class InitialMythosPolicy(DomainModel):
+    selection_group: Key
+    recommended_maximum: Annotated[StrictInt, Field(ge=1, le=99)] = 10
+    # The occultist occupation does not impose the experience-package SAN loss.
+    san_loss: Literal["none"] = "none"
+    source: str = Field(min_length=1)
+    note: str
+
+
 class OccupationDefinition(DomainModel):
     key: Key
     display_name: str
@@ -137,6 +154,8 @@ class OccupationDefinition(DomainModel):
     source: str = ""
     legacy_selection_group: Key | None = None
     legacy_group_defaults: dict[Key, list[Key]] = Field(default_factory=dict)
+    skill_replacement: OccupationReplacementPolicy | None = None
+    initial_mythos: InitialMythosPolicy | None = None
 
     @model_validator(mode="after")
     def check_selection(self) -> Self:
@@ -147,6 +166,11 @@ class OccupationDefinition(DomainModel):
             raise ValueError("可选技能不足")
         if len({g.key for g in self.skill_groups}) != len(self.skill_groups):
             raise ValueError("职业技能分组ID重复")
+        if self.initial_mythos and not any(
+            g.key == self.initial_mythos.selection_group and g.count == 1
+            for g in self.skill_groups
+        ):
+            raise ValueError("初始神话必须占用一个既有的职业选择名额")
         if (self.credit_rating_minimum is None) != (self.credit_rating_maximum is None):
             raise ValueError("信用评级上下限必须同时指定")
         if (

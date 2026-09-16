@@ -44,6 +44,10 @@ def occupation_choices(character, ruleset, occupation, issue, skills=None):
         if len(selected) != len(set(selected)) or set(selected) & allowed:
             issue(field, "duplicate", "职业技能不得在固定项或不同分组重复计数")
         options = group_options(group, ruleset, character.era, skills)
+        from app.rules.occupation_exceptions import mythos_option
+
+        if mythos_option(character, occupation, group):
+            options.add("cthulhu_mythos")
         if not set(selected) <= options:
             issue(field, "selection", "所选技能不符合本组或年代要求")
         # Mixed direction groups count "fighting" or "language" only once.

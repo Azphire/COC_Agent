@@ -10,6 +10,9 @@ export type Equipment = { id: string; catalog_id: string | null; name: string; q
 export type WeaponTemplate = { template_id: string | null; name: string; skill: string; kind: 'melee' | 'firearm'; damage: string; impale: boolean; uses_db: boolean; base_range: string | null; capacity: number; malfunction: number; source: string }
 export type EquipmentDefinition = { id: string; name: string; eras: string[]; weapon: boolean; category: string; description: string; source: string; skill_name: string | null; weapon_template: WeaponTemplate | null }
 export type Background = { appearance: string; beliefs: string; people: string; places: string; possessions: string; traits: string; key_connection: string | null }
+export type OccupationSkillReplacement = { original_skill: string; replacement_skill: string; reason: string }
+export type InitialMythos = { source: 'occultist'; value: number; reason: string }
+export type OccupationExceptionPolicy = { source: string; note: string }
 export type RuleSet = {
   id: string; version: string; display_name: string; edition: string; enabled: boolean
   verification_status: string; notice: string
@@ -19,7 +22,7 @@ export type RuleSet = {
   skills: Skill[]
   custom_specialization_templates: Record<string, string>
   specialization_policies: Record<string, { requires_keeper_approval: boolean; custom_only: boolean; note: string }>
-  occupations: { key: string; display_name: string; fixed_skills: string[]; selectable_skills: string[]; required_selection_count: number; credit_rating_minimum: number | null; credit_rating_maximum: number | null; eras: string[]; source: string; skill_groups: SkillGroup[]; point_formula: { fixed: Record<string, number>; choice_attributes: string[]; choice_multiplier: number; display: string } | null }[]
+  occupations: { key: string; display_name: string; fixed_skills: string[]; selectable_skills: string[]; required_selection_count: number; credit_rating_minimum: number | null; credit_rating_maximum: number | null; eras: string[]; source: string; skill_groups: SkillGroup[]; skill_replacement: (OccupationExceptionPolicy & { target_skill: string }) | null; initial_mythos: (OccupationExceptionPolicy & { selection_group: string; recommended_maximum: number }) | null; point_formula: { fixed: Record<string, number>; choice_attributes: string[]; choice_multiplier: number; display: string } | null }[]
   age_rules: { bands: { minimum: number; maximum: number; deduction_pool: number; deduction_attributes: string[] }[] } | null
 }
 export type Character = {
@@ -30,6 +33,11 @@ export type Character = {
   occupation_attribute: string | null; occupation_group_choices: Record<string, string[]>; selected_specializations: string[]
   custom_specializations: CustomSpecialization[]
   specialization_approvals: Record<string, string>
+  occupation_skill_replacement: OccupationSkillReplacement | null
+  initial_mythos_proposal: InitialMythos | null
+  occupation_exception_approvals: Record<string, string>
+  effective_occupation_skills: string[]
+  initial_mythos: number
   era: '1920s' | 'modern'; background: Background; asset_details: { description: string; value: number }[]; equipment: Equipment[]
   finances: { currency: string; level: string; cash: number; assets: number; spending: number; assets_lower_bound: boolean }
   derived_values: Record<string, number | string>; occupation_skills: Record<string, SkillAllocation>
@@ -42,7 +50,7 @@ export type Character = {
   created_at: string; updated_at: string; version: number
 }
 export type BasicFields = Pick<Character, 'name' | 'player_name' | 'age'>
-export type EditableFields = BasicFields & Pick<Character, 'occupation' | 'selected_occupation_skills' | 'attributes' | 'occupation_skills' | 'interest_skills' | 'age_deductions' | 'occupation_attribute' | 'occupation_group_choices' | 'selected_specializations' | 'custom_specializations' | 'era' | 'background' | 'asset_details' | 'equipment'> & { approve_specializations?: string[] }
+export type EditableFields = BasicFields & Pick<Character, 'occupation' | 'selected_occupation_skills' | 'attributes' | 'occupation_skills' | 'interest_skills' | 'age_deductions' | 'occupation_attribute' | 'occupation_group_choices' | 'selected_specializations' | 'custom_specializations' | 'era' | 'background' | 'asset_details' | 'equipment' | 'occupation_skill_replacement' | 'initial_mythos_proposal'> & { approve_specializations?: string[]; approve_occupation_exceptions?: string[] }
 export type CharacterExport = {
   schema_version: number; exported_at: string; character: Character
   ruleset: { id: string; version: string; verification_status: string }

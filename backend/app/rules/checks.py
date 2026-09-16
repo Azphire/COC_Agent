@@ -52,6 +52,7 @@ def prompt_skills(snapshot, action=""):
         return values
     common = {s.key for s in original.skills}
     chosen = set(snapshot.get("selected_specializations", []))
+    chosen.update(snapshot.get("effective_occupation_skills", []))
     for keys in snapshot.get("occupation_group_choices", {}).values():
         chosen.update(keys)
     occupation = next((o for o in rules.occupations if o.key == snapshot.get("occupation")), None)

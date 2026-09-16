@@ -57,6 +57,18 @@ class PointBalances(DomainModel):
     interest: int = 0
 
 
+class OccupationSkillReplacement(DomainModel):
+    original_skill: str = Field(min_length=1, max_length=64)
+    replacement_skill: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class InitialMythos(DomainModel):
+    source: Literal["occultist"] = "occultist"
+    value: Annotated[StrictInt, Field(ge=1, le=99)]
+    reason: str = Field(min_length=1, max_length=2000)
+
+
 class CharacterData(DomainModel):
     id: UUID = Field(default_factory=uuid4)
     ruleset_id: str
@@ -72,6 +84,11 @@ class CharacterData(DomainModel):
     selected_specializations: list[str] = Field(default_factory=list, max_length=200)
     custom_specializations: list[CustomSpecialization] = Field(default_factory=list, max_length=50)
     specialization_approvals: dict[str, str] = Field(default_factory=dict, max_length=200)
+    occupation_skill_replacement: OccupationSkillReplacement | None = None
+    initial_mythos_proposal: InitialMythos | None = None
+    occupation_exception_approvals: dict[str, str] = Field(default_factory=dict, max_length=2)
+    effective_occupation_skills: list[str] = Field(default_factory=list)
+    initial_mythos: Annotated[StrictInt, Field(ge=0, le=99)] = 0
     era: Literal["1920s", "modern"] = "1920s"
     background: Background = Field(default_factory=Background)
     asset_details: list[AssetDetail] = Field(default_factory=list, max_length=100)

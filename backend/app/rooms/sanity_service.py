@@ -60,6 +60,14 @@ def current_check_value(room, slot, kind, name):
     return value
 
 
+def runtime_skill_values(room, slot, values):
+    """Project current mythos once; the frozen acquisition is already in the card."""
+    result = dict(values)
+    if "cthulhu_mythos" in result:
+        result["cthulhu_mythos"] = current_check_value(room, slot, "skill", "cthulhu_mythos")
+    return result
+
+
 def sanity_public(document):
     progress = SanityProgress.model_validate(document["sanity"])
     names = {

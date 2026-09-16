@@ -169,7 +169,13 @@ class CharacterService:
         self.check_editable(character, request.version)
         ruleset = self.ruleset(character.ruleset_id, character.ruleset_version)
         changes = request.model_dump(
-            exclude_unset=True, exclude={"version", "derived_values", "approve_specializations"}
+            exclude_unset=True,
+            exclude={
+                "version",
+                "derived_values",
+                "approve_specializations",
+                "approve_occupation_exceptions",
+            },
         )
         if ruleset.age_rules and "age" in changes and changes["age"] != character.age:
             raise CharacterError(422, "年龄已锁定，不能通过修改年龄重新获得幸运或教育检定")
@@ -182,6 +188,15 @@ class CharacterService:
 
             try:
                 approve_specializations(candidate, ruleset, request.approve_specializations)
+            except ValueError as error:
+                raise CharacterError(422, str(error)) from error
+        if request.approve_occupation_exceptions is not None:
+            from app.rules.occupation_exceptions import approve_occupation_exceptions
+
+            try:
+                approve_occupation_exceptions(
+                    candidate, ruleset, request.approve_occupation_exceptions
+                )
             except ValueError as error:
                 raise CharacterError(422, str(error)) from error
         recalculate(candidate, ruleset)
@@ -222,11 +237,27 @@ class CharacterService:
             "occupation_group_choices",
             "selected_specializations",
             "custom_specializations",
+            "occupation_skill_replacement",
+            "initial_mythos_proposal",
         }
         if details:
             events.append(("character_details_updated", {"fields": sorted(details)}))
         if request.approve_specializations:
             events.append(("specializations_approved", {"skills": request.approve_specializations}))
+        if request.approve_occupation_exceptions:
+            events.append(
+                (
+                    "occupation_exceptions_approved",
+                    {
+                        "options": request.approve_occupation_exceptions,
+                        "replacement": candidate.occupation_skill_replacement.model_dump()
+                        if candidate.occupation_skill_replacement
+                        else None,
+                        "initial_mythos": candidate.initial_mythos,
+                        "san": candidate.derived_values.get("san"),
+                    },
+                )
+            )
         await self.repository.save(candidate, events, expected_version=request.version)
         return candidate
 
@@ -292,6 +323,7 @@ class CharacterService:
                 "original_id": original.id,
                 "status": "draft",
                 "specialization_approvals": {},
+                "occupation_exception_approvals": {},
                 "version": 1,
                 "created_at": utc_now(),
                 "updated_at": utc_now(),

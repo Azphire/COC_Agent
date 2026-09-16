@@ -2,7 +2,14 @@ from typing import Annotated, Literal
 
 from pydantic import Field, StrictInt, model_validator
 
-from app.domain.character import BoundedInt, CharacteristicValue, DomainModel, SkillAllocation
+from app.domain.character import (
+    BoundedInt,
+    CharacteristicValue,
+    DomainModel,
+    InitialMythos,
+    OccupationSkillReplacement,
+    SkillAllocation,
+)
 from app.domain.character_details import AssetDetail, Background, EquipmentEntry
 from app.domain.specializations import CustomSpecialization
 
@@ -36,6 +43,9 @@ class PatchCharacterRequest(DomainModel):
     selected_specializations: list[str] | None = Field(default=None, max_length=200)
     custom_specializations: list[CustomSpecialization] | None = Field(default=None, max_length=50)
     approve_specializations: list[str] | None = Field(default=None, max_length=200)
+    occupation_skill_replacement: OccupationSkillReplacement | None = None
+    initial_mythos_proposal: InitialMythos | None = None
+    approve_occupation_exceptions: list[str] | None = Field(default=None, max_length=2)
     era: Literal["1920s", "modern"] | None = None
     background: Background | None = None
     asset_details: list[AssetDetail] | None = Field(default=None, max_length=100)
@@ -54,6 +64,7 @@ class PatchCharacterRequest(DomainModel):
             "selected_specializations",
             "custom_specializations",
             "approve_specializations",
+            "approve_occupation_exceptions",
             "era",
             "background",
             "asset_details",
