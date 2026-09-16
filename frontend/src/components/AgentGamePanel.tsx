@@ -36,6 +36,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
   const prefix = `/rooms/${room.id}`
   const game = room.game
   const cycle = game?.cycle
+  const clarifiesOwnAction = !!cycle?.requires_clarification && cycle.triggering_member_id === (room.is_host ? actor : room.self_member_id)
   const active = !!cycle && ['running', 'waiting_for_roll', 'waiting_for_review', 'failed'].includes(cycle.status)
   const editable = room.is_host && ['lobby', 'paused'].includes(room.status) && !active
   useEffect(() => {
@@ -100,14 +101,14 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
     {game?.module && <section className="agent-game"><h2>{game.module.title}</h2><p>开场介绍：{game.module.public_introduction}</p>
       <p role="status" data-testid="agent-cycle-status">{game.module.completed ? '调查已结束' : !cycle || cycle.status === 'completed' ? '你想说什么，或做什么？' : cycle.status === 'cancelled' ? '可以继续交谈或行动' : cycle.status === 'failed' ? '主持暂时中断，请查看主机详情' : cycle.status === 'waiting_for_roll' ? '等待你的选择；仍可交谈、问规则或补充方法' : cycle.status === 'waiting_for_review' ? '这个问题需要主机处理，仍可继续交谈' : 'KP 正在回应；可以继续输入'}</p>
       {cycle?.safe_error && <p role="alert">{cycle.safe_error}</p>}
-      {cycle?.requires_clarification && <p role="status" data-testid="action-clarification">需要澄清：{cycle.clarification_question}</p>}
+      {clarifiesOwnAction && <p role="status" data-testid="action-clarification">需要澄清：{cycle?.clarification_question}</p>}
       {room.is_host && active && <details><summary>主机回合控制</summary><div className="action-row">
         <button disabled={busy} onClick={() => void command('/agent-cycle/cancel')}>取消 Agent 回合</button>
         {cycle?.status === 'failed' && <button disabled={busy || room.status !== 'running'} onClick={() => void command('/agent-cycle/retry')}>重试 Agent 回合</button>}
       </div></details>}
       {room.status !== 'ended' && !game.module.completed && <form onSubmit={async e => {
         e.preventDefault()
-        const clarify = category === 'dialogue' && cycle?.requires_clarification
+        const clarify = category === 'dialogue' && clarifiesOwnAction
         const body = { text: action, category, ...(category === 'dialogue' && target ? { target_entity_id: target } : {}), ...(clarify ? { clarification_event_seq: cycle.clarification_event_seq } : {}), ...(room.is_host ? { actor_member_id: actor } : {}) }
         const content = JSON.stringify(body)
         if (!pending.current || pending.current.content !== content) pending.current = { content, id: requestId() }

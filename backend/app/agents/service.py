@@ -215,6 +215,7 @@ class AgentService:
         if cycle:
             result["cycle"] = {
                 "id": cycle.id,
+                "triggering_member_id": cycle.state.get("triggering_member_id"),
                 "status": cycle.status,
                 "current_node": cycle.state["current_node"],
                 "safe_error": cycle.state.get("safe_error"),

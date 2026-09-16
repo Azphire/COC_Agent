@@ -339,6 +339,7 @@ def test_two_stages_and_clarification_permissions(client, game):  # noqa: F811
     ok(submit(client, game, "那个"))
     clarified = wait_cycle(client, game)
     assert clarified["status"] == "completed" and clarified["requires_clarification"]
+    assert clarified["triggering_member_id"] == game["player"]
     events = ok(client.get(game["prefix"] + "/events"))["events"]
     assert sum(e["type"] == "action.clarification_requested" for e in events) == 1
     assert not any(e["type"] == "agent.action_proposed" for e in events)

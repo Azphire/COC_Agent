@@ -31,7 +31,7 @@ export type GameState = {
   knowledge?: KnowledgeBinding;
   enabled: boolean;
   module: { id: string; title: string; public_introduction: string; scene: { id: string; title: string; public_description: string }; clues: { id: string; title: string; content: string }[]; completed: boolean } | null;
-  cycle: { id: string; status: string; current_node: string; safe_error: string | null; state?: Record<string, unknown>; requires_clarification?: boolean; clarification_question?: string; clarification_event_seq?: number } | null;
+  cycle: { id: string; triggering_member_id?: string; status: string; current_node: string; safe_error: string | null; state?: Record<string, unknown>; requires_clarification?: boolean; clarification_question?: string; clarification_event_seq?: number } | null;
   checks: Check[];
   bindings: { id: string; member_id: string; profile_id: string; role: string; name: string; status: string }[];
 }
