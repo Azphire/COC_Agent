@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { autonomyReason } from './autonomy'
 import { api, requestId } from '../api/session'
 import type { Result, Room } from '../api/rooms'
 import type { AgentProfile } from '../api/agents'
@@ -66,6 +67,8 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
     finally { setBusy(false) }
   }
   const seats = room.members.filter(m => m.active && (m.id === room.host_member_id || m.controller_type === 'agent'))
+  const actionSlot = room.character_slots.find(s => s.member_id === (room.is_host ? actor : room.self_member_id))
+  const actionRestriction = autonomyReason(actionSlot ? room.session_state.characters[actionSlot.id] : undefined)
   return <>
     {room.is_host && <ModuleNavigationPanel room={room} token={token} acceptRoom={acceptRoom} />}
     {room.is_host && <details open={room.status === 'lobby'}><summary>主机模组与 AI 设置</summary>
@@ -118,7 +121,8 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
           {room.members.filter(m => m.active && m.role === 'player').map(m => <button key={m.id} type="button" onClick={() => { setTarget(''); setAction(text => text || `${m.display_name}，`); setCategory('dialogue') }}>{m.display_name}</button>)}
           {target && <button type="button" onClick={() => setTarget('')}>清除选定目标</button>}
         </details>
-        <button disabled={busy || room.status !== 'running' || !game.enabled || !action.trim() || (room.is_host && !actor)}>发送</button>
+        {actionRestriction && <p role="status">{actionRestriction}。仍可查规则，或使用房间聊天。</p>}
+        <button disabled={busy || room.status !== 'running' || !game.enabled || !action.trim() || (room.is_host && !actor) || (category !== 'rule_question' && !!actionRestriction)}>发送</button>
       </form>}
       <div className="check-list">{game.checks.filter(check => check.status === 'pending').map(check => <article key={check.id} className="check-card" data-check-id={check.id}>
         <h3>{check.display_name || check.name}检定</h3>

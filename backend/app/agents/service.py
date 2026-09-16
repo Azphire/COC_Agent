@@ -421,6 +421,7 @@ class AgentService:
             return {}
         if action == "resource.correct":
             await self.sanity.correct(session, room, body)
+            await self.combat.queue_automatic(session, room)
             return {}
         cycle = await self.cycle(session, room.id, active=True)
         if action in {"module", "binding", "unbind", "config", "knowledge"}:
@@ -607,6 +608,7 @@ class AgentService:
             if not rule_question:
                 from uuid import UUID
 
+                from app.rooms.autonomy import autonomy_reason
                 from app.rooms.schemas import SessionStateV1
 
                 actor_slot = next(
@@ -616,11 +618,8 @@ class AgentService:
                     current = SessionStateV1.model_validate(room.session_state).characters[
                         UUID(actor_slot.id)
                     ]
-                    require(
-                        current.sanity.kind != "permanent"
-                        and current.sanity.phase not in {"bout", "awaiting_symptom"},
-                        "疯狂发作期间请由主机处理角色行动",
-                    )
+                    reason = autonomy_reason(current)
+                    require(not reason, reason)
                 require(
                     any(slot.member_id == actor for slot in await self.rooms.slots(session, room)),
                     "请先绑定角色",

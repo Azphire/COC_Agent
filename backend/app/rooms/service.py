@@ -107,6 +107,15 @@ class RoomService:
         return room
 
     async def complete_runtime(self, session, room):
+        # Persist derived SAN-zero repair through the existing controlled load path.
+        # The runtime validator records it once; frozen cards/snapshot documents stay intact.
+        if any(
+            c.get("san") == 0 and c.get("sanity", {}).get("kind") != "permanent"
+            for c in room.session_state.get("characters", {}).values()
+        ):
+            room.session_state = SessionStateV1.model_validate(room.session_state).model_dump(
+                mode="json"
+            )
         if any(
             c.get("mp_max") is None or c.get("hp_max") is None
             for c in room.session_state.get("characters", {}).values()
@@ -445,6 +454,7 @@ class RoomService:
                     "agent.sanity.request",
                     "agent.sanity.roll",
                     "agent.sanity.manage",
+                    "agent.resource.correct",
                 }:
                     runtime.schedule(room_id)
                 elif action in {"agent.cancel", "agent.check.cancel"}:

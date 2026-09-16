@@ -27,6 +27,7 @@ function CharacterPreview({ character: c }: { character: Character }) {
     {c.validation.issues.filter(i => i.code === 'keeper_approval').map(i => <p key={i.field}>{i.message}</p>)}
     <p>剩余职业点：{c.remaining_points.occupation}；兴趣点：{c.remaining_points.interest}</p>
     <OccupationExceptionSummary character={c} rules={rules} />
+    {c.ruleset_id === 'coc7-character-creation' && c.derived_values.san === 0 && <p role="status">初始 SAN 为 0：发布／接受后为永久疯狂，不能自主调查或发动战斗行动。</p>}
     <div className="field-grid">{Object.entries(c.effective_attributes).map(([k, v]) => <p key={k}>{rules?.attributes.find(a => a.key === k)?.display_name || k}：{v}</p>)}</div>
     <p>{Object.entries(c.derived_values).map(([k, v]) => `${rules?.derived_values.find(d => d.key === k)?.display_name || k}：${v}`).join(' · ')}</p>
     <h4>自定义专业（本卡 {c.custom_specializations.length} 项）</h4>

@@ -1,7 +1,7 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import Field, SecretStr, StrictBool, StrictInt, StringConstraints
+from pydantic import Field, SecretStr, StrictBool, StrictInt, StringConstraints, model_validator
 
 from app.domain.character import CharacterExport, DomainModel
 from app.preparation.runtime_schemas import ModuleRuntimeState
@@ -35,6 +35,12 @@ class CharacterRuntimeV1(DomainModel):
     conditions: list[Annotated[str, StringConstraints(min_length=1, max_length=120)]] = Field(
         default_factory=list, max_length=30
     )
+
+    @model_validator(mode="after")
+    def initialize_sanity(self):
+        from app.rooms.autonomy import initialize_zero_san
+
+        return initialize_zero_san(self)
 
 
 class SessionStateV1(DomainModel):

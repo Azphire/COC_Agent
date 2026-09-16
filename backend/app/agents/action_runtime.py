@@ -467,13 +467,15 @@ class ActionRuntimeMixin:
                     None,
                 )
                 if slot:
-                    sanity = (
-                        room.session_state.get("characters", {}).get(slot.id, {}).get("sanity", {})
-                    )
-                    if sanity.get("kind") == "permanent" or sanity.get("phase") in {
-                        "bout",
-                        "awaiting_symptom",
-                    }:
+                    from uuid import UUID
+
+                    from app.rooms.autonomy import autonomy_reason
+                    from app.rooms.schemas import SessionStateV1
+
+                    character = SessionStateV1.model_validate(room.session_state).characters[
+                        UUID(slot.id)
+                    ]
+                    if autonomy_reason(character):
                         continue
                 behavior_row = await session.get(
                     AgentBehaviorRecord, (state["room_id"], binding.member_id)
@@ -841,6 +843,21 @@ class ActionRuntimeMixin:
     async def generate_action_run(
         self, state, binding_id, node, schema, instruction, additions=None
     ):
+        if schema is KeeperPlan and state.get("request_category") != "rule_question":
+            from uuid import UUID
+
+            from app.rooms.autonomy import autonomy_reason
+            from app.rooms.schemas import SessionStateV1
+
+            async with self.rooms.database.sessions() as session:
+                room = await self.rooms.room(session, state["room_id"])
+                slot = next((s for s in await self.rooms.slots(session, room)
+                             if s.member_id == state["triggering_member_id"]), None)
+                if slot:
+                    reason = autonomy_reason(
+                        SessionStateV1.model_validate(room.session_state).characters[UUID(slot.id)]
+                    )
+                    require(not reason, reason)
         run_id, _, context, cached = await self.prepare_run(state, binding_id, node)
         if cached and (schema is not KeeperNarration or context.get("response_brief")):
             return run_id

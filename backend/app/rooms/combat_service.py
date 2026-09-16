@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.agents.conversation import initial_state
 from app.persistence.agent_models import AgentCycle
 from app.persistence.room_models import RoomEvent, RoomMember
+from app.rooms.autonomy import combat_autonomy_reason
 from app.rooms.combat_schemas import Combatant, CombatTemplate, Weapon, unarmed
 from app.rooms.schemas import SessionStateV1
 from app.rooms.service import require
@@ -51,6 +52,10 @@ def current_actor(combat):
 
 def capable(p):
     return not (p.injury.dead or p.injury.unconscious or p.injury.dying or p.hp == 0)
+
+
+def autonomous(state, p):
+    return capable(p) and not combat_autonomy_reason(state, p)
 
 
 def weapon_for(p, weapon_id):
@@ -397,6 +402,8 @@ class CombatService:
             "行动者缺少当前场景数据或无法行动",
             422,
         )
+        reason = combat_autonomy_reason(state, actor)
+        require(not reason, reason)
         op = decision.operation
         target = combat.participants.get(decision.target_id)
         if op in {"attack", "first_aid", "medicine"}:
@@ -422,6 +429,7 @@ class CombatService:
             )
             require(turn_key is None or turn_key == combat.turn_key, "行动顺序已变化，请刷新")
             self.start(session, room, state, scene, decision.reason)
+            self.normalize_turn(session, room, state)
             turn_key = None
             # Starting combat never grants a free attack outside the DEX order.
             if current_actor(combat) != actor_id:
@@ -633,6 +641,8 @@ class CombatService:
     def options(self, state, action, role):
         basis, roll = action["bases"][role], action["rolls"][role]
         p = state.combat.participants[basis["participant_id"]]
+        if combat_autonomy_reason(state, p):
+            return []
         luck = state.characters[UUID(p.slot_id)].luck if p.slot_id else None
         return luck_options(
             {**basis, "malfunction": roll.get("malfunction", False), "result": roll["raw"]},
@@ -650,6 +660,8 @@ class CombatService:
             stage = action["stage"]
             if stage == "defense":
                 p = combat.participants[action["target_id"]]
+                if combat_autonomy_reason(state, p):
+                    break
                 if not await self.automatic(session, p):
                     break
                 melee = next((w.id for w in p.weapons if w.kind == "melee" and w.quantity), None)
@@ -664,12 +676,16 @@ class CombatService:
             elif stage.endswith("_roll"):
                 role = stage.removesuffix("_roll")
                 p = combat.participants[action["bases"][role]["participant_id"]]
+                if not role.startswith("health_") and combat_autonomy_reason(state, p):
+                    break
                 if not await self.automatic(session, p):
                     break
                 await self.perform_roll(session, room, state, action, role)
             elif stage.endswith("_choice"):
                 role = stage.removesuffix("_choice")
                 p = combat.participants[action["bases"][role]["participant_id"]]
+                if not role.startswith("health_") and combat_autonomy_reason(state, p):
+                    break
                 if not await self.automatic(session, p) and self.options(state, action, role):
                     break
                 self.after_roll(state, action, role)
@@ -848,7 +864,7 @@ class CombatService:
         if (
             not combat.active
             or not combat.order
-            or not any(capable(combat.participants[pid]) for pid in combat.order)
+            or not any(autonomous(state, combat.participants[pid]) for pid in combat.order)
         ):
             return
         for _ in range(len(combat.order) + 1):
@@ -871,7 +887,7 @@ class CombatService:
             if actor in combat.skip_turn:
                 combat.skip_turn.remove(actor)
                 continue
-            if capable(combat.participants[actor]):
+            if autonomous(state, combat.participants[actor]):
                 break
         combat.turn_key += 1
 
@@ -902,17 +918,48 @@ class CombatService:
         if not combat.active:
             return
         living = [pid for pid in combat.order if capable(combat.participants[pid])]
-        if len({combat.participants[pid].team for pid in living}) <= 1:
+        acting = [pid for pid in living if autonomous(state, combat.participants[pid])]
+        if len({combat.participants[pid].team for pid in living}) <= 1 or not acting:
             combat.active = False
             self.rooms.append(
                 session,
                 room,
                 "combat.ended",
                 room.host_member_id,
-                {"combat_id": combat.id, "reason": "一方失去行动能力"},
+                {"combat_id": combat.id, "reason": "一方失去行动能力或全员无法自主行动"},
             )
-        elif current_actor(combat) not in living:
+        elif current_actor(combat) not in acting:
             self.next_turn(combat, state)
+
+    async def resolve_restricted(self, session, room, state, action, stage, role, reason):
+        """Host-only fixed continuation, never a selectable substitute action."""
+        if stage == "defense":
+            # No autonomous defense roll; the attack can still hit this target.
+            action["defense"], action["stage"] = "take", "attack_roll"
+        elif stage.endswith("_choice"):
+            self.after_roll(state, action, role)  # accept the existing result, no luck
+        elif stage.endswith("_roll"):
+            fixed = role in action["rolls"] or any(
+                e.payload["key"] == action["id"] + ":" + role
+                for e in await session.scalars(select(RoomEvent).where(
+                    RoomEvent.room_id == room.id, RoomEvent.type == "combat.dice_fixed"
+                ))
+            )
+            if role.startswith("health_") or fixed:
+                await self.perform_roll(session, room, state, action, role)
+                self.after_roll(state, action, role)
+            elif role == "defense":
+                action["defense"] = "take"
+                action["stage"] = "damage" if "attack" in action["rolls"] else "attack_roll"
+            else:
+                action["summary"] = "行动者当前不能自主行动，尚未掷骰的动作停止。"
+                action["stage"] = "finish"
+        else:
+            require(False, "此阶段不能使用受限处理", 422)
+        action.setdefault("restricted_resolutions", {})[stage] = reason
+        self.rooms.append(session, room, "combat.restricted_resolved", room.host_member_id,
+                          {"action_id": action["id"], "stage": stage, "reason": reason},
+                          "host_only")
 
     async def step(self, session, room, identity, body):
         state = load_state(room)
@@ -926,8 +973,13 @@ class CombatService:
             else action.get("bases", {}).get(role, {}).get("participant_id")
         )
         require(pid in combat.participants, "阶段不合法", 422)
-        await self.authorize(session, room, identity, combat.participants[pid])
-        decision = body.model_dump(mode="json")
+        restricted = body.operation == "resolve_restricted"
+        if restricted:
+            require(identity.is_host, "仅主机可确认受限阶段的固定处理", 403)
+        else:
+            await self.authorize(session, room, identity, combat.participants[pid])
+        # Preserve equality with receipts saved before the optional reason field existed.
+        decision = body.model_dump(mode="json", exclude=set() if body.reason else {"reason"})
         if stage in action["decisions"]:
             require(action["decisions"][stage] == decision, "该阶段已固定，不能改变选择")
             return
@@ -939,7 +991,20 @@ class CombatService:
         )
         cycle = await self.agents.cycle(session, room.id, active=True)
         require(cycle and cycle.id == action["cycle_id"], "先处理当前串行会话")
-        if stage == "defense":
+        reason = combat_autonomy_reason(state, combat.participants[pid])
+        if restricted:
+            require(reason, "该参与者可自主行动，不适用受限处理")
+            require(body.reason.strip() and body.weapon_id is None and body.spend is None,
+                    "须记录原因；受限处理不能选择武器或花费幸运", 422)
+            await self.resolve_restricted(
+                session, room, state, action, stage, role, reason + "；" + body.reason
+            )
+        else:
+            require(not reason or (stage.endswith("_choice") and body.operation == "accept")
+                    or (role.startswith("health_") and body.operation == "roll"), reason)
+        if restricted:
+            pass
+        elif stage == "defense":
             await self.choose_defense(session, room, state, action, body.operation, body.weapon_id)
         elif stage.endswith("_roll"):
             require(body.operation == "roll", "请确认掷骰", 422)
@@ -983,8 +1048,15 @@ class CombatService:
         if room.status != "running" or await self.agents.cycle(session, room.id, active=True):
             return
         state = load_state(room)
+        self.normalize_turn(session, room, state)
+        store_state(room, state)
+        if any(p.injury.con_pending for p in state.combat.participants.values()):
+            await self.queue_health(session, room, "行动顺序推进后继续强制伤势检查")
+            return
         pid = current_actor(state.combat)
-        if pid and await self.automatic(session, state.combat.participants[pid]):
+        if pid and autonomous(state, state.combat.participants[pid]) and await self.automatic(
+            session, state.combat.participants[pid]
+        ):
             await self.make_cycle(
                 session, room, pid, "轮到你行动，依据公开局势选择自己的行动。", automatic=True
             )
@@ -1072,6 +1144,8 @@ class CombatService:
                     "请求ID已经使用",
                 )
                 return {}
+            reason = combat_autonomy_reason(state, p)
+            require(not reason, reason)
             cycle = await self.make_cycle(
                 session, room, p.id, body.reason, key=str(body.client_request_id)
             )
@@ -1279,6 +1353,9 @@ class CombatService:
                 "member_id": p.member_id,
                 "team": p.team,
                 "incapacitated": not capable(p),
+                "autonomy_blocked": bool(combat_autonomy_reason(state, p)),
+                "autonomy_reason": combat_autonomy_reason(state, p) if full else
+                    "当前不能自主行动" if combat_autonomy_reason(state, p) else None,
                 **(
                     {
                         "hp": p.hp,
@@ -1314,6 +1391,10 @@ class CombatService:
                 else action.get("bases", {}).get(role, {}).get("participant_id")
             )
             result["pending"]["participant_id"] = pid
+            reason = combat_autonomy_reason(state, combat.participants[pid]) if pid else None
+            result["pending"]["restricted_reason"] = reason if (
+                identity.is_host or pid and combat.participants[pid].member_id == identity.member_id
+            ) else ("当前不能自主行动" if reason else None)
             result["pending"]["weapon_kind"] = action.get("weapon", {}).get("kind")
             result["pending"]["luck_options"] = (
                 self.options(state, action, role)

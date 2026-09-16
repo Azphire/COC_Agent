@@ -1,5 +1,6 @@
 import type { Room } from '../api/rooms'
 import { specializationLabels } from './character/specializations'
+import { autonomyReason } from './autonomy'
 
 const injuryLabels: Record<string, string> = {
   major_wound: '重伤', unconscious: '昏迷', dying: '濒死', dead: '死亡', stabilized: '伤势已稳定',
@@ -18,6 +19,7 @@ export default function RuntimeCards({ room }: { room: Room }) {
         <h3>{slot?.public_summary.name}</h3>
         <p>HP {runtime.hp ?? '—'} / {runtime.hp_max ?? '—'} · MP {runtime.mp ?? '—'} / {runtime.mp_max ?? '—'}</p>
         <p>SAN {runtime.san ?? '—'} / {runtime.san_max ?? '—'} · Luck {runtime.luck ?? '—'}</p>
+        {autonomyReason(runtime) && <p role="status">{autonomyReason(runtime)}</p>}
         {runtime.mp != null && runtime.mp_max != null && runtime.mp < runtime.mp_max && <small>MP 自然恢复进度：{runtime.mp_recovery_progress ?? 0} / 60 游戏分钟</small>}
         <p>{conditions.join('、') || '无已记录伤势'}{injury.con_pending ? ' · 待体质检定' : ''}</p>
         <p>武器：{weapons.filter(w => w.quantity > 0).map(w => `${w.name}${w.kind === 'firearm' ? `（弹药 ${w.ammo}，备用 ${w.reserve}${w.jammed ? '，卡壳' : ''}）` : ''}`).join('、') || '无已配置武器'}</p>

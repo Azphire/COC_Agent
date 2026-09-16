@@ -3,6 +3,7 @@
 from uuid import UUID
 
 from app.preparation.inventory import held_instance
+from app.rooms.autonomy import autonomy_reason
 from app.rooms.resource_service import apply_mp, validate_mp, validate_time
 from app.rooms.service import require
 
@@ -38,7 +39,8 @@ async def preflight_use(agents, session, room, state, rule, args, actor):
         and character.hp != 0,
         "使用者当前无法行动",
     )
-    require(character.sanity.phase not in {"awaiting_symptom", "bout"}, "请先处理疯狂发作")
+    reason = autonomy_reason(character)
+    require(not reason, reason)
     require(not target.injury.dead, "此恢复效果不能作用于死者")
     validate_mp(character, effect.mp_cost)
     if effect.mp_restore:

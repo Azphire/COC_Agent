@@ -234,9 +234,12 @@ class CombatCommand(CombatDecision):
 class CombatStep(DomainModel):
     action_id: str
     stage: str
-    operation: Literal["dodge", "fight_back", "cover", "take", "roll", "accept", "luck"]
+    operation: Literal[
+        "dodge", "fight_back", "cover", "take", "roll", "accept", "luck", "resolve_restricted"
+    ]
     weapon_id: str | None = None
     spend: Annotated[StrictInt, Field(ge=1, le=99)] | None = None
+    reason: str = Field(default="", max_length=500)
 
 
 class DamageCommand(DomainModel):

@@ -10,6 +10,7 @@ from pydantic import ValidationError, create_model, model_validator
 from app.domain.character import utc_now
 from app.persistence.agent_models import AgentCycle, AgentRun, ProfileRecord
 from app.persistence.room_models import RoomEvent
+from app.rooms.autonomy import combat_autonomy_reason
 from app.rooms.combat_schemas import CombatDecision, CombatNarration
 from app.rooms.combat_service import current_actor, load_state, store_state
 from app.rooms.service import Identity, RoomError, require
@@ -219,6 +220,17 @@ async def drive_combat(runtime, state):
         data = load_state(room)
         module = await service.module(session, room.id)
         await combat_service.ensure_members(session, room, data, module.state["scene_id"])
+        actor = state.get("combat_actor_id") or state["triggering_member_id"]
+        own = data.combat.participants.get(actor)
+        reason = combat_autonomy_reason(data, own) if own else None
+        if reason and not cycle.state.get("combat_action_id"):
+            cycle.status, cycle.finished_at = "completed", utc_now()
+            cycle.state = {**cycle.state, "status": "completed", "combat_rejection": reason,
+                           "combat_autonomy_stopped": True, "wait_reason": None}
+            rooms.append(session, room, "combat.autonomy_stopped", room.host_member_id,
+                         {"cycle_id": cycle.id, "actor_id": actor, "reason": reason}, "host_only")
+            service.cycle_event(session, room, cycle)
+            return cycle.state, {}
         store_state(room, data)
         trigger = await session.get(RoomEvent, (room.id, state["triggering_event_seq"]))
         from app.memory.events import story_events
@@ -300,6 +312,9 @@ async def drive_combat(runtime, state):
         return cycle.state, context
 
     state, context = await service.mutate(state["room_id"], prepare)
+    if state.get("combat_autonomy_stopped"):
+        runtime.schedule(state["room_id"])
+        return True
     if state.get("combat_return") and state["status"] == "running":
 
         async def return_to_graph(session, room):
