@@ -32,6 +32,7 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
     onChange({ ...value, custom_specializations: custom.filter(s => s.id !== id),
       selected_specializations: value.selected_specializations.filter(k => k !== id),
       occupation_group_choices: Object.fromEntries(Object.entries(value.occupation_group_choices).map(([g, keys]) => [g, keys.filter(k => k !== id)])),
+      approve_specializations: value.approve_specializations?.filter(k => k !== id),
       occupation_skills: occupationSkills, interest_skills: interestSkills })
   }
   const occupation = ruleset.occupations.find(o => o.key === value.occupation)
@@ -73,6 +74,7 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
         <label>专业名称<input id="custom-skill-name" value={customName} maxLength={40} onChange={e => setCustomName(e.target.value)} placeholder="例如：葡萄牙语、陶艺、地球物理学" /></label>
       </div>
       <button type="button" disabled={custom.length >= 50} onClick={addCustom}>添加专业</button>
+      {ruleset.specialization_policies?.[customGroup] && <p>{ruleset.specialization_policies[customGroup].note}</p>}
       {customError && <p role="alert">{customError}</p>}
       {custom.map(s => <div key={s.id} className="choice-row">
         <label>{specializationLabels[s.group]}<input aria-label={`修改${s.name}名称`} value={s.name} maxLength={40}
@@ -95,7 +97,7 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
             occupation_group_choices: { ...value.occupation_group_choices, [g.key]: Array.from(e.target.selectedOptions, o => o.value) } })}>
           {options(g).map(s => <option key={s.key} value={s.key}>{s.display_name}</option>)}
         </select>
-        <small>多选可按住 Ctrl / Command；各组与固定项不能重复计数。</small>
+        <small>多选可按住 Ctrl / Command；各组与固定项不能重复计数。{g.distinct_directions && !g.any_skill ? '本组同一专业方向仅占一个名额。' : '本组可选择同一类别的不同专业。'}</small>
       </fieldset>)}
       {!!occupation.required_selection_count && <>
         <p>另选 {occupation.required_selection_count} 项（已选 {value.selected_occupation_skills.length}）：</p>
@@ -115,6 +117,16 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
         </label>)}</div>
       </fieldset>)}
     </details>
+    {character.validation.issues.some(i => i.code === 'keeper_approval') && <fieldset>
+      <legend>KP 专业引入确认</legend>
+      <p>此编辑器由主机管理。请核对具体专业与年代、人物背景及本次游戏的适用范围；学问不能替代克苏鲁神话。</p>
+      {character.validation.issues.filter(i => i.code === 'keeper_approval').map(i => {
+        const key = i.field.replace('specialization_approvals.', '')
+        return <label key={key}><input type="checkbox" aria-label={`KP允许${name(key)}`} checked={value.approve_specializations?.includes(key) ?? false}
+          onChange={e => onChange({ ...value, approve_specializations: e.target.checked ? [...(value.approve_specializations ?? []), key] : value.approve_specializations?.filter(k => k !== key) })} />{i.message}</label>
+      })}
+      <p>勾选后保存，服务端记录当前名称与年代的核准；导入其他主机或提交房间时需重新核准。</p>
+    </fieldset>}
     <p role="status">当前分配余额：职业 <strong>{balances.occupation}</strong> / {occupationPool}，兴趣 <strong>{balances.interest}</strong> / {interestPool}。
       <small>公式使用已保存的年龄调整后属性；修改属性后请保存重算。后端已保存余额：职业 {character.remaining_points.occupation}，兴趣 {character.remaining_points.interest}。</small></p>
     <div className="field-grid"><label>搜索技能<input type="search" value={search} onChange={e => setSearch(e.target.value)} /></label>

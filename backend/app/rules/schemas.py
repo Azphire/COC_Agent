@@ -113,6 +113,7 @@ class OccupationSkillGroup(DomainModel):
     skills: list[Key] = Field(default_factory=list)
     specialization_groups: list[Key] = Field(default_factory=list)
     any_skill: bool = False
+    distinct_directions: bool = True
 
 
 class OccupationPointFormula(DomainModel):
@@ -195,6 +196,14 @@ class SourceReference(DomainModel):
     notes: str
 
 
+class SpecializationPolicy(DomainModel):
+    requires_keeper_approval: bool = False
+    custom_only: bool = False
+    note: str
+    forbidden_names: list[str] = Field(default_factory=list)
+    modern_name_fragments: list[str] = Field(default_factory=list)
+
+
 class RuleSet(DomainModel):
     id: Key
     version: str = Field(min_length=1, max_length=32)
@@ -210,7 +219,8 @@ class RuleSet(DomainModel):
     points: PointConfiguration | None = None
     skills: list[SkillDefinition] = Field(default_factory=list, max_length=300)
     custom_specialization_templates: dict[Key, Key] = Field(default_factory=dict)
-    occupations: list[OccupationDefinition] = Field(default_factory=list, max_length=100)
+    specialization_policies: dict[Key, SpecializationPolicy] = Field(default_factory=dict)
+    occupations: list[OccupationDefinition] = Field(default_factory=list, max_length=200)
     age_rules: AgeConfiguration | None = None
 
     @model_validator(mode="after")
@@ -275,13 +285,17 @@ class RuleSet(DomainModel):
         for group, key in self.custom_specialization_templates.items():
             template = next((s for s in self.skills if s.key == key), None)
             if (
-                group not in {"language", "art_craft", "science"}
+                group not in {"language", "art_craft", "science", "pilot", "survival", "lore"}
                 or not template
                 or template.specialization_group != group
                 or template.base_rule
                 or not template.allocatable
             ):
                 raise ValueError("自定义专业模板必须引用同类别的可分配固定基础值技能")
+        if not set(self.specialization_policies) <= {
+            s.specialization_group for s in self.skills if s.specialization_group
+        }:
+            raise ValueError("专业限制引用不存在的类别")
         if self.age_rules:
             attributes = {item.key for item in self.attributes}
             if self.age_rules.education_attribute not in attributes:

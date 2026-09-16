@@ -52,7 +52,11 @@ def occupation_choices(character, ruleset, occupation, issue, skills=None):
             for k in selected
             if k in options and k not in group.skills
         ]
-        if not group.any_skill and len(directions) != len(set(directions)):
+        if (
+            group.distinct_directions
+            and not group.any_skill
+            and len(directions) != len(set(directions))
+        ):
             issue(field, "duplicate_direction", "本组选项须来自不同技能方向")
         allowed |= set(selected) & options
     return allowed

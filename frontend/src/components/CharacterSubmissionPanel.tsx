@@ -3,9 +3,9 @@ import { charactersApi } from '../api/characters'
 import type { Character, RuleSet } from '../api/characters'
 import type { CharacterSubmission, Result, Room } from '../api/rooms'
 import { api, requestId } from '../api/session'
+import { specializationName } from './character/specializations'
 
 const statuses = { pending: '待处理', accepted: '已接受', rejected: '已拒绝' }
-const groups = { language: '外语', art_craft: '艺术／手艺', science: '科学' }
 const errorText = (error: unknown) => error instanceof Error ? error.message : '请求失败，请重试'
 
 function CharacterPreview({ character: c }: { character: Character }) {
@@ -17,12 +17,13 @@ function CharacterPreview({ character: c }: { character: Character }) {
   }, [c.ruleset_id, c.ruleset_version])
   function skillName(key: string) {
     const custom = c.custom_specializations.find(s => s.id === key)
-    return custom ? `${groups[custom.group]}（${custom.name}）` : rules?.skills.find(s => s.key === key)?.display_name || key
+    return custom ? specializationName(custom) : rules?.skills.find(s => s.key === key)?.display_name || key
   }
   return <div data-testid="submission-preview">
     <h3>{c.name} · {c.age} 岁</h3>
     <p>{rules?.occupations.find(o => o.key === c.occupation)?.display_name || c.occupation} · {c.ruleset_id} / {c.ruleset_version} · {c.era === 'modern' ? '现代' : '1920 年代'}</p>
-    <p>服务端已重算，校验通过。来源：导入；保留文件中的原骰，导入记录不证明骰子曾由本主机生成。</p>
+    <p>服务端已重算，{c.validation.valid ? '校验通过' : '数值校验通过，以下专业待本房间 KP 引入'}。来源：导入；保留文件中的原骰，导入记录不证明骰子曾由本主机生成。</p>
+    {c.validation.issues.filter(i => i.code === 'keeper_approval').map(i => <p key={i.field}>{i.message}</p>)}
     <p>剩余职业点：{c.remaining_points.occupation}；兴趣点：{c.remaining_points.interest}</p>
     <div className="field-grid">{Object.entries(c.effective_attributes).map(([k, v]) => <p key={k}>{rules?.attributes.find(a => a.key === k)?.display_name || k}：{v}</p>)}</div>
     <p>{Object.entries(c.derived_values).map(([k, v]) => `${rules?.derived_values.find(d => d.key === k)?.display_name || k}：${v}`).join(' · ')}</p>
@@ -107,9 +108,11 @@ export default function CharacterSubmissionPanel({ room, token, acceptRoom }: { 
       {shown.reason && <p>处理说明：{shown.reason}</p>}
       <CharacterPreview character={shown.character} />
       {room.is_host && editable && shown.status === 'pending' && <>
+        {shown.character.validation.issues.some(i => i.code === 'keeper_approval') && <p>接受并分配同时核准上列待引入专业。请先核对年代、人物背景及游戏范围；不同意可拒绝并说明。</p>}
         <label>处理说明（可选）<textarea maxLength={2000} value={reason} onChange={e => setReason(e.target.value)} /></label>
         <div className="action-row">{(['accept', 'reject'] as const).map(decision => <button key={decision} disabled={busy || !!stale || !!processed || (decision === 'accept' && (!!existing || !member?.active))} onClick={async () => {
-          const next = await mutate(`${prefix}/${shown.id}/review`, { expected_version: shown.version, decision, reason })
+          const next = await mutate(`${prefix}/${shown.id}/review`, { expected_version: shown.version, decision, reason,
+            approve_specializations: decision === 'accept' ? shown.character!.validation.issues.filter(i => i.code === 'keeper_approval').map(i => i.field.replace('specialization_approvals.', '')) : [] })
           if (next) { setSelected(next.character_submissions.find(s => s.id === shown.id) || null); setNotice(decision === 'accept' ? '已接受并分配，请玩家准备。' : '已拒绝，玩家可以提交新版本。') }
         }}>{decision === 'accept' ? '接受并分配' : '拒绝提交'}</button>)}</div>
       </>}

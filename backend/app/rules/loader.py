@@ -1,3 +1,4 @@
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -26,3 +27,12 @@ def archived_ruleset(ruleset_id: str, version: str) -> RuleSet | None:
         if (rule.id, rule.version) == (ruleset_id, version):
             return rule
     return None
+
+
+@lru_cache(maxsize=32)
+def runtime_ruleset(ruleset_id: str, version: str) -> RuleSet | None:
+    """Immutable published versions for read-only check/context lookups."""
+    current = load_rulesets().get(ruleset_id)
+    if current and current.version == version:
+        return current
+    return archived_ruleset(ruleset_id, version)

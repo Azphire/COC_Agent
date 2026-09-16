@@ -13,8 +13,10 @@ def normalized_name(name):
 class CustomSpecialization(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=r"^custom_(language|art_craft|science)_[a-f0-9]{32}$")
-    group: Literal["language", "art_craft", "science"]
+    id: str = Field(
+        pattern=r"^custom_(language|art_craft|science|pilot|survival|lore)_[a-f0-9]{32}$"
+    )
+    group: Literal["language", "art_craft", "science", "pilot", "survival", "lore"]
     name: str = Field(min_length=1, max_length=40)
 
     @field_validator("name")

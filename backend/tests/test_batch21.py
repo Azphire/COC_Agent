@@ -381,7 +381,7 @@ def test_archived_card_edit_export_import_preserves_rolls_and_rule_values(client
 
 
 def test_specialization_groups_and_catalog_sources():
-    rules = load_rulesets()["coc7-character-creation"]
+    rules = archived_ruleset("coc7-character-creation", "1.1.0")
     assert len(rules.occupations) == 31 and len(rules.skills) == 103
     old = archived_ruleset(rules.id, "1.0.0")
     current = {s.key: s for s in rules.skills}

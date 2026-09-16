@@ -1,5 +1,5 @@
 id: coc7-character-creation
-version: 1.1.0
+version: 1.2.0
 display_name: CoC 第七版角色创建
 edition: coc7
 enabled: true
@@ -23,7 +23,13 @@ source_reference:
 - filename: 克苏鲁的呼唤第七版调查员手册1.20.pdf
   section: PDF40、49、53
   notes: 会计师、消防员、护士；有限目录，不代表全手册。
-notice: 按本地规则核对：基础技能及可选专业、28项基础职业和3项手册职业；1920年代/现代信用资产。15–89岁；90岁以上无完整本地调整条款。购点460，未分配技能点确认时放弃。
+- filename: 克苏鲁的呼唤第七版调查员手册1.20.pdf
+  section: PDF38–59（职业目录及全部职业数值块）
+  notes: 第二十八批逐项覆盖见docs/occupation-coverage.md；同名职业更新沿用ID，特殊可选条款单列。
+- filename: 克苏鲁的呼唤第七版规则书1907.pdf
+  section: PDF29–31、48、59–60、63、68
+  notes: 学术组允许不同专业；驾驶1、生存10、学问1；学问须KP引入，驾驶载具受年代限制。
+notice: 本地规则核对：115职业、106目录技能、6类自定义专业。驾驶须核对载具年代，学问须KP引入且不代替神话；手册普通职业及特例边界见覆盖表。15–89岁，购点460；未分配技能点确认时放弃。
 reroll_policy: none
 attributes:
 - key: str
@@ -247,6 +253,9 @@ custom_specialization_templates:
   language: language_latin
   art_craft: art_acting
   science: science_astronomy
+  pilot: pilot_aircraft
+  survival: survival_desert
+  lore: lore_folklore
 skills:
 - key: accounting
   display_name: 会计
@@ -834,6 +843,24 @@ skills:
   maximum: 99
   category: 知识
   specialization_group: lore
+- key: survival_mountains
+  display_name: 生存（高山）
+  base_value: 10
+  maximum: 99
+  category: 探索
+  specialization_group: survival
+- key: art_typing
+  display_name: 艺术与手艺（打字）
+  base_value: 5
+  maximum: 99
+  category: 艺术
+  specialization_group: art_craft
+- key: art_shorthand
+  display_name: 艺术与手艺（速记）
+  base_value: 5
+  maximum: 99
+  category: 艺术
+  specialization_group: art_craft
 occupations:
 - key: antiquarian
   display_name: 古文物学家
@@ -1212,8 +1239,13 @@ occupations:
     - science_physics
     - science_zoology
     - lore_folklore
-    specialization_groups: []
+    specialization_groups:
+    - science
+    - language
+    - art_craft
+    - lore
     any_skill: false
+    distinct_directions: false
   credit_rating_minimum: 30
   credit_rating_maximum: 80
   point_formula:
@@ -1388,35 +1420,34 @@ occupations:
   eras:
   - modern
 - key: journalist
-  display_name: 记者
+  display_name: 调查记者（记者）
   fixed_skills:
-  - photography
   - history
   - library_use
+  - own_language
   - psychology
   skill_groups:
-  - key: language
-    display_name: 其他语言专业
+  - key: art
+    display_name: 选择一项相关技能
+    skills:
+    - art_fine_art
+    - photography
+    specialization_groups: []
     count: 1
-    skills: []
-    specialization_groups:
-    - language
-    any_skill: false
+    distinct_directions: true
   - key: social
     display_name: 社交技能
-    count: 1
     skills:
     - charm
     - fast_talk
     - intimidate
     - persuade
     specialization_groups: []
-    any_skill: false
+    count: 1
+    distinct_directions: true
   - key: personal
     display_name: 个人或时代特长
     count: 2
-    skills: []
-    specialization_groups: []
     any_skill: true
   credit_rating_minimum: 9
   credit_rating_maximum: 30
@@ -1424,7 +1455,10 @@ occupations:
     fixed:
       edu: 4
     display: EDU×4
-  source: 规则书1907 PDF 30
+  source: 调查员手册1.20 PDF 50（印刷 81–82）
+  eras:
+  - 1920s
+  - modern
 - key: lawyer
   display_name: 律师
   fixed_skills:
@@ -1531,8 +1565,13 @@ occupations:
     - science_physics
     - science_zoology
     - lore_folklore
-    specialization_groups: []
+    specialization_groups:
+    - science
+    - language
+    - art_craft
+    - lore
     any_skill: false
+    distinct_directions: false
   credit_rating_minimum: 9
   credit_rating_maximum: 35
   point_formula:
@@ -1549,37 +1588,29 @@ occupations:
   fixed_skills:
   - accounting
   - navigate
+  - first_aid
   - psychology
   skill_groups:
   - key: firearms
-    display_name: 射击专业
-    count: 1
+    display_name: 射击
     skills: []
     specialization_groups:
     - firearms
-    any_skill: false
+    count: 1
+    distinct_directions: false
   - key: social
     display_name: 社交技能
-    count: 2
     skills:
     - charm
     - fast_talk
     - intimidate
     - persuade
     specialization_groups: []
-    any_skill: false
-  - key: survival
-    display_name: 生存环境
-    count: 1
-    skills: []
-    specialization_groups:
-    - survival
-    any_skill: false
+    count: 2
+    distinct_directions: true
   - key: personal
     display_name: 个人或时代特长
     count: 1
-    skills: []
-    specialization_groups: []
     any_skill: true
   credit_rating_minimum: 20
   credit_rating_maximum: 70
@@ -1590,45 +1621,51 @@ occupations:
     - dex
     - str
     choice_multiplier: 2
-    display: EDU×2 + DEX / STR×2
-  source: 规则书1907 PDF 30
+    display: EDU×2 + (DEX/STR)×2
+  source: 调查员手册1.20 PDF 52（印刷 83–84）
+  eras:
+  - 1920s
+  - modern
 - key: missionary
   display_name: 传教士
   fixed_skills:
+  - first_aid
   - mechanical_repair
   - medicine
   - natural_world
   skill_groups:
-  - key: art
-    display_name: 艺术/手艺专业
-    count: 1
+  - key: art_craft
+    display_name: 艺术与手艺
     skills: []
     specialization_groups:
     - art_craft
-    any_skill: false
+    count: 1
+    distinct_directions: false
   - key: social
     display_name: 社交技能
-    count: 1
     skills:
     - charm
     - fast_talk
     - intimidate
     - persuade
     specialization_groups: []
-    any_skill: false
+    count: 1
+    distinct_directions: true
   - key: personal
     display_name: 个人或时代特长
     count: 2
-    skills: []
-    specialization_groups: []
     any_skill: true
   credit_rating_minimum: 0
   credit_rating_maximum: 30
   point_formula:
     fixed:
-      edu: 4
-    display: EDU×4
-  source: 规则书1907 PDF 30
+      edu: 2
+      app: 2
+    display: EDU×2 + APP×2
+  source: 调查员手册1.20 PDF 52（印刷 83–84）
+  eras:
+  - 1920s
+  - modern
 - key: musician
   display_name: 音乐家
   fixed_skills:
@@ -1933,8 +1970,13 @@ occupations:
     - science_physics
     - science_zoology
     - lore_folklore
-    specialization_groups: []
+    specialization_groups:
+    - science
+    - language
+    - art_craft
+    - lore
     any_skill: false
+    distinct_directions: false
   credit_rating_minimum: 20
   credit_rating_maximum: 70
   point_formula:
@@ -2145,3 +2187,3247 @@ occupations:
       edu: 4
     display: EDU×4
   source: 调查员手册1.20 PDF 53
+- key: acrobat
+  display_name: 杂技演员
+  fixed_skills:
+  - climb
+  - dodge
+  - jump
+  - throw
+  - spot_hidden
+  - swim
+  skill_groups:
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 20
+  point_formula:
+    fixed:
+      edu: 2
+      dex: 2
+    display: EDU×2 + DEX×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 40（印刷 70–71）
+- key: stage_actor
+  display_name: 戏剧演员
+  fixed_skills:
+  - art_acting
+  - disguise
+  - history
+  - psychology
+  skill_groups:
+  - key: fighting
+    display_name: 格斗
+    skills: []
+    specialization_groups:
+    - fighting
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 2
+      app: 2
+    display: EDU×2 + APP×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 40（印刷 70–71）
+- key: film_actor
+  display_name: 电影演员
+  fixed_skills:
+  - art_acting
+  - disguise
+  - drive_auto
+  - psychology
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 90
+  point_formula:
+    fixed:
+      edu: 2
+      app: 2
+    display: EDU×2 + APP×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 40（印刷 70–71）
+- key: agency_detective
+  display_name: 事务所侦探
+  fixed_skills:
+  - brawl
+  - law
+  - library_use
+  - psychology
+  - stealth
+  - track
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  credit_rating_minimum: 20
+  credit_rating_maximum: 45
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 40（印刷 70–71）
+- key: alienist
+  display_name: 精神病医生（古典）
+  fixed_skills:
+  - law
+  - listen
+  - medicine
+  - psychoanalysis
+  - psychology
+  - biology
+  - chemistry
+  skill_groups:
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  credit_rating_minimum: 10
+  credit_rating_maximum: 60
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  source: 调查员手册1.20 PDF 40（印刷 70–71）
+- key: animal_trainer
+  display_name: 动物训练师
+  fixed_skills:
+  - jump
+  - listen
+  - natural_world
+  - animal_handling
+  - science_zoology
+  - stealth
+  - track
+  skill_groups:
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 10
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - app
+    - pow
+    choice_multiplier: 2
+    display: EDU×2 + (APP/POW)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 41（印刷 71–72）
+- key: antique_dealer
+  display_name: 古董商
+  fixed_skills:
+  - accounting
+  - appraise
+  - drive_auto
+  - history
+  - library_use
+  - navigate
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  credit_rating_minimum: 30
+  credit_rating_maximum: 50
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 41（印刷 71–72）
+- key: archaeologist
+  display_name: 考古学家
+  fixed_skills:
+  - appraise
+  - archaeology
+  - history
+  - library_use
+  - spot_hidden
+  - mechanical_repair
+  skill_groups:
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  - key: field
+    display_name: 选择一项相关技能
+    skills:
+    - navigate
+    specialization_groups:
+    - science
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 10
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 41（印刷 71–72）
+- key: architect
+  display_name: 建筑师
+  fixed_skills:
+  - accounting
+  - art_technical_drawing
+  - law
+  - own_language
+  - persuade
+  - psychology
+  - science_mathematics
+  skill_groups:
+  - key: research
+    display_name: 选择一项相关技能
+    skills:
+    - computer_use
+    - library_use
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 30
+  credit_rating_maximum: 70
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 41（印刷 71–72）
+- key: asylum_attendant
+  display_name: 精神病院看护
+  fixed_skills:
+  - dodge
+  - brawl
+  - first_aid
+  - listen
+  - psychology
+  - stealth
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  credit_rating_minimum: 8
+  credit_rating_maximum: 20
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 42（印刷 72–73）
+- key: bartender
+  display_name: 酒保
+  fixed_skills:
+  - accounting
+  - brawl
+  - listen
+  - psychology
+  - spot_hidden
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 8
+  credit_rating_maximum: 25
+  point_formula:
+    fixed:
+      edu: 2
+      app: 2
+    display: EDU×2 + APP×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 42（印刷 72–73）
+- key: big_game_hunter
+  display_name: 猎人
+  fixed_skills:
+  - natural_world
+  - navigate
+  - stealth
+  - track
+  skill_groups:
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  - key: awareness
+    display_name: 选择一项相关技能
+    skills:
+    - listen
+    - spot_hidden
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: environment
+    display_name: 选择一项相关技能
+    skills: []
+    specialization_groups:
+    - language
+    - survival
+    count: 1
+    distinct_directions: true
+  - key: science
+    display_name: 选择一项相关技能
+    skills:
+    - biology
+    - science_botany
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 50
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 42（印刷 72–73）
+- key: book_dealer
+  display_name: 书商
+  fixed_skills:
+  - accounting
+  - appraise
+  - drive_auto
+  - history
+  - library_use
+  - own_language
+  skill_groups:
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 42–43（印刷 72–74）
+- key: bounty_hunter
+  display_name: 赏金猎人
+  fixed_skills:
+  - drive_auto
+  - law
+  - psychology
+  - track
+  - stealth
+  skill_groups:
+  - key: electrical
+    display_name: 选择一项相关技能
+    skills:
+    - electronics
+    - electrical_repair
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: combat
+    display_name: 选择一项相关技能
+    skills: []
+    specialization_groups:
+    - fighting
+    - firearms
+    count: 1
+    distinct_directions: true
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 43（印刷 73–74）
+- key: boxer_wrestler
+  display_name: 拳击手／摔跤手
+  fixed_skills:
+  - dodge
+  - brawl
+  - intimidate
+  - jump
+  - psychology
+  - spot_hidden
+  skill_groups:
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 60
+  point_formula:
+    fixed:
+      edu: 2
+      str: 2
+    display: EDU×2 + STR×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 43（印刷 73–74）
+- key: butler
+  display_name: 管家／男仆／女仆
+  fixed_skills:
+  - first_aid
+  - listen
+  - psychology
+  - spot_hidden
+  skill_groups:
+  - key: accounts
+    display_name: 选择一项相关技能
+    skills:
+    - accounting
+    - appraise
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: art_craft
+    display_name: 艺术与手艺
+    skills: []
+    specialization_groups:
+    - art_craft
+    count: 1
+    distinct_directions: false
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 43（印刷 73–74）
+- key: computer_programmer
+  display_name: 计算机程序员／工程师
+  fixed_skills:
+  - computer_use
+  - electrical_repair
+  - electronics
+  - library_use
+  - science_mathematics
+  - spot_hidden
+  skill_groups:
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 10
+  credit_rating_maximum: 70
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - modern
+  source: 调查员手册1.20 PDF 44（印刷 74–75）
+- key: cowboy
+  display_name: 牛仔
+  fixed_skills:
+  - dodge
+  - jump
+  - ride
+  - throw
+  - track
+  skill_groups:
+  - key: combat
+    display_name: 选择一项相关技能
+    skills: []
+    specialization_groups:
+    - fighting
+    - firearms
+    count: 1
+    distinct_directions: true
+  - key: care
+    display_name: 选择一项相关技能
+    skills:
+    - first_aid
+    - natural_world
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: survival
+    display_name: 生存
+    skills: []
+    specialization_groups:
+    - survival
+    count: 1
+    distinct_directions: false
+  credit_rating_minimum: 9
+  credit_rating_maximum: 20
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 44（印刷 74–75）
+- key: craftsperson
+  display_name: 工匠
+  fixed_skills:
+  - accounting
+  - mechanical_repair
+  - natural_world
+  - spot_hidden
+  skill_groups:
+  - key: art_craft
+    display_name: 艺术与手艺
+    skills: []
+    specialization_groups:
+    - art_craft
+    count: 2
+    distinct_directions: false
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 10
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 2
+      dex: 2
+    display: EDU×2 + DEX×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 44（印刷 74–75）
+- key: assassin
+  display_name: 刺客
+  fixed_skills:
+  - disguise
+  - electrical_repair
+  - locksmith
+  - mechanical_repair
+  - stealth
+  - psychology
+  skill_groups:
+  - key: fighting
+    display_name: 格斗
+    skills: []
+    specialization_groups:
+    - fighting
+    count: 1
+    distinct_directions: false
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  credit_rating_minimum: 30
+  credit_rating_maximum: 60
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 44–45（印刷 74–76）
+- key: bank_robber
+  display_name: 银行劫匪
+  fixed_skills:
+  - drive_auto
+  - intimidate
+  - locksmith
+  - operate_heavy_machinery
+  skill_groups:
+  - key: repair
+    display_name: 选择一项相关技能
+    skills:
+    - electrical_repair
+    - mechanical_repair
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: fighting
+    display_name: 格斗
+    skills: []
+    specialization_groups:
+    - fighting
+    count: 1
+    distinct_directions: false
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 5
+  credit_rating_maximum: 75
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 45（印刷 75–76）
+- key: thug
+  display_name: 打手／暴徒
+  fixed_skills:
+  - drive_auto
+  - psychology
+  - stealth
+  - spot_hidden
+  skill_groups:
+  - key: fighting
+    display_name: 格斗
+    skills: []
+    specialization_groups:
+    - fighting
+    count: 1
+    distinct_directions: false
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  credit_rating_minimum: 5
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 2
+      str: 2
+    display: EDU×2 + STR×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 45（印刷 75–76）
+- key: burglar
+  display_name: 窃贼
+  fixed_skills:
+  - appraise
+  - climb
+  - listen
+  - locksmith
+  - sleight_of_hand
+  - stealth
+  - spot_hidden
+  skill_groups:
+  - key: repair
+    display_name: 选择一项相关技能
+    skills:
+    - electrical_repair
+    - mechanical_repair
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 5
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 2
+      dex: 2
+    display: EDU×2 + DEX×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 45（印刷 75–76）
+- key: conman
+  display_name: 欺诈师
+  fixed_skills:
+  - appraise
+  - art_acting
+  - listen
+  - psychology
+  - sleight_of_hand
+  skill_groups:
+  - key: knowledge
+    display_name: 选择一项相关技能
+    skills:
+    - law
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: true
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  credit_rating_minimum: 10
+  credit_rating_maximum: 65
+  point_formula:
+    fixed:
+      edu: 2
+      app: 2
+    display: EDU×2 + APP×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 45（印刷 75–76）
+- key: freelance_criminal
+  display_name: 独行罪犯
+  fixed_skills:
+  - appraise
+  - stealth
+  - psychology
+  - spot_hidden
+  skill_groups:
+  - key: cover
+    display_name: 选择一项相关技能
+    skills:
+    - art_acting
+    - disguise
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: combat
+    display_name: 选择一项相关技能
+    skills: []
+    specialization_groups:
+    - fighting
+    - firearms
+    count: 1
+    distinct_directions: true
+  - key: entry
+    display_name: 选择一项相关技能
+    skills:
+    - locksmith
+    - mechanical_repair
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 5
+  credit_rating_maximum: 65
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - app
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/APP)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 45（印刷 75–76）
+- key: gun_moll
+  display_name: 女飞贼（古典）
+  fixed_skills:
+  - drive_auto
+  - listen
+  - stealth
+  skill_groups:
+  - key: art_craft
+    display_name: 艺术与手艺
+    skills: []
+    specialization_groups:
+    - art_craft
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: combat
+    display_name: 选择一项相关技能
+    skills:
+    - brawl
+    - handgun
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 10
+  credit_rating_maximum: 80
+  point_formula:
+    fixed:
+      edu: 2
+      app: 2
+    display: EDU×2 + APP×2
+  eras:
+  - 1920s
+  source: 调查员手册1.20 PDF 45（印刷 75–76）
+- key: fence
+  display_name: 赃物贩子
+  fixed_skills:
+  - accounting
+  - appraise
+  - art_forgery
+  - history
+  - library_use
+  - spot_hidden
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 2
+      app: 2
+    display: EDU×2 + APP×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 45（印刷 75–76）
+- key: forger
+  display_name: 赝造者／伪造者
+  fixed_skills:
+  - accounting
+  - appraise
+  - art_forgery
+  - history
+  - library_use
+  - spot_hidden
+  - sleight_of_hand
+  skill_groups:
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 60
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 45（印刷 75–76）
+- key: smuggler
+  display_name: 走私者
+  fixed_skills:
+  - listen
+  - navigate
+  - psychology
+  - sleight_of_hand
+  - spot_hidden
+  skill_groups:
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: transport
+    display_name: 选择一项相关技能
+    skills:
+    - drive_auto
+    - pilot_aircraft
+    - pilot_boat
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 60
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - app
+    - dex
+    choice_multiplier: 2
+    display: EDU×2 + (APP/DEX)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 45（印刷 75–76）
+- key: street_punk
+  display_name: 混混
+  fixed_skills:
+  - climb
+  - jump
+  - sleight_of_hand
+  - stealth
+  - throw
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: fighting
+    display_name: 格斗
+    skills: []
+    specialization_groups:
+    - fighting
+    count: 1
+    distinct_directions: false
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  credit_rating_minimum: 3
+  credit_rating_maximum: 10
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 45（印刷 75–76）
+- key: cult_leader
+  display_name: 教团首领
+  fixed_skills:
+  - accounting
+  - occult
+  - psychology
+  - spot_hidden
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 30
+  credit_rating_maximum: 60
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 45–46（印刷 75–78）
+- key: deprogrammer
+  display_name: 除魅师（现代）
+  fixed_skills:
+  - drive_auto
+  - history
+  - occult
+  - psychology
+  - stealth
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: combat
+    display_name: 选择一项相关技能
+    skills:
+    - brawl
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 50
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - modern
+  source: 调查员手册1.20 PDF 46（印刷 77–78）
+- key: designer
+  display_name: 设计师
+  fixed_skills:
+  - accounting
+  - photography
+  - mechanical_repair
+  - psychology
+  - spot_hidden
+  skill_groups:
+  - key: art_craft
+    display_name: 艺术与手艺
+    skills: []
+    specialization_groups:
+    - art_craft
+    count: 1
+    distinct_directions: false
+  - key: research
+    display_name: 选择一项相关技能
+    skills:
+    - computer_use
+    - library_use
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 60
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 46（印刷 77–78）
+- key: diver
+  display_name: 潜水员
+  fixed_skills:
+  - diving
+  - first_aid
+  - mechanical_repair
+  - pilot_boat
+  - biology
+  - spot_hidden
+  - swim
+  skill_groups:
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 2
+      dex: 2
+    display: EDU×2 + DEX×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 46（印刷 77–78）
+- key: chauffeur
+  display_name: 私人司机
+  fixed_skills:
+  - drive_auto
+  - listen
+  - mechanical_repair
+  - navigate
+  - spot_hidden
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 10
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 2
+      dex: 2
+    display: EDU×2 + DEX×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 47（印刷 78–79）
+- key: driver
+  display_name: 司机
+  fixed_skills:
+  - accounting
+  - drive_auto
+  - listen
+  - mechanical_repair
+  - navigate
+  - psychology
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 20
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 47（印刷 78–79）
+- key: taxi_driver
+  display_name: 出租车司机
+  fixed_skills:
+  - accounting
+  - drive_auto
+  - electrical_repair
+  - fast_talk
+  - mechanical_repair
+  - navigate
+  - spot_hidden
+  skill_groups:
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 2
+      dex: 2
+    display: EDU×2 + DEX×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 47（印刷 78–79）
+- key: editor
+  display_name: 编辑
+  fixed_skills:
+  - accounting
+  - history
+  - own_language
+  - psychology
+  - spot_hidden
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 10
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 47（印刷 78–79）
+- key: elected_official
+  display_name: 政府官员
+  fixed_skills:
+  - charm
+  - history
+  - intimidate
+  - fast_talk
+  - listen
+  - own_language
+  - persuade
+  - psychology
+  skill_groups: []
+  credit_rating_minimum: 50
+  credit_rating_maximum: 90
+  point_formula:
+    fixed:
+      edu: 2
+      app: 2
+    display: EDU×2 + APP×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 47–48（印刷 78–80）
+- key: explorer
+  display_name: 探险家（古典）
+  fixed_skills:
+  - history
+  - jump
+  - natural_world
+  - navigate
+  skill_groups:
+  - key: physical
+    display_name: 选择一项相关技能
+    skills:
+    - climb
+    - swim
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  - key: survival
+    display_name: 生存
+    skills: []
+    specialization_groups:
+    - survival
+    count: 1
+    distinct_directions: false
+  credit_rating_minimum: 55
+  credit_rating_maximum: 80
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - app
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (APP/DEX/STR)×2
+  eras:
+  - 1920s
+  source: 调查员手册1.20 PDF 48（印刷 79–80）
+- key: federal_agent
+  display_name: 联邦探员
+  fixed_skills:
+  - drive_auto
+  - brawl
+  - law
+  - persuade
+  - stealth
+  - spot_hidden
+  skill_groups:
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 48–49（印刷 79–81）
+- key: foreign_correspondent
+  display_name: 驻外记者
+  fixed_skills:
+  - history
+  - own_language
+  - listen
+  - psychology
+  skill_groups:
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 10
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 49（印刷 80–81）
+- key: forensic_surgeon
+  display_name: 法医
+  fixed_skills:
+  - language_latin
+  - library_use
+  - medicine
+  - persuade
+  - biology
+  - science_forensics
+  - science_pharmacy
+  - spot_hidden
+  skill_groups: []
+  credit_rating_minimum: 40
+  credit_rating_maximum: 60
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 49（印刷 80–81）
+- key: gambler
+  display_name: 赌徒
+  fixed_skills:
+  - accounting
+  - art_acting
+  - listen
+  - psychology
+  - sleight_of_hand
+  - spot_hidden
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  credit_rating_minimum: 8
+  credit_rating_maximum: 50
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - app
+    - dex
+    choice_multiplier: 2
+    display: EDU×2 + (APP/DEX)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 49（印刷 80–81）
+- key: gangster_boss
+  display_name: 黑帮老大
+  fixed_skills:
+  - law
+  - listen
+  - psychology
+  - spot_hidden
+  skill_groups:
+  - key: fighting
+    display_name: 格斗
+    skills: []
+    specialization_groups:
+    - fighting
+    count: 1
+    distinct_directions: false
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  credit_rating_minimum: 60
+  credit_rating_maximum: 95
+  point_formula:
+    fixed:
+      edu: 2
+      app: 2
+    display: EDU×2 + APP×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 49–50（印刷 80–82）
+- key: gangster_underling
+  display_name: 黑帮马仔
+  fixed_skills:
+  - drive_auto
+  - psychology
+  skill_groups:
+  - key: fighting
+    display_name: 格斗
+    skills: []
+    specialization_groups:
+    - fighting
+    count: 1
+    distinct_directions: false
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 20
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 50（印刷 81–82）
+- key: gentleman
+  display_name: 绅士／淑女
+  fixed_skills:
+  - firearms_rifle_shotgun
+  - history
+  - navigate
+  - ride
+  skill_groups:
+  - key: art_craft
+    display_name: 艺术与手艺
+    skills: []
+    specialization_groups:
+    - art_craft
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  credit_rating_minimum: 40
+  credit_rating_maximum: 90
+  point_formula:
+    fixed:
+      edu: 2
+      app: 2
+    display: EDU×2 + APP×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 50（印刷 81–82）
+- key: hobo
+  display_name: 游民
+  fixed_skills:
+  - climb
+  - jump
+  - listen
+  - navigate
+  - stealth
+  skill_groups:
+  - key: art_craft
+    display_name: 艺术与手艺
+    skills: []
+    specialization_groups:
+    - art_craft
+    count: 1
+    distinct_directions: false
+  - key: hands
+    display_name: 选择一项相关技能
+    skills:
+    - locksmith
+    - sleight_of_hand
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 0
+  credit_rating_maximum: 5
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - app
+    - dex
+    choice_multiplier: 2
+    display: EDU×2 + (APP/DEX)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 50（印刷 81–82）
+- key: hospital_orderly
+  display_name: 勤杂护工
+  fixed_skills:
+  - electrical_repair
+  - brawl
+  - first_aid
+  - listen
+  - mechanical_repair
+  - psychology
+  - stealth
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 6
+  credit_rating_maximum: 15
+  point_formula:
+    fixed:
+      edu: 2
+      str: 2
+    display: EDU×2 + STR×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 50（印刷 81–82）
+- key: reporter
+  display_name: 通讯记者
+  fixed_skills:
+  - art_acting
+  - history
+  - listen
+  - own_language
+  - psychology
+  - stealth
+  - spot_hidden
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 50–51（印刷 81–83）
+- key: judge
+  display_name: 法官
+  fixed_skills:
+  - history
+  - intimidate
+  - law
+  - library_use
+  - listen
+  - own_language
+  - persuade
+  - psychology
+  skill_groups: []
+  credit_rating_minimum: 50
+  credit_rating_maximum: 80
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 51（印刷 82–83）
+- key: laboratory_assistant
+  display_name: 实验室助理
+  fixed_skills:
+  - electrical_repair
+  - chemistry
+  - spot_hidden
+  skill_groups:
+  - key: research
+    display_name: 选择一项相关技能
+    skills:
+    - computer_use
+    - library_use
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  - key: science
+    display_name: 科学
+    skills: []
+    specialization_groups:
+    - science
+    count: 2
+    distinct_directions: false
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 10
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 51（印刷 82–83）
+- key: laborer
+  display_name: 非熟练工人
+  fixed_skills:
+  - drive_auto
+  - electrical_repair
+  - first_aid
+  - mechanical_repair
+  - operate_heavy_machinery
+  - throw
+  skill_groups:
+  - key: fighting
+    display_name: 格斗
+    skills: []
+    specialization_groups:
+    - fighting
+    count: 1
+    distinct_directions: false
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 51（印刷 82–83）
+- key: lumberjack
+  display_name: 伐木工
+  fixed_skills:
+  - climb
+  - dodge
+  - fighting_chainsaw
+  - first_aid
+  - jump
+  - mechanical_repair
+  - throw
+  skill_groups:
+  - key: nature
+    display_name: 选择一项相关技能
+    skills:
+    - natural_world
+    - biology
+    - science_botany
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 51（印刷 82–83）
+- key: miner
+  display_name: 矿工
+  fixed_skills:
+  - climb
+  - science_geology
+  - jump
+  - mechanical_repair
+  - operate_heavy_machinery
+  - stealth
+  - spot_hidden
+  skill_groups:
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 51（印刷 82–83）
+- key: mechanic
+  display_name: 技师
+  fixed_skills:
+  - climb
+  - drive_auto
+  - electrical_repair
+  - mechanical_repair
+  - operate_heavy_machinery
+  skill_groups:
+  - key: art_craft
+    display_name: 艺术与手艺
+    skills: []
+    specialization_groups:
+    - art_craft
+    count: 1
+    distinct_directions: false
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 52（印刷 83–84）
+- key: mountain_climber
+  display_name: 登山家
+  fixed_skills:
+  - climb
+  - first_aid
+  - jump
+  - listen
+  - navigate
+  - survival_mountains
+  - track
+  skill_groups:
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  credit_rating_minimum: 30
+  credit_rating_maximum: 60
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 52（印刷 83–84）
+- key: museum_curator
+  display_name: 博物馆管理员
+  fixed_skills:
+  - accounting
+  - appraise
+  - archaeology
+  - history
+  - library_use
+  - occult
+  - spot_hidden
+  skill_groups:
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  credit_rating_minimum: 10
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 52（印刷 83–84）
+- key: occultist
+  display_name: 神秘学家
+  fixed_skills:
+  - anthropology
+  - history
+  - library_use
+  - occult
+  - science_astronomy
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 65
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 53（印刷 84–85）
+- key: outdoorsman
+  display_name: 旅行家
+  fixed_skills:
+  - first_aid
+  - listen
+  - natural_world
+  - navigate
+  - spot_hidden
+  - track
+  skill_groups:
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  - key: survival
+    display_name: 生存
+    skills: []
+    specialization_groups:
+    - survival
+    count: 1
+    distinct_directions: false
+  credit_rating_minimum: 5
+  credit_rating_maximum: 20
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 53（印刷 84–85）
+- key: pharmacist
+  display_name: 药剂师
+  fixed_skills:
+  - accounting
+  - first_aid
+  - language_latin
+  - library_use
+  - psychology
+  - science_pharmacy
+  - chemistry
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 35
+  credit_rating_maximum: 75
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 54（印刷 86–87）
+- key: photographer
+  display_name: 摄影师
+  fixed_skills:
+  - photography
+  - psychology
+  - chemistry
+  - stealth
+  - spot_hidden
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 54（印刷 86–87）
+- key: photojournalist
+  display_name: 摄影记者
+  fixed_skills:
+  - photography
+  - climb
+  - psychology
+  - chemistry
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 10
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 54（印刷 86–87）
+- key: aviator
+  display_name: 特技飞行员（古典）
+  fixed_skills:
+  - accounting
+  - electrical_repair
+  - listen
+  - mechanical_repair
+  - navigate
+  - pilot_aircraft
+  - spot_hidden
+  skill_groups:
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 30
+  credit_rating_maximum: 60
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  source: 调查员手册1.20 PDF 54（印刷 86–87）
+- key: prospector
+  display_name: 淘金客
+  fixed_skills:
+  - climb
+  - first_aid
+  - history
+  - mechanical_repair
+  - navigate
+  - science_geology
+  - spot_hidden
+  skill_groups:
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 0
+  credit_rating_maximum: 10
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 55（印刷 87–88）
+- key: prostitute
+  display_name: 性工作者
+  fixed_skills:
+  - dodge
+  - psychology
+  - sleight_of_hand
+  - stealth
+  skill_groups:
+  - key: art_craft
+    display_name: 艺术与手艺
+    skills: []
+    specialization_groups:
+    - art_craft
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 5
+  credit_rating_maximum: 50
+  point_formula:
+    fixed:
+      edu: 2
+      app: 2
+    display: EDU×2 + APP×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 55（印刷 87–88）
+- key: psychiatrist
+  display_name: 精神病学家
+  fixed_skills:
+  - listen
+  - medicine
+  - persuade
+  - psychoanalysis
+  - psychology
+  - biology
+  - chemistry
+  skill_groups:
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  credit_rating_minimum: 30
+  credit_rating_maximum: 80
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 56（印刷 88–89）
+- key: psychologist
+  display_name: 心理学家／心理分析学家
+  fixed_skills:
+  - accounting
+  - library_use
+  - listen
+  - persuade
+  - psychoanalysis
+  - psychology
+  skill_groups:
+  - key: academic
+    display_name: 学术/个人专业（按人物背景选择）
+    count: 2
+    skills:
+    - accounting
+    - anthropology
+    - archaeology
+    - history
+    - language_latin
+    - own_language
+    - psychology
+    - law
+    - medicine
+    - biology
+    - chemistry
+    - occult
+    - natural_world
+    - photography
+    - first_aid
+    - persuade
+    - charm
+    - fast_talk
+    - intimidate
+    - animal_handling
+    - appraise
+    - disguise
+    - hypnosis
+    - psychoanalysis
+    - lip_reading
+    - language_english
+    - language_french
+    - language_german
+    - language_chinese
+    - language_japanese
+    - language_spanish
+    - language_arabic
+    - language_greek
+    - language_russian
+    - art_acting
+    - art_fine_art
+    - art_forgery
+    - art_literature
+    - art_technical_drawing
+    - art_farming
+    - art_piano
+    - art_violin
+    - art_singing
+    - art_carpentry
+    - art_cooking
+    - science_astronomy
+    - science_botany
+    - science_cryptography
+    - science_engineering
+    - science_forensics
+    - science_geology
+    - science_mathematics
+    - science_meteorology
+    - science_pharmacy
+    - science_physics
+    - science_zoology
+    - lore_folklore
+    specialization_groups:
+    - science
+    - language
+    - art_craft
+    - lore
+    any_skill: false
+    distinct_directions: false
+  credit_rating_minimum: 10
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 56（印刷 88–89）
+- key: researcher
+  display_name: 研究员
+  fixed_skills:
+  - history
+  - library_use
+  - spot_hidden
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  - key: academic
+    display_name: 学术/个人专业（按人物背景选择）
+    count: 3
+    skills:
+    - accounting
+    - anthropology
+    - archaeology
+    - history
+    - language_latin
+    - own_language
+    - psychology
+    - law
+    - medicine
+    - biology
+    - chemistry
+    - occult
+    - natural_world
+    - photography
+    - first_aid
+    - persuade
+    - charm
+    - fast_talk
+    - intimidate
+    - animal_handling
+    - appraise
+    - disguise
+    - hypnosis
+    - psychoanalysis
+    - lip_reading
+    - language_english
+    - language_french
+    - language_german
+    - language_chinese
+    - language_japanese
+    - language_spanish
+    - language_arabic
+    - language_greek
+    - language_russian
+    - art_acting
+    - art_fine_art
+    - art_forgery
+    - art_literature
+    - art_technical_drawing
+    - art_farming
+    - art_piano
+    - art_violin
+    - art_singing
+    - art_carpentry
+    - art_cooking
+    - science_astronomy
+    - science_botany
+    - science_cryptography
+    - science_engineering
+    - science_forensics
+    - science_geology
+    - science_mathematics
+    - science_meteorology
+    - science_pharmacy
+    - science_physics
+    - science_zoology
+    - lore_folklore
+    specialization_groups:
+    - science
+    - language
+    - art_craft
+    - lore
+    any_skill: false
+    distinct_directions: false
+  credit_rating_minimum: 9
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 56（印刷 88–89）
+- key: naval_sailor
+  display_name: 军舰海员
+  fixed_skills:
+  - first_aid
+  - navigate
+  - pilot_boat
+  - survival_sea
+  - swim
+  skill_groups:
+  - key: repair
+    display_name: 选择一项相关技能
+    skills:
+    - electrical_repair
+    - mechanical_repair
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: fighting
+    display_name: 格斗
+    skills: []
+    specialization_groups:
+    - fighting
+    count: 1
+    distinct_directions: false
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  credit_rating_minimum: 9
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 56（印刷 88–89）
+- key: commercial_sailor
+  display_name: 民用船海员
+  fixed_skills:
+  - first_aid
+  - mechanical_repair
+  - natural_world
+  - navigate
+  - pilot_boat
+  - spot_hidden
+  - swim
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 56（印刷 88–89）
+- key: salesperson
+  display_name: 推销员
+  fixed_skills:
+  - accounting
+  - drive_auto
+  - listen
+  - psychology
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: hands
+    display_name: 选择一项相关技能
+    skills:
+    - stealth
+    - sleight_of_hand
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 2
+      app: 2
+    display: EDU×2 + APP×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 57（印刷 89–90）
+- key: scientist
+  display_name: 科学家
+  fixed_skills:
+  - own_language
+  - spot_hidden
+  skill_groups:
+  - key: science
+    display_name: 科学
+    skills: []
+    specialization_groups:
+    - science
+    count: 3
+    distinct_directions: false
+  - key: research
+    display_name: 选择一项相关技能
+    skills:
+    - computer_use
+    - library_use
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 50
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 57（印刷 89–90）
+- key: secretary
+  display_name: 秘书
+  fixed_skills:
+  - accounting
+  - own_language
+  - psychology
+  skill_groups:
+  - key: office
+    display_name: 选择一项相关技能
+    skills:
+    - art_typing
+    - art_shorthand
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: research
+    display_name: 选择一项相关技能
+    skills:
+    - computer_use
+    - library_use
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 30
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - app
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/APP)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 57（印刷 89–90）
+- key: shopkeeper
+  display_name: 店老板
+  fixed_skills:
+  - accounting
+  - electrical_repair
+  - listen
+  - mechanical_repair
+  - psychology
+  - spot_hidden
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - app
+    - dex
+    choice_multiplier: 2
+    display: EDU×2 + (APP/DEX)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 57（印刷 89–90）
+- key: spy
+  display_name: 间谍
+  fixed_skills:
+  - listen
+  - psychology
+  - sleight_of_hand
+  - stealth
+  skill_groups:
+  - key: cover
+    display_name: 选择一项相关技能
+    skills:
+    - art_acting
+    - disguise
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: firearms
+    display_name: 射击
+    skills: []
+    specialization_groups:
+    - firearms
+    count: 1
+    distinct_directions: false
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 60
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - app
+    - dex
+    choice_multiplier: 2
+    display: EDU×2 + (APP/DEX)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 58（印刷 90–91）
+- key: student
+  display_name: 学生／实习生
+  fixed_skills:
+  - library_use
+  - listen
+  skill_groups:
+  - key: language
+    display_name: 选择一项相关技能
+    skills:
+    - own_language
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: true
+  - key: academic
+    display_name: 学术/个人专业（按人物背景选择）
+    count: 3
+    skills:
+    - accounting
+    - anthropology
+    - archaeology
+    - history
+    - language_latin
+    - own_language
+    - psychology
+    - law
+    - medicine
+    - biology
+    - chemistry
+    - occult
+    - natural_world
+    - photography
+    - first_aid
+    - persuade
+    - charm
+    - fast_talk
+    - intimidate
+    - animal_handling
+    - appraise
+    - disguise
+    - hypnosis
+    - psychoanalysis
+    - lip_reading
+    - language_english
+    - language_french
+    - language_german
+    - language_chinese
+    - language_japanese
+    - language_spanish
+    - language_arabic
+    - language_greek
+    - language_russian
+    - art_acting
+    - art_fine_art
+    - art_forgery
+    - art_literature
+    - art_technical_drawing
+    - art_farming
+    - art_piano
+    - art_violin
+    - art_singing
+    - art_carpentry
+    - art_cooking
+    - science_astronomy
+    - science_botany
+    - science_cryptography
+    - science_engineering
+    - science_forensics
+    - science_geology
+    - science_mathematics
+    - science_meteorology
+    - science_pharmacy
+    - science_physics
+    - science_zoology
+    - lore_folklore
+    specialization_groups:
+    - science
+    - language
+    - art_craft
+    - lore
+    any_skill: false
+    distinct_directions: false
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 5
+  credit_rating_maximum: 10
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 58（印刷 90–91）
+- key: stuntman
+  display_name: 替身演员
+  fixed_skills:
+  - climb
+  - dodge
+  - first_aid
+  - jump
+  - swim
+  skill_groups:
+  - key: repair
+    display_name: 选择一项相关技能
+    skills:
+    - electrical_repair
+    - mechanical_repair
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: fighting
+    display_name: 格斗
+    skills: []
+    specialization_groups:
+    - fighting
+    count: 1
+    distinct_directions: false
+  - key: stunt
+    display_name: 选择一项相关技能
+    skills:
+    - diving
+    - drive_auto
+    - ride
+    specialization_groups:
+    - pilot
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 10
+  credit_rating_maximum: 50
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - dex
+    - str
+    choice_multiplier: 2
+    display: EDU×2 + (DEX/STR)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 58（印刷 90–91）
+- key: undertaker
+  display_name: 殡葬师
+  fixed_skills:
+  - accounting
+  - drive_auto
+  - history
+  - occult
+  - psychology
+  - biology
+  - chemistry
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 58（印刷 90–91）
+- key: union_activist
+  display_name: 工会活动家
+  fixed_skills:
+  - accounting
+  - brawl
+  - law
+  - listen
+  - operate_heavy_machinery
+  - psychology
+  skill_groups:
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  credit_rating_minimum: 5
+  credit_rating_maximum: 50
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 58–59（印刷 90–93）
+- key: waiter
+  display_name: 服务生
+  fixed_skills:
+  - accounting
+  - dodge
+  - listen
+  - psychology
+  skill_groups:
+  - key: art_craft
+    display_name: 艺术与手艺
+    skills: []
+    specialization_groups:
+    - art_craft
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 1
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 20
+  point_formula:
+    fixed:
+      edu: 2
+    choice_attributes:
+    - app
+    - dex
+    choice_multiplier: 2
+    display: EDU×2 + (APP/DEX)×2
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 59（印刷 91–93）
+- key: clerk
+  display_name: 职员／主管
+  fixed_skills:
+  - accounting
+  - law
+  - listen
+  skill_groups:
+  - key: language
+    display_name: 选择一项相关技能
+    skills:
+    - own_language
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: true
+  - key: research
+    display_name: 选择一项相关技能
+    skills:
+    - computer_use
+    - library_use
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 1
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 9
+  credit_rating_maximum: 20
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 59（印刷 91–93）
+- key: manager
+  display_name: 中层／高层管理人员
+  fixed_skills:
+  - accounting
+  - law
+  - psychology
+  skill_groups:
+  - key: language
+    display_name: 外语
+    skills: []
+    specialization_groups:
+    - language
+    count: 1
+    distinct_directions: false
+  - key: social
+    display_name: 社交技能
+    skills:
+    - charm
+    - fast_talk
+    - intimidate
+    - persuade
+    specialization_groups: []
+    count: 2
+    distinct_directions: true
+  - key: personal
+    display_name: 个人或时代特长
+    count: 2
+    any_skill: true
+  credit_rating_minimum: 20
+  credit_rating_maximum: 80
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 59（印刷 91–93）
+- key: zookeeper
+  display_name: 饲养员
+  fixed_skills:
+  - animal_handling
+  - accounting
+  - dodge
+  - first_aid
+  - natural_world
+  - medicine
+  - science_pharmacy
+  - science_zoology
+  skill_groups: []
+  credit_rating_minimum: 9
+  credit_rating_maximum: 40
+  point_formula:
+    fixed:
+      edu: 4
+    display: EDU×4
+  eras:
+  - 1920s
+  - modern
+  source: 调查员手册1.20 PDF 59（印刷 91–93）
+specialization_policies:
+  pilot:
+    requires_keeper_approval: true
+    custom_only: true
+    note: 驾驶基础1；具体水上或空中载具须由KP核对年代与背景后允许。1920年代飞行器限热气球、飞艇和民用螺旋桨飞机。
+    modern_name_fragments:
+    - 喷气
+    - 直升
+    - 客机
+    - jet
+    - helicopter
+    - airliner
+  survival:
+    note: 生存基础10；名称须是具体环境，各专业独立分配，不自动获得跨专业加值。
+  lore:
+    requires_keeper_approval: true
+    note: 学问基础1；仅在KP决定将该特殊知识领域引入游戏后购点。须为具体、非常规的知识，不能代替克苏鲁神话或授予法术。
+    forbidden_names:
+    - 克苏鲁神话
+    - 克苏鲁神话知识
+    - Cthulhu Mythos
+    - cthulhu_mythos

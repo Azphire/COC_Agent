@@ -192,6 +192,9 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
     ):
         issue("selected_specializations", "selection", "专业必须唯一且来自目录或本卡自定义专业")
     active_specializations = set(selected) | allowed
+    from app.rules.specializations import validate_specialization_approvals
+
+    validate_specialization_approvals(character, ruleset, definitions, issue)
     for field in ("occupation_skills", "interest_skills"):
         for key, allocation in getattr(character, field).items():
             if key not in definitions:

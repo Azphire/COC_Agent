@@ -111,6 +111,7 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
         occupation_attribute: form.occupation_attribute, occupation_group_choices: form.occupation_group_choices,
         selected_specializations: form.selected_specializations, era: form.era, background: form.background,
         custom_specializations: form.custom_specializations,
+        approve_specializations: form.approve_specializations,
         asset_details: form.asset_details, equipment: form.equipment,
       }
       if (saved.creation_mode === 'point_buy') body.attributes = form.attributes

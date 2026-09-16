@@ -78,7 +78,7 @@ class SubmissionService:
         require(not identity.is_host, "请使用玩家的房间成员身份提交角色", 403)
         require(room.status == "lobby", "只能在游戏开始前的大厅提交角色")
         character = self.characters.prepare_import(document)
-        if not character.validation.valid:
+        if any(i.code != "keeper_approval" for i in character.validation.issues):
             raise CharacterError(
                 422, "角色校验未通过，请在原车卡工具修正后重新导出", character.validation.issues
             )
@@ -136,6 +136,16 @@ class SubmissionService:
                 require(occupied is None, "提交者已有角色，请先在房间调查员中取消原角色分配")
                 require(len(slots) < 100, "房间最多发布 100 个角色")
                 draft = CharacterDraft.model_validate(row.character)
+                from app.rules.specializations import approve_specializations
+
+                try:
+                    approve_specializations(
+                        draft,
+                        self.characters.ruleset(draft.ruleset_id, draft.ruleset_version),
+                        body.approve_specializations,
+                    )
+                except ValueError as error:
+                    raise CharacterError(422, str(error)) from error
                 sheet = self.characters.finalize_candidate(draft, draft.version)
                 await self.characters.repository.save_in_session(
                     session,

@@ -4,8 +4,8 @@ export type ValidationIssue = { field: string; code: string; message: string }
 export type CharacteristicValue = { value: number }
 export type SkillAllocation = { points: number }
 export type Skill = { key: string; display_name: string; base_value: number; maximum: number; category: string; allocatable: boolean; specialization_group: string | null; eras: string[] }
-export type SkillGroup = { key: string; display_name: string; count: number; skills: string[]; specialization_groups: string[]; any_skill: boolean }
-export type CustomSpecialization = { id: string; group: 'language' | 'art_craft' | 'science'; name: string }
+export type SkillGroup = { key: string; display_name: string; count: number; skills: string[]; specialization_groups: string[]; any_skill: boolean; distinct_directions: boolean }
+export type CustomSpecialization = { id: string; group: 'language' | 'art_craft' | 'science' | 'pilot' | 'survival' | 'lore'; name: string }
 export type Equipment = { id: string; catalog_id: string | null; name: string; quantity: number; notes: string }
 export type EquipmentDefinition = { id: string; name: string; eras: string[]; weapon: boolean }
 export type Background = { appearance: string; beliefs: string; people: string; places: string; possessions: string; traits: string; key_connection: string | null }
@@ -17,6 +17,7 @@ export type RuleSet = {
   points: { attribute_pool: number; allow_unspent_points: boolean; attribute_cost_origin: 'minimum' | 'zero'; allow_unspent_attribute_points: boolean } | null
   skills: Skill[]
   custom_specialization_templates: Record<string, string>
+  specialization_policies: Record<string, { requires_keeper_approval: boolean; custom_only: boolean; note: string }>
   occupations: { key: string; display_name: string; fixed_skills: string[]; selectable_skills: string[]; required_selection_count: number; credit_rating_minimum: number | null; credit_rating_maximum: number | null; eras: string[]; source: string; skill_groups: SkillGroup[]; point_formula: { fixed: Record<string, number>; choice_attributes: string[]; choice_multiplier: number; display: string } | null }[]
   age_rules: { bands: { minimum: number; maximum: number; deduction_pool: number; deduction_attributes: string[] }[] } | null
 }
@@ -27,6 +28,7 @@ export type Character = {
   selected_occupation_skills: string[]; attributes: Record<string, CharacteristicValue>
   occupation_attribute: string | null; occupation_group_choices: Record<string, string[]>; selected_specializations: string[]
   custom_specializations: CustomSpecialization[]
+  specialization_approvals: Record<string, string>
   era: '1920s' | 'modern'; background: Background; asset_details: { description: string; value: number }[]; equipment: Equipment[]
   finances: { currency: string; level: string; cash: number; assets: number; spending: number; assets_lower_bound: boolean }
   derived_values: Record<string, number | string>; occupation_skills: Record<string, SkillAllocation>
@@ -39,7 +41,7 @@ export type Character = {
   created_at: string; updated_at: string; version: number
 }
 export type BasicFields = Pick<Character, 'name' | 'player_name' | 'age'>
-export type EditableFields = BasicFields & Pick<Character, 'occupation' | 'selected_occupation_skills' | 'attributes' | 'occupation_skills' | 'interest_skills' | 'age_deductions' | 'occupation_attribute' | 'occupation_group_choices' | 'selected_specializations' | 'custom_specializations' | 'era' | 'background' | 'asset_details' | 'equipment'>
+export type EditableFields = BasicFields & Pick<Character, 'occupation' | 'selected_occupation_skills' | 'attributes' | 'occupation_skills' | 'interest_skills' | 'age_deductions' | 'occupation_attribute' | 'occupation_group_choices' | 'selected_specializations' | 'custom_specializations' | 'era' | 'background' | 'asset_details' | 'equipment'> & { approve_specializations?: string[] }
 export type CharacterExport = {
   schema_version: number; exported_at: string; character: Character
   ruleset: { id: string; version: string; verification_status: string }

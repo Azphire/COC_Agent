@@ -95,6 +95,7 @@ class ReviewCharacterSubmission(DomainModel):
     expected_version: Annotated[StrictInt, Field(ge=1)]
     decision: Literal["accept", "reject"]
     reason: ShortText = ""
+    approve_specializations: list[str] = Field(default_factory=list, max_length=200)
     client_request_id: UUID
 
 

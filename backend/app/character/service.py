@@ -168,13 +168,22 @@ class CharacterService:
         character = await self.get(character_id)
         self.check_editable(character, request.version)
         ruleset = self.ruleset(character.ruleset_id, character.ruleset_version)
-        changes = request.model_dump(exclude_unset=True, exclude={"version", "derived_values"})
+        changes = request.model_dump(
+            exclude_unset=True, exclude={"version", "derived_values", "approve_specializations"}
+        )
         if ruleset.age_rules and "age" in changes and changes["age"] != character.age:
             raise CharacterError(422, "年龄已锁定，不能通过修改年龄重新获得幸运或教育检定")
         if "attributes" in changes and character.creation_mode == "random":
             raise CharacterError(422, "随机模式的属性不能修改或重掷")
         candidate = CharacterDraft.model_validate({**character.model_dump(), **changes})
         self.check_known(candidate, ruleset)
+        if request.approve_specializations is not None:
+            from app.rules.specializations import approve_specializations
+
+            try:
+                approve_specializations(candidate, ruleset, request.approve_specializations)
+            except ValueError as error:
+                raise CharacterError(422, str(error)) from error
         recalculate(candidate, ruleset)
         candidate.version += 1
         candidate.updated_at = utc_now()
@@ -216,6 +225,8 @@ class CharacterService:
         }
         if details:
             events.append(("character_details_updated", {"fields": sorted(details)}))
+        if request.approve_specializations:
+            events.append(("specializations_approved", {"skills": request.approve_specializations}))
         await self.repository.save(candidate, events, expected_version=request.version)
         return candidate
 
@@ -280,6 +291,7 @@ class CharacterService:
                 "id": uuid4(),
                 "original_id": original.id,
                 "status": "draft",
+                "specialization_approvals": {},
                 "version": 1,
                 "created_at": utc_now(),
                 "updated_at": utc_now(),

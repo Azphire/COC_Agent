@@ -1,6 +1,7 @@
 """Verified local CoC7 check subset. See definitions/SOURCES.md, batch 3."""
 
 from app.dice.service import DiceService
+from app.rules.loader import runtime_ruleset
 
 # Local CoC7 rulebook PDF 68–69. Older frozen cards predate this minimal subset.
 MODULE_BASE_SKILLS = {"stealth": 20, "throw": 20}
@@ -9,7 +10,27 @@ MODULE_BASE_SKILLS = {"stealth": 20, "throw": 20}
 def available_skills(snapshot):
     values = snapshot.get("skill_values", {})
     if snapshot.get("ruleset_id") == "coc7-character-creation":
-        return {**MODULE_BASE_SKILLS, **values}
+        values = {**MODULE_BASE_SKILLS, **values}
+        rules = runtime_ruleset(snapshot["ruleset_id"], snapshot.get("ruleset_version", ""))
+        if rules and rules.specialization_policies:
+            # Unselected catalogue lore is not automatically acquired at its base.
+            # Old frozen cards retain their original semantics.
+            restricted = {
+                s.key
+                for s in rules.skills
+                if (policy := rules.specialization_policies.get(s.specialization_group))
+                and policy.requires_keeper_approval
+                and not policy.custom_only
+            }
+            restricted.update(
+                s["id"]
+                for s in snapshot.get("custom_specializations", [])
+                if rules.specialization_policies.get(s["group"])
+                and rules.specialization_policies[s["group"]].requires_keeper_approval
+            )
+            approvals = snapshot.get("specialization_approvals", {})
+            values = {k: v for k, v in values.items() if k not in restricted or k in approvals}
+        return values
     return values
 
 
@@ -21,14 +42,15 @@ def prompt_skills(snapshot, action=""):
     plus chosen, trained, occupational or explicitly named new skills.
     """
     values = available_skills(snapshot)
-    if snapshot.get("ruleset_version") != "1.1.0":
+    if snapshot.get("ruleset_version") in {None, "1.0.0"}:
         return values
-    from app.rules.loader import archived_ruleset, load_rulesets
-
-    rules = load_rulesets().get(snapshot.get("ruleset_id"))
+    rules = runtime_ruleset(snapshot.get("ruleset_id"), snapshot.get("ruleset_version"))
     if not rules:
         return values
-    common = {s.key for s in archived_ruleset(rules.id, "1.0.0").skills}
+    original = runtime_ruleset(rules.id, "1.0.0")
+    if not original:
+        return values
+    common = {s.key for s in original.skills}
     chosen = set(snapshot.get("selected_specializations", []))
     for keys in snapshot.get("occupation_group_choices", {}).values():
         chosen.update(keys)
@@ -50,7 +72,7 @@ def prompt_skills(snapshot, action=""):
     }
     from app.rules.specializations import snapshot_skill_names
 
-    result.update({k: values[k] for k in snapshot_skill_names(snapshot)})
+    result.update({k: values[k] for k in snapshot_skill_names(snapshot) if k in values})
     return result
 
 

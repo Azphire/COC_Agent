@@ -35,6 +35,7 @@ class PatchCharacterRequest(DomainModel):
     occupation_group_choices: dict[str, list[str]] | None = None
     selected_specializations: list[str] | None = Field(default=None, max_length=200)
     custom_specializations: list[CustomSpecialization] | None = Field(default=None, max_length=50)
+    approve_specializations: list[str] | None = Field(default=None, max_length=200)
     era: Literal["1920s", "modern"] | None = None
     background: Background | None = None
     asset_details: list[AssetDetail] | None = Field(default=None, max_length=100)
@@ -52,6 +53,7 @@ class PatchCharacterRequest(DomainModel):
             "occupation_group_choices",
             "selected_specializations",
             "custom_specializations",
+            "approve_specializations",
             "era",
             "background",
             "asset_details",

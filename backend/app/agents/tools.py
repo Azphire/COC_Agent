@@ -424,8 +424,13 @@ class AgentTools:
                 None,
             )
             require(slot is not None, "角色不在本房间", 404)
+            from app.rules.checks import available_skills
+            from app.rules.specializations import snapshot_skill_names
+
             return {
                 **slot.character_snapshot,
+                "skill_values": available_skills(slot.character_snapshot),
+                "custom_skill_names": snapshot_skill_names(slot.character_snapshot),
                 "runtime": room.session_state.get("characters", {}).get(slot.id, {}),
             }
         if name == "request_sanity_check":

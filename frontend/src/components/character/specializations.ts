@@ -7,5 +7,6 @@ export function characterSkills(ruleset: RuleSet, custom: CustomSpecialization[]
   })]
 }
 
-export const specializationLabels = { language: '外语', art_craft: '艺术与手艺', science: '科学' }
+export const specializationLabels = { language: '外语', art_craft: '艺术与手艺', science: '科学', pilot: '驾驶', survival: '生存', lore: '学问' }
+export const specializationName = (s: CustomSpecialization) => `${specializationLabels[s.group]}（${s.name}）`
 export const normalizedName = (name: string) => name.normalize('NFKC').toLocaleLowerCase().replace(/\s/g, '')
