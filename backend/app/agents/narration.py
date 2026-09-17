@@ -133,6 +133,15 @@ def response_brief(plan, context, results, *, withdrawal=None):
             for r in e.get("current_state_receipts", [])
         ],
         "incidental_memories": context.get("incidental_memories", []),
+        "recent_dialogue": context.get("recent_dialogue", [])[-6:],
+        "visit_kind": next(
+            (
+                e["payload"].get("visit_kind", "first")
+                for e in reversed(results["events"])
+                if e["type"] == "scene.updated"
+            ),
+            "continuing",
+        ),
         "completed_results": results,
         "withdrawal": withdrawal,
         "pending_decisions": list(
@@ -173,7 +182,9 @@ def action_lead(intent, results):
 
 
 class NarrationValidator:
-    def validate(self, output, *, documents, public_ids, scene_id, results):
+    def validate(
+        self, output, *, documents, public_ids, scene_id, results, brief=None, inventory_state=None
+    ):
         text = "\n".join(
             [
                 output.public_narration,
@@ -215,18 +226,121 @@ class NarrationValidator:
             "转场尚未发生",
             422,
         )
-        if not transitions and results.get("failed_tools"):
+        if not transitions and (
+            results.get("failed_tools")
+            or results.get("blocked_operations")
+            or (brief or {}).get("movement_requested")
+        ):
             require(
-                not re.search(r"(?:已经|已|成功)(?:到达|抵达|进入|穿过)", text),
+                not re.search(
+                    r"(?:已经|已|成功)(?:到达|抵达|进入|穿过)|你(?:们)?(?:来到了|进入了|抵达了)",
+                    text,
+                ),
                 "失败的转场不能叙述为已经到达",
                 422,
             )
+        discovered = [
+            e["payload"].get("public_summary", e["payload"].get("content", ""))
+            for e in results["events"]
+            if e["type"] in {"entity.revealed", "clue.revealed"}
+        ]
+        interactions = [
+            e["payload"].get("text", "")
+            for e in results["events"]
+            if e["type"] == "module.interaction"
+        ]
+        sources = [*(brief or {}).get("source_quotes", []), *discovered, *interactions]
+        if sources:
+            material = re.sub(r"[\W_]", "", "\n".join(sources))
+            if any(re.search(r"写着|写道|写有|内容是", s) for s in sources):
+                require(
+                    not re.search(
+                        r"(?:没有|并无|没见到|看不到)(?:任何|什么)?(?:文字|字迹|内容)", text
+                    ),
+                    "叙事否定了已公开的文字内容",
+                    422,
+                )
+            for literal in re.findall(
+                r"(?:写着|写道|写有|上写|内容是)[：:\s“‘\"]*([^。；！？”\"]+)", text
+            ):
+                compact = re.sub(r"[\W_]", "", literal)
+                require(not compact or compact in material, "文字内容没有对应的已公开来源", 422)
+            for source in sources:
+                # Short labelled values (names, dates, codes) are source facts,
+                # not licence to substitute a different value in natural prose.
+                for label, value in re.findall(
+                    r"(?:^|[。；\n])([^：:\n]{2,16})[：:]([^。；\n]{1,30})", source
+                ):
+                    if re.search(r"写着|写道|写有|内容是", label):
+                        continue
+                    if label[-2:] in text:
+                        require(
+                            re.sub(r"[\W_]", "", value) in re.sub(r"[\W_]", "", text),
+                            "叙事改写了本轮已确认的具体内容：" + source,
+                            422,
+                        )
+        uncertain = re.search(r"未|没|无法|不能|不清|不确定|难以|仍需|尚需", text)
+        if not any(discovered) and (
+            (brief or {}).get("unconfirmed_target") or results.get("blocked_discovery")
+        ):
+            require(bool(uncertain), "未确认的调查不能叙述为已经发现内容", 422)
+        if results.get("blocked_operations") and not any(interactions):
+            for clause in re.split(r"[。；\n]", text):
+                if not re.search(r"未|没|无法|不能|如果|假如", clause):
+                    require(
+                        not re.search(
+                            r"接过|拿到了|收到了|已交给|交到了|成功.{0,8}(?:给|取|拿)", clause
+                        ),
+                        "没有完成的物品操作不能叙述为已收到",
+                        422,
+                    )
+        if (brief or {}).get("inventory_probe") and inventory_state is not None:
+            actor = (brief or {}).get("speaker_id")
+            holders = [
+                h
+                for h in inventory_state.get("holders", [])
+                if not actor or h.get("holder_id") == actor
+            ]
+            for clause in re.split(r"[。；\n]", text):
+                if not re.search(r"未|没|如果|假如", clause) and re.search(
+                    r"拿着|拿到了|找到|发现|取出|口袋里有", clause
+                ):
+                    require(
+                        any(h.get("title") and h["title"] in clause for h in holders),
+                        "随身物发现必须与实际登记的持有状态一致",
+                        422,
+                    )
         if checks:
             passed = checks.get(output.check_result_reference, next(iter(checks.values())))[
                 "result"
             ]["passed"]
             contradictory = r"检定失败|未通过|没有成功" if passed else r"检定成功|检定通过|成功地"
             require(not re.search(contradictory, text), "叙事与真实检定结果冲突", 422)
+            require(
+                passed or any(discovered) or bool(uncertain),
+                "检定失败后需要说明实际后果或未能确认的内容",
+                422,
+            )
+            visible_text = output.public_narration + (
+                output.npc_speech.text if output.npc_speech else ""
+            )
+
+            def includes_feedback(source):
+                grams = {
+                    source[i : i + 2]
+                    for i in range(len(source) - 1)
+                    if re.fullmatch(r"[\w\u4e00-\u9fff]{2}", source[i : i + 2])
+                }
+                return sum(g in visible_text for g in grams) >= min(3, len(grams))
+
+            require(
+                not passed
+                or not any(discovered)
+                or any(includes_feedback(s) for s in discovered if s),
+                "成功后的具体反馈没有出现在发言中，请自然解释本轮实际发现："
+                + "；".join(discovered)[:500],
+                422,
+            )
         require(
             not re.search(
                 r"(?:受到|扣除|损失|恢复|获得).{0,6}[一二三四五六七八九十百\d]+点?(?:伤害|生命|HP|MP|幸运)",
@@ -249,6 +363,19 @@ class NarrationValidator:
 def fallback_narration(
     intent_type, results, public_scene, *, rejected=False, brief=None, inventory_state=None
 ):
+    if (brief or {}).get("inventory_probe") and inventory_state is not None:
+        if any(
+            m.get("starting_belongings") == "undetermined"
+            for m in inventory_state.get("members", [])
+        ):
+            from app.preparation.inventory import inventory_reply
+
+            pending = any(e["type"] == "check.requested" for e in results["events"])
+            return ("请先完成本次随身物检定。\n" if pending else "") + "\n".join(
+                inventory_reply(inventory_state, m["id"]).replace("我", m.get("name", "调查员"), 1)
+                for m in inventory_state.get("members", [])
+                if not (brief or {}).get("speaker_id") or m["id"] == brief["speaker_id"]
+            )
     interactions = [
         e["payload"].get("text")
         for e in results["events"]
@@ -276,19 +403,35 @@ def fallback_narration(
             if check["result"]["passed"]
             else "检定失败，这次尝试未能达到目标。"
         )
+        task_feedback = list(dict.fromkeys([*reveals, *(brief or {}).get("source_quotes", [])]))
+        if not task_feedback:
+            task_feedback = [
+                "你完成了这次尝试，但尚未确认额外的线索内容。"
+                if check["result"]["passed"]
+                else "你没能确认这次要查明的内容；可以换一个有新依据的方法。"
+            ]
         return "\n".join(
             filter(
                 None,
                 [
                     outcome,
                     check.get("display_text") or check_display(check)["display_text"],
-                    *reveals,
+                    *task_feedback,
                 ],
             )
         )
     if transitions:
-        return transitions[-1].get("scene_summary") or "你已抵达当前场景，可以继续查看周围。"
+        latest = transitions[-1]
+        if latest.get("visit_kind") == "revisit":
+            return (
+                "你回到"
+                + latest.get("scene_title", "先前的地方")
+                + "，可以根据眼前的状态继续行动。"
+            )
+        return latest.get("scene_summary") or "你已抵达当前场景，可以继续查看周围。"
     if results.get("blocked_operations"):
+        if reveals:
+            return "这次请求的操作未全部完成。\n" + "\n".join(dict.fromkeys(reveals))
         return "这次动作没有完成，当前状态未因这次尝试改变。"
     if (brief or {}).get("movement_requested"):
         return (
@@ -301,6 +444,10 @@ def fallback_narration(
     if results.get("blocked_discovery"):
         return "这次尚未确认新的线索内容，仍需满足该目标的调查条件。"
     brief = brief or {}
+    if brief.get("unconfirmed_target"):
+        return "你尚未实际确认这个目标的内容，可以先尝试调查眼前的目标。"
+    if brief.get("source_quotes"):
+        return "\n".join(brief["source_quotes"])
     if brief.get("responder", {}).get("kind") == "teammate" and not brief.get("attempt"):
         return "你向" + brief["responder"].get("name", "队友") + "说出了这番话。"
     topic = " ".join(str(brief.get(k, "")) for k in ("attempt", "question", "purpose"))

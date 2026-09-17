@@ -83,6 +83,18 @@ def unresolved_search_plan(plan, context):
 
 
 def validate_search_plan(plan, context):
+    from app.preparation.inventory import inventory_probe
+
+    if (
+        context.get("prepared_module")
+        and plan.focus
+        and not plan.proposed_check
+        and inventory_probe(plan.focus.action)
+        and "search" in action_kinds(plan.focus.action)
+    ):
+        # The existing inventory method stage binds the actor, chosen item and
+        # its actual luck check. Do not demand a world-clue search beforehand.
+        return
     unbound = unbound_search_result(plan, context)
     if not unbound and not unresolved_search_plan(plan, context):
         return
@@ -197,6 +209,7 @@ def named_local_interaction_ids(facts, action=None):
     """
     from app.agents.action_policy import local_scene_movement
     from app.agents.check_policy import entity_access
+    from app.knowledge.text import tokens
     from app.preparation.action_authority import aliases, mentions_alias, required_kinds
     from app.preparation.runtime_schemas import ModuleInteraction
 
@@ -222,6 +235,11 @@ def named_local_interaction_ids(facts, action=None):
         )
         and (
             any(mentions_alias(action, name) for name in aliases(entity))
+            # Prepared method titles may wrap the physical object's name in
+            # descriptive words. Only public, local, operation-compatible
+            # candidates participate; the caller still requires uniqueness.
+            or eid in facts.revealed_entity_ids
+            and bool(set(tokens(entity.get("title", ""))) & set(tokens(action)))
             or local_stealth
             and entity.get("type") == "location"
             and any(
@@ -257,6 +275,15 @@ def repair_local_interaction_target(plan, facts, members, runtime=None):
     ]
     if (
         len(transfers) == 1
+        and plan.parsed_intent.type in {"investigate", "observe", "interact", "use_item", "wait"}
+        and not plan.proposed_transition_id
+        and (
+            not plan.focus
+            or not plan.focus.action
+            or plan.focus.action not in facts.raw_text
+            or transfers[0] in plan.focus.action
+            and not set(action_kinds(plan.focus.action)) - {"take", "give", "place", "converse"}
+        )
         and not readonly_recall(facts.raw_text)
         and not teammate_request(
             facts.raw_text, members, facts.actor_member_id, action=transfers[0]
@@ -291,7 +318,9 @@ def repair_local_interaction_target(plan, facts, members, runtime=None):
                     objects = owned
         if len(objects) == 1:
             target = objects.pop()
-            plan.focus = TurnFocus(action=action, action_target_id=target)
+            plan.focus = (plan.focus or TurnFocus()).model_copy(
+                update={"action": action, "action_target_id": target}
+            )
             plan.parsed_intent.type = "interact"
             plan.parsed_intent.target_id = target
             plan.parsed_intent.target_kind = "item"
@@ -307,6 +336,19 @@ def repair_local_interaction_target(plan, facts, members, runtime=None):
             plan.expected_next_phase = "narration"
 
     focus = plan.focus
+    if focus and focus.action and plan.parsed_intent.type == "move":
+        from app.agents.action_policy import explicit_movement
+
+        # A named device operation cannot acquire a scene transition merely
+        # because its light or sound is aimed in a direction.
+        local = named_local_interaction_ids(facts, focus.action)
+        if (
+            not explicit_movement(focus.action)
+            and len(local) == 1
+            and set(action_kinds(focus.action)) & {"light", "sound_start", "sound_stop"}
+        ):
+            plan.parsed_intent.type = "use_item"
+            plan.proposed_transition_id = None
     if (
         not focus
         or not focus.action
@@ -419,7 +461,8 @@ def complete_automatic_discovery(value, context):
         or value["parsed_intent"]["type"] not in {"observe", "investigate", "interact"}
         or not kinds
         or kinds - {"observe", "search"}
-        or NON_ACTION.search(action) and not declared_action(action)
+        or NON_ACTION.search(action)
+        and not declared_action(action)
     ):
         return
     target = focus.get("action_target_id")
@@ -462,14 +505,13 @@ def repair_belongings_action(value, context):
     from app.preparation.inventory import inventory_probe
 
     focus = value.get("focus") or {}
-    if "search" in action_kinds(focus.get("action", "")):
-        return
     trigger = context.get("triggering_action", {})
     raw = trigger.get("payload", {}).get("text", "")
     if context.get("readonly_recall") or teammate_request(
         raw,
         context.get("current_participants", {}).get("members", {}),
         trigger.get("actor_member_id"),
+        action=focus.get("action"),
     ):
         return
     probes = [
@@ -484,10 +526,17 @@ def repair_belongings_action(value, context):
         len(probes) == 1
         and focus.get("action")
         and re.search(r"随身|口袋|衣袋|保留|留下", focus["action"])
-        and not set(action_kinds(focus["action"])) - {"observe", "converse"}
+        and not set(action_kinds(focus["action"])) - {"observe", "converse", "search"}
     ):
         focus["action"] = probes[0]
         value["parsed_intent"]["type"] = "investigate"
+        # Self-inspection targets the actor's current location, not a paper
+        # mentioned in a separate question. The inventory method chooses items.
+        focus["action_target_id"] = (
+            context.get("action_identifiers", {}).get("current_scene_id")
+            or context.get("module", {}).get("current_scene", {}).get("node_id")
+            or focus.get("action_target_id")
+        )
 
 
 def repair_search_target(value, context):

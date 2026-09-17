@@ -257,19 +257,28 @@ class RoomEntityService:
         )
         return entity
 
-    async def check_conditions(self, session, room, entity, cycle_id=None, for_check=False):
-        binding = await self.binding(session, room.id)
-        if await self.agents.navigation.state(session, room.id) and not entity.snapshot.get(
-            "approved_review_id"
-        ):
-            _, snapshot, _, local, _, _ = await self.agents.module_context.allowed(session, room)
+    async def check_conditions(
+        self, session, room, entity, cycle_id=None, for_check=False, *, condition_context=None
+    ):
+        # Shared only within one read-only facts pass. Never retained across a
+        # receipt, turn, or transaction; execution checks load fresh authority.
+        context = condition_context if condition_context is not None else {}
+        if "binding" not in context:
+            context["binding"] = await self.binding(session, room.id)
+            context["navigation"] = await self.agents.navigation.state(session, room.id)
+        binding = context["binding"]
+        if context["navigation"] and not entity.snapshot.get("approved_review_id"):
             from app.preparation.runtime import current_entity_ids
 
-            require(
-                entity.source_entity_id
-                in current_entity_ids(
+            if "local_ids" not in context:
+                _, snapshot, _, local, _, _ = await self.agents.module_context.allowed(
+                    session, room
+                )
+                context["local_ids"] = current_entity_ids(
                     snapshot, local, room.session_state.get("module_runtime", {})
-                ),
+                )
+            require(
+                entity.source_entity_id in context["local_ids"],
                 "实体未绑定当前场景",
             )
         pre = entity.snapshot["reveal_conditions"]
@@ -295,16 +304,22 @@ class RoomEntityService:
             "实体访问条件尚未配置，请主机处理",
         )
         require(not pre["scene_id"] or pre["scene_id"] == binding.current_scene, "实体不在当前场景")
-        visible = {e["id"] for e in await self.public(session, room.id)}
+        if "visible" not in context:
+            context["visible"] = {e["id"] for e in await self.public(session, room.id)}
+        visible = context["visible"]
         require(set(pre["required_entity_ids"]) <= visible, "实体前置条件尚未满足")
         if pre["successful_check"] and not for_check:
-            checks = await session.scalars(
-                select(CheckRecord).where(
-                    CheckRecord.room_id == room.id,
-                    CheckRecord.cycle_id == cycle_id,
-                    CheckRecord.status == "resolved",
+            if "checks" not in context:
+                context["checks"] = list(
+                    await session.scalars(
+                        select(CheckRecord).where(
+                            CheckRecord.room_id == room.id,
+                            CheckRecord.cycle_id == cycle_id,
+                            CheckRecord.status == "resolved",
+                        )
+                    )
                 )
-            )
+            checks = context["checks"]
             require(
                 any(
                     c.document.get("clue_id") == entity.source_entity_id

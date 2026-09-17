@@ -39,6 +39,31 @@ def recall_question(text):
 def readonly_recall(text):
     if not recall_question(text):
         return False
+    from app.preparation.action_authority import action_kinds, declared_action
+
+    # Classify independent current clauses before a historical purpose can
+    # reserve the whole turn for recall. Quotes and past-tense self reports
+    # remain evidence requests rather than executable attempts.
+    unquoted = re.sub(r'“[^”]*”|‘[^’]*’|「[^」]*」|"[^"]*"', "", text)
+    for sentence in re.split(r"(?<=[。！？;；\n])", unquoted):
+        actor = re.search(r"(?:^|[，,…])\s*我(?:们)?", sentence)
+        if not actor or re.search(r"如果|假如|假设", sentence):
+            continue
+        tail = sentence[actor.end() :]
+        if re.match(r"(?:刚才|之前|先前|当时|曾经|记得|想问|想知道|是否|有没有)", tail):
+            continue
+        if sentence.rstrip().endswith(("？", "?")) and not declared_action(tail):
+            continue
+        if set(action_kinds(sentence)) - {"converse", "settle"}:
+            return False
+        # A declarative first-person attempt need not use a catalogued verb
+        # (supporting someone, crouching, beckoning, etc.). This only chooses
+        # the planning path; the ordinary authority guards still adjudicate it.
+        if not sentence.rstrip().endswith(("？", "?")) and not re.match(
+            r"(?:是|有|没有|不|没|记得|想起|回忆|回顾|想回顾|想知道|想问|认为|觉得|以为)",
+            tail,
+        ):
+            return False
     # A separate present-tense operation remains actionable in a mixed turn.
     return not re.search(
         r"(?:然后|接着|现在|同时|再|并且)[，, ]*(?:我(?:们)?(?:要|去|就)?)?"
@@ -53,12 +78,16 @@ def readonly_recall(text):
 
 def fact_records(visible_events, entities=(), *, members=None):
     member_names = dict(members or {})
-    member_names.update({
-        e["payload"]["member_id"]: e["payload"]["display_name"]
-        for e in visible_events
-        if e["type"] == "member.joined" and e.get("visibility") == "public"
-        and e["payload"].get("member_id") and e["payload"].get("display_name")
-    })
+    member_names.update(
+        {
+            e["payload"]["member_id"]: e["payload"]["display_name"]
+            for e in visible_events
+            if e["type"] == "member.joined"
+            and e.get("visibility") == "public"
+            and e["payload"].get("member_id")
+            and e["payload"].get("display_name")
+        }
+    )
     events, _ = story_events(visible_events, include_initial_reveals=True)
     by_seq = {e["seq"]: e for e in events}
     cycle_actions = {}
@@ -216,13 +245,13 @@ def select_facts(events, entities, query, *, budget=1700, limit=6, members=None)
         r"谁.{0,8}(?:给|交)"
     )
     transfer_query = bool(re.search(transfer_pattern, query))
-    asks_state = bool(re.search(
-        r"状态|(?:是否|已经|有没有).{0,6}(?:打开|开启|关闭|解锁)", query
-    ))
+    asks_state = bool(re.search(r"状态|(?:是否|已经|有没有).{0,6}(?:打开|开启|关闭|解锁)", query))
     asks_findings = bool(re.search(r"调查|查明|内容|原文|写|发现|找到|搜索|线索", query))
     history_scenes = {
-        r["scene_title"] for r in records
-        if r.get("scene_title") and r["scene_title"] in query
+        r["scene_title"]
+        for r in records
+        if r.get("scene_title")
+        and r["scene_title"] in query
         and re.search(r"经过|经历|先后|尝试|路线|行动|通过", query)
     }
     scope_words = set(tokens(" ".join(history_scenes)))
@@ -253,28 +282,38 @@ def select_facts(events, entities, query, *, budget=1700, limit=6, members=None)
             score = len(wanted & set(tokens(material)))
             # Reserve the outcome of the explicitly named action before generic
             # question fragments (e.g. 是什么) can favor an unrelated check.
-            named_result = bool(
-                r["kind"] == "result" and result_words & set(tokens(material))
+            named_result = bool(r["kind"] == "result" and result_words & set(tokens(material)))
+            scene_history = bool(
+                history_scenes
+                and not asks_speech(question)
+                and (
+                    r.get("scene_title") in history_scenes
+                    or r.get("from_scene_title") in history_scenes
+                )
             )
-            scene_history = bool(history_scenes and not asks_speech(question) and (
-                r.get("scene_title") in history_scenes
-                or r.get("from_scene_title") in history_scenes
-            ))
             if scene_history:
                 # A scoped history question includes outcomes whose literal text
                 # does not repeat the scene name or the question's generic verbs.
                 score = max(score, 1)
             original = r.get("title", "") + r["text"]
             preferred = bool(
-                side and r["kind"] == "source_text" and side in original
-                or asks_state and r["kind"] == "result" and not r.get("check_purpose")
+                side
+                and r["kind"] == "source_text"
+                and side in original
+                or asks_state
+                and r["kind"] == "result"
+                and not r.get("check_purpose")
                 and wanted & set(tokens(original))
                 or re.search(r"(?:实际|真实)(?:的)?结果", question)
-                and r["kind"] == "result" and score
+                and r["kind"] == "result"
+                and score
             )
             named_source = bool(
-                asks_findings and not asks_state and not asks_speech(question)
-                and r["kind"] == "source_text" and r.get("source_type") != "scene"
+                asks_findings
+                and not asks_state
+                and not asks_speech(question)
+                and r["kind"] == "source_text"
+                and r.get("source_type") != "scene"
                 and wanted & (set(tokens(r.get("title", ""))) - stopwords - scope_words)
             )
             # A question about an investigated document needs its revealed
@@ -308,10 +347,19 @@ def select_facts(events, entities, query, *, budget=1700, limit=6, members=None)
             if r["kind"] == "location" and re.search(r"路线|途经|走过", question):
                 score += 3
             if score:
-                ranked.append((named_result, preferred, named_source, scene_history,
-                               {"result": 2, "location": 1}.get(r["kind"], 0)
-                               if scene_history else 0, score,
-                               r["kind"] != "location", r["source_event_seq"], r))
+                ranked.append(
+                    (
+                        named_result,
+                        preferred,
+                        named_source,
+                        scene_history,
+                        {"result": 2, "location": 1}.get(r["kind"], 0) if scene_history else 0,
+                        score,
+                        r["kind"] != "location",
+                        r["source_event_seq"],
+                        r,
+                    )
+                )
         return [r for *_, r in sorted(ranked, key=lambda x: x[:-1], reverse=True)]
 
     ranked = ranking(query)
@@ -335,17 +383,20 @@ def select_facts(events, entities, query, *, budget=1700, limit=6, members=None)
                 # investigation of that object (e.g. reading its date). Reserve
                 # the relevant original check alongside the content, before
                 # generic testimony can fill all remaining evidence slots.
-                candidates.extend([
-                    r for r in part_ranked
-                    if r.get("check_purpose")
-                    and title_words & set(tokens(r["check_purpose"]))
-                ][:1])
+                candidates.extend(
+                    [
+                        r
+                        for r in part_ranked
+                        if r.get("check_purpose") and title_words & set(tokens(r["check_purpose"]))
+                    ][:1]
+                )
     candidates.extend(ranked)
     selected, seen, used = [], set(), 0
     for r in candidates:
-        identity = tuple(r.get(k) for k in (
-            "kind", "text", "action_quote", "check_purpose", "speaker", "scene_id"
-        ))
+        identity = tuple(
+            r.get(k)
+            for k in ("kind", "text", "action_quote", "check_purpose", "speaker", "scene_id")
+        )
         if identity in seen:
             continue
         size = len(json.dumps(r, ensure_ascii=False))
@@ -505,23 +556,38 @@ def recalled_entity_states(entities, question):
     for entity in entities:
         if entity.get("type") != "location" or entity.get("fact_scope") != "current_scene":
             continue
-        relevant = [clause for clause in re.split(r"[，,。?？;；]", question)
-                    if entity["title"] in clause and re.search(
-                        r"状态|(?:是否|有没有|已经).{0,6}(?:打开|关闭|解锁)|开着|上锁", clause)]
-        relevant = [clause for clause in relevant
-                    if not re.search(r"原话|台词|说|讲|告诉", clause)
-                    and (not re.search(r"之前|此前|刚才|曾经|当时|最初", clause)
-                         or re.search(r"现在|目前|当前", clause))]
+        relevant = [
+            clause
+            for clause in re.split(r"[，,。?？;；]", question)
+            if entity["title"] in clause
+            and re.search(r"状态|(?:是否|有没有|已经).{0,6}(?:打开|关闭|解锁)|开着|上锁", clause)
+        ]
+        relevant = [
+            clause
+            for clause in relevant
+            if not re.search(r"原话|台词|说|讲|告诉", clause)
+            and (
+                not re.search(r"之前|此前|刚才|曾经|当时|最初", clause)
+                or re.search(r"现在|目前|当前", clause)
+            )
+        ]
         if not relevant or not entity.get("public_summary"):
             continue
         receipts = entity.get("current_state_receipts", [])
-        records.append(dict(
-            id="state:entity:" + entity["id"], kind="current_state", scope="current",
-            source="current_public_entity_projection", entity_id=entity["id"],
-            source_event_seq=max((r["source_event_seq"] for r in receipts),
-                                 default=entity.get("revealed_event_seq")),
-            text=entity["title"] + "：" + entity["public_summary"],
-        ))
+        records.append(
+            dict(
+                id="state:entity:" + entity["id"],
+                kind="current_state",
+                scope="current",
+                source="current_public_entity_projection",
+                entity_id=entity["id"],
+                source_event_seq=max(
+                    (r["source_event_seq"] for r in receipts),
+                    default=entity.get("revealed_event_seq"),
+                ),
+                text=entity["title"] + "：" + entity["public_summary"],
+            )
+        )
     return records
 
 

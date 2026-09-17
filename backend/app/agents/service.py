@@ -366,7 +366,11 @@ class AgentService:
     async def apply(self, session, room, identity, action, body, target):
         action = action.removeprefix("agent.")
         if action not in {
-            "action", "check.roll", "sanity.roll", "check.choice", "check.push_roll",
+            "action",
+            "check.roll",
+            "sanity.roll",
+            "check.choice",
+            "check.push_roll",
             "sanity.voluntary_belief",
         }:
             require(identity.is_host, "仅主机可以执行此操作", 403)
@@ -688,7 +692,16 @@ class AgentService:
             parent = cycle
             state["parent_cycle_id"] = parent.id if parent else None
             state["origin"] = "human"
-            if not rule_question and self.combat.route(room, body.text):
+            if not rule_question and self.combat.route(
+                room,
+                body.text,
+                members={
+                    m.id: m.display_name
+                    for m in await self.rooms.members(session, room)
+                    if m.active
+                },
+                actor=actor,
+            ):
                 state.update(combat_flow=True, combat_actor_id=actor)
             cycle = AgentCycle(
                 id=cycle_id, room_id=room.id, status="queued" if parent else "running", state=state

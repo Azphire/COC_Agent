@@ -28,11 +28,23 @@ def scenario(messages, kwargs):
             if e["type"] == "check.resolved"
         ]
         check = checks[-1] if checks else None
+        feedback = [
+            e["payload"].get("public_summary", e["payload"].get("content", ""))
+            for e in context.get("public_tool_results", {}).get("events", [])
+            if e["type"] in {"entity.revealed", "clue.revealed"}
+        ]
         return {
-            "content": f"本次检定出目 {check['result']['total']}，"
-            f"目标 {check['result']['threshold']}。"
-            if check
-            else "你们查看现场，继续讨论下一步行动。"
+            "public_narration": (
+                f"本次检定出目 {check['result']['total']}，目标 {check['result']['threshold']}。"
+                + (
+                    "你完成了尝试。"
+                    if check["result"]["passed"]
+                    else "你没能确认这次要查明的内容。"
+                )
+                + "\n".join(feedback)
+                if check
+                else "你们查看现场，继续讨论下一步行动。"
+            )
         }
     if context.get("phase") == "summary":
         return {"content": "调查员检查了现场；尚未核实的判断仍是推测。"}
@@ -231,6 +243,16 @@ def test_tool_arguments_preserve_validation_except_empty_reads(name):
 
 
 def test_no_check_cycle_and_private_context(client, game):
+    def responds_to_current_action(messages, kwargs):
+        context = json.loads(messages[-1]["content"])
+        if (
+            kwargs["response_schema"].__name__ == "KeeperNarration"
+            and context.get("triggering_action", {}).get("type") == "agent.action_proposed"
+        ):
+            return {"public_narration": "你在入口边观察了一阵，眼前没有出现新的人影。"}
+        return scenario(messages, kwargs)
+
+    game["adapter"].responder = responds_to_current_action
     ok(submit(client, game))
     cycle = wait_cycle(client, game)
     assert cycle["status"] == "completed", cycle

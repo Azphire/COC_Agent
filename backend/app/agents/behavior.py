@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import unicodedata
 
 from app.agents.adjudication_schemas import BehaviorRejection, BehaviorState, Cooldown
@@ -37,11 +38,17 @@ def output_text(decision):
     return "\n".join(t for i, t in enumerate(parts) if not any(t in old for old in parts[:i]))
 
 
-def public_fingerprint(context):
+def public_fingerprint(context, target_id=None, actor_id=None):
     material = {
-        "scene": context.get("public_state"),
-        "entities": context.get("public_entities", []),
-        "checks": [c for c in context.get("checks", []) if c.get("status") == "resolved"],
+        "scene": context.get("public_state", {}).get("scene"),
+        "entities": [e for e in context.get("public_entities", []) if e.get("id") == target_id],
+        "checks": [
+            c
+            for c in context.get("checks", [])
+            if c.get("status") == "resolved"
+            and c.get("target_member_id") == actor_id
+            and c.get("policy_target_id") == target_id
+        ],
     }
     return hashlib.sha256(
         json.dumps(material, sort_keys=True, ensure_ascii=False).encode()
@@ -68,9 +75,11 @@ class TeammateBehaviorPolicy:
         public_change_after_last_output=False,
         explicit_action_request=False,
         requested_operations=None,
+        requested_text=None,
         inventory_state=None,
         actor_id=None,
         requester_id=None,
+        actor_name="",
     ):
         if decision.mode == "pass":
             return BehaviorRejection(
@@ -79,6 +88,23 @@ class TeammateBehaviorPolicy:
             )
         if decision.related_player_action_seq != action_seq:
             return BehaviorRejection(accepted=False, reason="unrelated_player_action")
+        speech, action = decision.speech_text or "", decision.action_text or ""
+        if actor_name and actor_name in re.sub(
+            r"我(?:叫|是)" + re.escape(actor_name), "", speech + action
+        ):
+            return BehaviorRejection(accepted=False, reason="addressing_self")
+        if speech and action and normalized(speech) == normalized(action):
+            decision.speech_text = None
+            speech = ""
+        elif speech and action and bigram_jaccard(speech, action) >= self.threshold:
+            return BehaviorRejection(accepted=False, reason="speech_duplicates_action")
+        if decision.mode in {"act", "assist"} and re.search(
+            r"(?:已经|已|成功|终于).{0,10}(?:包扎|止血|治好|恢复|给药|喂药|拿到|找到)|"
+            r"我(?:们)?(?:检查|搜索|查看|打开|找到|拿到)了.{0,30}(?:看起来|发现|里面有|藏着)|"
+            r"(?:伤口|疼痛|伤势).{0,8}(?:好转|缓解|控制住)|(?:包扎|给药|止血)完(?:了|毕)",
+            action + speech,
+        ):
+            return BehaviorRejection(accepted=False, reason="unsettled_result")
         if decision.mode in {"act", "assist"} and inventory_state is not None:
             from app.preparation.inventory import held_item_acknowledgement, inventory_reply
 
@@ -124,7 +150,7 @@ class TeammateBehaviorPolicy:
             ):
                 from app.preparation.action_authority import requested_search_attempt
 
-                search = requested_search_attempt(player_text)
+                search = requested_search_attempt(requested_text or player_text)
                 if search:
                     decision.action_text = search
                     decision.speech_text = None
@@ -139,16 +165,12 @@ class TeammateBehaviorPolicy:
             kinds = set(action_kinds(decision.action_text or ""))
             addressed_probe = inventory_probe(player_text) and (
                 explicit_action_request
-                or "你" in player_text
                 or any(
-                    m.get("name") and m["name"] in player_text
-                    for m in inventory_state.get("members", [])
-                    if m["id"] == actor_id
+                    "你" in c and inventory_probe(c)
+                    for c in re.split(r"[，。；！？,;.!?\n]", player_text)
                 )
             )
             if addressed_probe and explicit_action_request and decision.mode == "speak":
-                import re
-
                 member = next(
                     (m for m in inventory_state.get("members", []) if m["id"] == actor_id), {}
                 )
@@ -196,8 +218,6 @@ class TeammateBehaviorPolicy:
                 decision.action_text = None
                 decision.fact_ids = []
         if decision.mode in {"act", "assist"}:
-            import re
-
             if re.search(
                 r"或许|我建议|可以考虑|要不要|我们可以|我们一起(?:去|过去|前往)",
                 decision.action_text or "",
@@ -231,15 +251,30 @@ class TeammateBehaviorPolicy:
         if decision.mode == "assist" and requested_operations:
             from app.preparation.action_authority import action_kinds
 
-            if not set(action_kinds(decision.action_text or "")) & set(requested_operations):
+            attempted = set(action_kinds(decision.action_text or ""))
+            # Inspecting the requested target satisfies a request to look at it.
+            # Looking alone still cannot satisfy transfer, use, or search tasks.
+            if "search" in attempted:
+                attempted.add("observe")
+            if not attempted & set(requested_operations):
                 return BehaviorRejection(
                     accepted=False, reason="assistance_does_not_attempt_requested_operation"
                 )
+        # Ownership repairs above may change the action. Recheck the final
+        # publication, rather than trusting checks made before normalization.
+        if actor_name and actor_name in re.sub(
+            r"我(?:叫|是)" + re.escape(actor_name), "", output_text(decision)
+        ):
+            return BehaviorRejection(accepted=False, reason="addressing_self")
         text = output_text(decision)
         if normalized(text) in {"继续调查", "四周很安静", "四周安静下来"}:
             return BehaviorRejection(accepted=False, reason="empty_template", repetition_score=1)
         recent = recent_outputs[-3:]
-        if (public_change_after_last_output or explicit_action_request) and decision.mode in {
+        relevant_change = any(
+            c.target_id == decision.target_id and c.state_fingerprint != fingerprint
+            for c in state.cooldowns
+        )
+        if relevant_change and decision.mode in {
             "act",
             "assist",
         }:
@@ -252,7 +287,7 @@ class TeammateBehaviorPolicy:
             return BehaviorRejection(
                 accepted=False, reason="repeated_output", repetition_score=score
             )
-        if decision.mode == "act" and any(
+        if decision.mode in {"act", "assist"} and any(
             c.remaining_cycles > 0
             and c.action_type == decision.action_type
             and c.target_id == decision.target_id
@@ -270,7 +305,7 @@ class TeammateBehaviorPolicy:
         cooldowns = [
             c.model_copy(update={"remaining_cycles": c.remaining_cycles - 1})
             for c in state.cooldowns
-            if c.remaining_cycles > 1 and c.state_fingerprint == fingerprint
+            if c.remaining_cycles > 1
         ]
         if decision.mode != "pass":
             cooldowns = [
@@ -287,7 +322,9 @@ class TeammateBehaviorPolicy:
                 )
             )
         return BehaviorState(
-            current_short_term_goal=safe_goal or state.current_short_term_goal,
+            current_short_term_goal=(safe_goal or "")
+            if decision.goal_status in {"complete", "abandon", "adjust"}
+            else safe_goal or state.current_short_term_goal,
             last_action_type=decision.action_type
             if decision.mode != "pass"
             else state.last_action_type,

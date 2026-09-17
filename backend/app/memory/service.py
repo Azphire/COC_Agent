@@ -18,13 +18,15 @@ from app.rooms.service import Identity, require
 
 def prompt_context_size(context):
     """Count the keeper's transmitted audit view, retaining the full server ledger."""
-    if context.get("phase") in {"plan_keeper_action", "decide_teammates"}:
+    plan_phases = {"plan_keeper_action", "repair_keeper_plan"}
+    teammate_phases = {"decide_teammates", "repair_teammate_decision"}
+    if context.get("phase") in plan_phases | teammate_phases:
         # Use the same view as the final gate. Raw run records contain audit
         # fields and duplicate inventory that are never sent to this model.
         from app.agents.action_runtime import generation_prompt
         from app.agents.adjudication_schemas import KeeperPlan, TeammateDecision
 
-        schema = KeeperPlan if context["phase"] == "plan_keeper_action" else TeammateDecision
+        schema = KeeperPlan if context["phase"] in plan_phases else TeammateDecision
         return len(json.dumps(generation_prompt(context, schema), ensure_ascii=False))
     # Auxiliary phases do not share the plan/teammate grammar. Count their
     # complete envelope rather than assuming the same audit compaction.
@@ -168,9 +170,19 @@ async def build_context(
             card = {
                 **slot.character_snapshot,
                 "skill_values": runtime_skill_values(
-                    room, slot, prompt_skills(slot.character_snapshot, next(
-                        (e.get('payload', {}).get('text', '') for e in all_events
-                         if e['seq'] == cycle.state['triggering_event_seq']), '')),
+                    room,
+                    slot,
+                    prompt_skills(
+                        slot.character_snapshot,
+                        next(
+                            (
+                                e.get("payload", {}).get("text", "")
+                                for e in all_events
+                                if e["seq"] == cycle.state["triggering_event_seq"]
+                            ),
+                            "",
+                        ),
+                    ),
                 ),
             }
             cards.append(
@@ -376,7 +388,7 @@ async def build_context(
                     item["suggested_checks"] = entity["suggested_checks"]
             # Reserve approved encounter identifiers before selecting scene evidence.
             # Action validation subsequently narrows these to the current scene.
-            if phase == "plan_keeper_action":
+            if phase in {"plan_keeper_action", "repair_keeper_plan"}:
                 target = (trigger or {}).get("payload", {}).get("target_entity_id")
                 effects = [
                     {
@@ -742,6 +754,10 @@ async def build_context(
         ordered["events"] = ordered["events"][1:]
     while ordered["recent_dialogue"] and prompt_context_size(ordered) > budget:
         ordered["recent_dialogue"] = ordered["recent_dialogue"][1:]
+    if not ordered["recent_dialogue"]:
+        # An empty optional history field must not push an otherwise valid
+        # envelope over budget before the role-specific final compaction.
+        ordered.pop("recent_dialogue")
     require(
         prompt_context_size(ordered) <= budget,
         "当前行动资料超过上下文预算，无法加入更多历史对话",

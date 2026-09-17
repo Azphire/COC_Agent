@@ -200,7 +200,9 @@ class ContextGap(DomainModel):
 class RecoveryDecision(DomainModel):
     schema_version: Literal[1] = 1
     error: ErrorCategory
-    action: Literal["supplement", "revalidate", "repair_arguments", "receipt", "stop", "clarify"]
+    action: Literal[
+        "supplement", "revalidate", "repair_arguments", "repair_plan", "receipt", "stop", "clarify"
+    ]
     tool_index: int = -1
     attempt: int = Field(default=1, ge=1, le=1)
     succeeded: bool = False
@@ -220,6 +222,7 @@ class TeammateDecision(DomainModel):
     novelty_keys: list[str] = Field(default_factory=list, max_length=8)
     confidence: float = Field(ge=0, le=1)
     short_term_goal: str | None = Field(default=None, max_length=200)
+    goal_status: Literal["continue", "complete", "adjust", "abandon"] = "continue"
     fact_ids: list[str] = Field(default_factory=list, max_length=6)
     item_instance_ids: list[str] = Field(default_factory=list, max_length=8)
 

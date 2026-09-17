@@ -405,17 +405,12 @@ def test_navigation_non_move_then_explicit_move(client, running_navigation):  # 
     assert nav["navigation_revision"] == 1 and nav["current_scene_node_id"] == d["nodes"]["Future"]
 
 
-@pytest.mark.parametrize("decision", ["approve", "reject"])
-def test_explicit_move_condition_waits_for_review(client, running_navigation, decision):  # noqa: F811
-    from test_host_review import wait
-
+def test_explicit_move_missing_condition_stays_without_host_review(client, running_navigation):  # noqa: F811
     d = running_navigation
     client.app.state.agent_service.model.adapter = FakeModelAdapter(responder=modern_response)
     cycle = act(client, d, "我进入前面的房间")
-    assert cycle["status"] == "waiting_for_review", cycle
+    assert cycle["status"] == "completed", cycle
     assert ok(client.get(d["room_prefix"] + "/checks")) == []
-    review = ok(client.get(d["room_prefix"] + "/review-requests"))[0]
-    ok(client.post(d["room_prefix"] + f"/review-requests/{review['id']}/{decision}", json={}))
-    assert wait(client, d["room_prefix"], ("completed", "failed"))["status"] == "completed"
+    assert ok(client.get(d["room_prefix"] + "/review-requests")) == []
     nav = ok(client.get(d["room_prefix"] + "/module-navigation"))
-    assert nav["navigation_revision"] == (1 if decision == "approve" else 0)
+    assert nav["navigation_revision"] == 0

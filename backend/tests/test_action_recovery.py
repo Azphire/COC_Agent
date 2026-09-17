@@ -28,6 +28,55 @@ from app.rooms.service import RoomError
 
 
 @pytest.mark.parametrize(
+    "origin,tools_done,pending,expected",
+    [
+        ("teammate", 0, None, "completed"),
+        ("human", 0, None, "failed"),
+        ("teammate", 1, None, "failed"),
+        ("teammate", 0, "fixed-check", "failed"),
+    ],
+)
+def test_only_unexecuted_teammate_format_failure_yields_turn(
+    client,
+    game,  # noqa: F811
+    origin,
+    tools_done,
+    pending,
+    expected,  # noqa: F811
+):
+    from app.agents.conversation import initial_state
+
+    svc = client.app.state.agent_service
+    room_id, cid = game["room"]["id"], str(uuid4())
+
+    async def verify():
+        async def seed(session, room):
+            state = initial_state(room.id, cid, game["agent"], room.revision, [], origin=origin)
+            state.update(
+                current_node="plan_keeper_action", tool_count=tools_done, pending_check_id=pending
+            )
+            session.add(AgentCycle(id=cid, room_id=room.id, status="running", state=state))
+            return json.dumps(room.session_state, sort_keys=True)
+
+        before = await svc.mutate(room_id, seed)
+        yielded = await svc.runtime.fail(
+            room_id, cid, "model_schema_error", "bounded format repair failed"
+        )
+
+        async def inspect(session, room):
+            cycle = await session.get(AgentCycle, cid)
+            assert cycle.status == expected
+            assert cycle.state.get("pending_check_id") == pending
+            assert cycle.state.get("tool_count") == tools_done
+            assert json.dumps(room.session_state, sort_keys=True) == before
+            assert bool(yielded) == (expected == "completed")
+
+        await svc.mutate(room_id, inspect)
+
+    client.portal.call(verify)
+
+
+@pytest.mark.parametrize(
     "category", ["context_missing", "permission_denied", "precondition_failed", "internal_error"]
 )
 def test_tool_recovery_is_bounded_and_receipt_preserves_effect(

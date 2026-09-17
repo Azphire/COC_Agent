@@ -85,7 +85,9 @@ class AgentModelClient:
             )
         prompt = list(messages)
         for attempt in range(max_attempts):
+            queued_at = time.monotonic()
             async with model_semaphore():
+                queue_ms = int((time.monotonic() - queued_at) * 1000)
                 if on_call:
                     await on_call()
                 call_started = time.monotonic()
@@ -93,6 +95,8 @@ class AgentModelClient:
                 usage = None
                 issues = []
                 request_id = response_model = error_category = None
+                model_finished = None
+                generated_output = None
                 try:
                     async with asyncio.timeout(self.settings.model_timeout_seconds):
                         result = await self.adapter.generate(
@@ -102,9 +106,14 @@ class AgentModelClient:
                             temperature=self.settings.model_temperature,
                             max_tokens=output_limit or self.settings.model_output_limit,
                         )
+                    model_finished = time.monotonic()
                     if not isinstance(result, ModelResponse):
                         raise ModelFormatError("模型输出格式无效")
                     usage = result.token_usage
+                    generated_output = (
+                        result.structured.model_dump(mode="json")
+                        if isinstance(result.structured, BaseModel) else result.structured
+                    )
                     request_id, response_model = result.request_id, result.response_model
                     if response_schema:
                         value = result.structured
@@ -173,6 +182,13 @@ class AgentModelClient:
                         "model": self.settings.model_name,
                         "config_revision": self.configuration.revision if self.configuration else 0,
                         "latency_ms": int((time.monotonic() - call_started) * 1000),
+                        "queue_wait_ms": queue_ms,
+                        "model_elapsed_ms": int(
+                            ((model_finished or time.monotonic()) - call_started) * 1000
+                        ),
+                        "validation_ms": int((time.monotonic() - model_finished) * 1000)
+                        if model_finished
+                        else 0,
                         "attempt": attempt + 1,
                         "token_usage": usage,
                         "request_id": request_id,
@@ -182,6 +198,7 @@ class AgentModelClient:
                         "schema": response_schema.__name__ if response_schema else None,
                         "input_chars": len(json.dumps(call_prompt, ensure_ascii=False)),
                         "input_messages": call_prompt,
+                        "generated_output": generated_output,
                     }
                     self.calls.append(call)
                     if on_result:

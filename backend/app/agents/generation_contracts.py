@@ -54,6 +54,10 @@ def generation_contract(schema, context):
             member_id
             for member_id in context.get("current_participants", {}).get("members", {})
             if member_id != ids["actor_member_id"]
+            and (
+                not context.get("characters")
+                or member_id in {c.get("member_id") for c in context["characters"]}
+            )
         ]
         targets = [t["id"] for t in context.get("current_targets", [])]
         # The KP must be able to select a local undiscovered search result.
@@ -96,6 +100,36 @@ def generation_contract(schema, context):
             },
             **{k: (f.annotation, f) for k, f in focus_base.model_fields.items()},
         )
+
+        def preserve_mixed_question(value):
+            selected = [c["text"] for c in clauses if c["id"] in value.action_clause_ids]
+            questions = {c["id"] for c in clauses if re.search(r"[?？]$", c["text"].strip())}
+            if any(
+                re.search(r"[?？]$", c.strip()) for c in selected
+            ) and not questions.intersection(value.question_clause_ids):
+                from app.models.ollama import ModelFormatError
+
+                raise ModelFormatError(
+                    "混合句漏掉提问",
+                    [
+                        {
+                            "field": "focus.question_clause_ids",
+                            "code": (
+                                "把原话中的提问片段填入question_clause_ids；"
+                                "本人实际动作仍保留在action_clause_ids"
+                            ),
+                        }
+                    ],
+                )
+            return value
+
+        focus = create_model(
+            "TurnFocus",
+            __base__=focus,
+            __validators__={
+                "preserve_mixed_question": model_validator(mode="after")(preserve_mixed_question)
+            },
+        )
         trigger = context["triggering_action"]
         from app.preparation.action_authority import (
             action_kinds,
@@ -105,11 +139,19 @@ def generation_contract(schema, context):
         )
 
         original = trigger.get("payload", {}).get("text", "")
-        own_transfers = {
-            c["id"]: c["text"] for c in clauses
-            if speaker_action(c["text"]) and "give" in action_kinds(c["text"])
-        } if teammate_request(original, context.get("current_participants", {}).get("members", {}),
-                              trigger.get("actor_member_id")) else {}
+        own_transfers = (
+            {
+                c["id"]: c["text"]
+                for c in clauses
+                if speaker_action(c["text"]) and "give" in action_kinds(c["text"])
+            }
+            if teammate_request(
+                original,
+                context.get("current_participants", {}).get("members", {}),
+                trigger.get("actor_member_id"),
+            )
+            else {}
+        )
         if not context.get("readonly_recall") and (
             trigger.get("type") == "agent.action_proposed"
             and re.search(r"检查|搜索|寻找|拿起|使用|交给", original)
@@ -120,7 +162,8 @@ def generation_contract(schema, context):
             def keep_proposed_operation(value):
                 if own_transfers and not (
                     set(value.action_clause_ids) & own_transfers.keys()
-                    or value.action and any(t in value.action for t in own_transfers.values())
+                    or value.action
+                    and any(t in value.action for t in own_transfers.values())
                 ):
                     raise ValueError(
                         "本人交出物品与队友请求是两段意图；"
@@ -252,7 +295,7 @@ def generation_contract(schema, context):
                 json_schema_extra={"x-explicit-output": True},
             ),
         )
-        return bound(
+        result = bound(
             KeeperNarration,
             {
                 "schema_version": 1,
@@ -265,6 +308,63 @@ def generation_contract(schema, context):
             },
             **fields,
         )
+        if not context.get("readonly_recall"):
+
+            def responds_to_new_turn(value):
+                from app.agents.behavior import bigram_jaccard
+
+                brief = context.get("response_brief", {})
+                old = [d.get("text", "") for d in brief.get("incidental_memories", [])]
+                old += [
+                    d.get("text", "")
+                    for d in brief.get("recent_dialogue", [])
+                    if d.get("type") in {"npc.spoke", "keeper.narration"}
+                ]
+                current = value.npc_speech.text if value.npc_speech else value.public_narration
+                if not current.strip() and (brief.get("question") or brief.get("attempt")):
+                    from app.models.ollama import ModelFormatError
+
+                    raise ModelFormatError(
+                        "缺少本轮回应",
+                        [
+                            {
+                                "field": "public_narration",
+                                "code": (
+                                    "在public_narration或npc_speech回应本轮任务；"
+                                    "不能只选择旧事实ID"
+                                ),
+                            }
+                        ],
+                    )
+                if (
+                    current
+                    and (value.npc_speech or brief.get("question") or brief.get("attempt"))
+                    and any(bigram_jaccard(current, text) >= 0.8 for text in old)
+                ):
+                    from app.models.ollama import ModelFormatError
+
+                    raise ModelFormatError(
+                        "重复旧叙述",
+                        [
+                            {
+                                "field": "npc_speech" if value.npc_speech else "public_narration",
+                                "code": (
+                                    "先直接回答current_task的新问题，不复播旧台词；"
+                                    "根据公开依据说明知道什么、不确定什么"
+                                ),
+                            }
+                        ],
+                    )
+                return value
+
+            result = create_model(
+                "KeeperNarration",
+                __base__=result,
+                __validators__={
+                    "responds_to_new_turn": model_validator(mode="after")(responds_to_new_turn)
+                },
+            )
+        return result
     if schema is TeammateDecision:
         return bound(
             TeammateDecision,
@@ -403,8 +503,10 @@ def restore_output(output, schema, context):
                         re.search(r"翻看|翻过|翻转|揭下", focus.get("action", ""))
                         or any(
                             entry.get("entity_id") == focus.get("action_target_id")
-                            and any("search" in rule.get("action_kinds", [])
-                                    for rule in entry.get("interactions", []))
+                            and any(
+                                "search" in rule.get("action_kinds", [])
+                                for rule in entry.get("interactions", [])
+                            )
                             for entry in context.get("module_interactions", [])
                         )
                     )
@@ -461,7 +563,12 @@ def restore_output(output, schema, context):
             ]
 
         if (
-            NON_ACTION.search(focus.get("action", ""))
+            focus.get("action")
+            and all(
+                NON_ACTION.search(c["text"])
+                for c in utterance_clauses(focus["action"])
+                if c["text"].strip()
+            )
             and not action_kinds(focus["action"])
             and not explicit_movement(focus["action"])
             and not (value["parsed_intent"]["type"] == "move" and explicit_movement(raw))
@@ -478,6 +585,21 @@ def restore_output(output, schema, context):
         named = named_move_exits(
             context["triggering_action"]["payload"]["text"], context.get("approved_exits", [])
         )
+        # A named place can be a rejected direction, not the destination.
+        exits = context.get("approved_exits", [])
+        excluded = [
+            t
+            for t in exits
+            if t.get("target_public_title")
+            and re.search(
+                r"(?:远离|背对|背离|避开|离开)[^，。！？；,.!?;\n]{0,12}"
+                + re.escape(t["target_public_title"]),
+                raw,
+            )
+        ]
+        remaining = [t for t in exits if t not in excluded]
+        if value["parsed_intent"]["type"] == "move" and excluded and len(remaining) == 1:
+            named = remaining
         if value["parsed_intent"]["type"] == "move" and len(named) == 1:
             value["proposed_transition_id"] = named[0]["transition_id"]
             # Discard a model-authored movement call with a different destination.
@@ -495,6 +617,31 @@ def restore_output(output, schema, context):
             ),
             None,
         )
+        local_target = next(
+            (
+                target
+                for target in context.get("current_targets", [])
+                if target.get("id") == focus.get("action_target_id")
+                and target.get("fact_scope", "current_scene") == "current_scene"
+            ),
+            None,
+        )
+        local_named = local_target and any(
+            name and name in raw
+            for name in [local_target.get("title", ""), *local_target.get("aliases", [])]
+        )
+        if transition and not named and local_named and value["parsed_intent"]["type"] == "move":
+            # A person/object actually named by the player can be a local goal.
+            # A model-selected obstacle alone must not erase the separately
+            # selected destination just because its public title is a synonym.
+            value["parsed_intent"]["type"] = "interact"
+            value["proposed_transition_id"] = None
+            value["proposed_tool_calls"] = [
+                t
+                for t in value["proposed_tool_calls"]
+                if t["name"] not in {"transition_scene", "update_scene"}
+            ]
+            transition = None
         if transition and value["parsed_intent"]["type"] == "move":
             # A selected move has one destination. Restore it from the approved
             # candidate; the ordinary intent/exit/ownership guards still apply.
@@ -535,10 +682,16 @@ def restore_output(output, schema, context):
             if r.get("access_policy") == "requires_check"
             and r.get("successful_check")
             and named_check_requirement(
-                r, focus.get("action", ""), value.get("proposed_reveal_entity_ids", []),
+                r,
+                focus.get("action", ""),
+                value.get("proposed_reveal_entity_ids", []),
                 parent=next(
-                    (t for t in context.get("current_targets", [])
-                     if t["id"] == focus.get("action_target_id")), None
+                    (
+                        t
+                        for t in context.get("current_targets", [])
+                        if t["id"] == focus.get("action_target_id")
+                    ),
+                    None,
                 ),
                 proposal=proposal,
             )
@@ -772,89 +925,15 @@ def restore_output(output, schema, context):
                 fact_ids=[r["id"] for r in evidence],
             )
     elif schema is KeeperNarration:
-        brief = context.get("response_brief", {})
-        if value.get("npc_speech") and brief.get("dialogue_answers"):
-            from app.preparation.dialogue import sourced_dialogue_reply
-
-            value["npc_speech"]["text"] = sourced_dialogue_reply(
-                brief.get("question", ""), brief["dialogue_answers"]
-            )
+        # Receipts constrain the narrator; they are not a replacement paragraph.
+        # The publication validator checks real state, references and disclosure.
+        # Only failed validation invokes the bounded fallback in the runtime.
         results = context.get("public_tool_results", {}).get("events", [])
-        transitions = [e for e in results if e["type"] == "scene.updated"]
-        interactions = [
-            e["payload"]["text"]
-            for e in results
-            if e["type"] == "module.interaction" and e["payload"].get("text")
-        ]
-        checks = [e for e in results if e["type"] == "check.resolved"]
-        reveals = [
-            e["payload"].get("public_summary", e["payload"].get("content", ""))
-            for e in results
-            if e["type"] in {"entity.revealed", "clue.revealed"}
-        ]
-        if transitions:
-            p = transitions[-1]["payload"]
-            # A movement outcome is a receipt, not prose inferred from intent.
-            value["public_narration"] = (
-                "你已抵达" + p.get("scene_title", "") + "。" + p.get("scene_summary", "")
-            )
-            value["incidental_details"] = []
-        elif interactions:
-            # The selected approved operation supplies its actual result text.
-            # A correct claim ID cannot authorize a different outcome in prose.
-            value["public_narration"] = "\n".join(dict.fromkeys(interactions))
-            value["incidental_details"] = []
-        elif checks:
-            from app.agents.narration import fallback_narration
-
-            # A real roll constrains the achieved result, not only its ID or the
-            # words "success/failure". Only actual reveals can supply new clues.
-            value["public_narration"] = fallback_narration(
-                context.get("intent_type", ""), {"events": results}, "", brief=brief
-            )
-            value["incidental_details"] = []
-        elif context.get("public_tool_results", {}).get("blocked_operations"):
-            value["public_narration"] = "这次动作没有完成，当前状态未因这次尝试改变。"
-            value.update(incidental_details=[], claim_ids=[], grounded_claims=[])
-        elif brief.get("movement_requested"):
-            title = brief.get("current_scene", {}).get("title", "原场景")
-            value["public_narration"] = "本次没有完成转场；当前位置仍是" + title + "。"
-            value.update(incidental_details=[], claim_ids=[], grounded_claims=[])
-        elif (
-            brief.get("responder", {}).get("kind") == "teammate"
-            and not brief.get("attempt")
-            and not brief.get("source_quotes")
-        ):
-            value["public_narration"] = ""
-            value.update(incidental_details=[], claim_ids=[], grounded_claims=[])
-        elif brief.get("inventory_probe") and brief.get("responder", {}).get("kind") != "npc":
-            from app.preparation.inventory import inventory_reply
-
-            view = context.get("inventory_state", {})
-            actor = context["triggering_action"].get("actor_member_id")
-            name = next(
-                (m["name"] for m in view.get("members", []) if m["id"] == actor), "该调查员"
-            )
-            value["public_narration"] = (
-                ""
-                if brief.get("responder", {}).get("kind") == "teammate"
-                else "请先完成本次随身物检查的检定，物品结果尚未确定。"
-                if any(e["type"] == "check.requested" for e in results)
-                else inventory_reply(view, actor).replace("我", name, 1)
-            )
-            value.update(incidental_details=[], claim_ids=[], grounded_claims=[])
-        elif reveals:
-            value["public_narration"] = "\n".join(filter(None, reveals))
-            value["incidental_details"] = []
-        elif context.get("public_tool_results", {}).get("blocked_discovery"):
-            value["public_narration"] = "这次尚未确认新的线索内容，仍需满足该目标的调查条件。"
-            value["incidental_details"] = []
-        elif brief.get("unconfirmed_target"):
-            value["public_narration"] = "这次检查的目标尚未实际确认，目前无法确定其中的具体内容。"
-            value["incidental_details"] = []
-        elif brief.get("source_quotes") and brief.get("responder", {}).get("kind") != "npc":
-            # Already public writing remains the same on a teammate's repeated
-            # inspection; an old improvised absence cannot erase the source.
-            value["public_narration"] = "\n".join(brief["source_quotes"])
-            value["incidental_details"] = []
+        for event in results:
+            if event["type"] == "check.resolved":
+                value["check_result_reference"] = event["payload"].get(
+                    "id", event["payload"].get("check_id")
+                )
+            elif event["type"] == "scene.updated":
+                value["transition_result_reference"] = str(event["seq"])
     return schema.model_validate(value)

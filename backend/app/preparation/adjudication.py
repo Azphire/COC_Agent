@@ -117,7 +117,15 @@ def matches_action_focus(plan, scene_id, entity_id, rule):
     if plan.parsed_intent.type == "move" or (
         plan.proposed_transition_id and plan.parsed_intent.type == "unknown"
     ):
-        return False
+        route = plan.action_authority.get("route", {})
+        # A passage method resolves an obstacle on this route. It does not
+        # change the destination, and cannot stand in for unrelated operations.
+        return bool(
+            route.get("transition_id") == plan.proposed_transition_id
+            and route.get("required_flags")
+            and any(rule.set_flags.get(k) == v for k, v in route["required_flags"].items())
+            and selected_action_matches(plan.action_authority, plan.focus.action, rule)
+        )
     if rule.inventory_operation == "initial":
         from app.preparation.inventory import inventory_probe
 
@@ -406,6 +414,9 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
             data.module_runtime,
             members,
         )
+        route = facts.transitions.get(plan.proposed_transition_id)
+        if route and plan.parsed_intent.type == "move":
+            plan.action_authority["route"] = route
         if terminal:
             plan.action_authority["terminal_confirmation"] = terminal
         plan.proposed_tool_calls = [
@@ -428,9 +439,22 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
         candidates = []
         for eid, entity in facts.approved_entities.items():
             searching = bool(plan.proposed_check and str(plan.proposed_check.clue_id) == eid)
+            route_method = bool(
+                plan.parsed_intent.type == "move"
+                and plan.proposed_transition_id
+                and entity.get("reveal_conditions", {}).get("access_policy") == "automatic"
+                and not facts.reveal_errors.get(eid)
+                and any(
+                    r.get("kp_enabled")
+                    and matches_action_focus(
+                        plan, facts.scene_id, eid, ModuleInteraction.model_validate(r)
+                    )
+                    for r in entity.get("interactions", [])
+                )
+            )
             revealing = (
-                eid in plan.proposed_reveal_entity_ids
-                and eid in facts.visible_entity_ids
+                (eid in plan.proposed_reveal_entity_ids or route_method)
+                and (eid in facts.visible_entity_ids or route_method)
                 and entity.get("reveal_conditions", {}).get("access_policy") == "automatic"
                 and not facts.reveal_errors.get(eid)
             )
@@ -526,7 +550,13 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 if not set(rule.required_entity_ids) <= facts.revealed_entity_ids:
                     continue
                 candidates.append(
-                    {"entity_id": eid, "title": entity["title"], "rule": rule.model_dump()}
+                    {
+                        "entity_id": eid,
+                        "title": entity["title"],
+                        "rule": rule.model_dump(),
+                        "reveal_method_target": route_method
+                        and eid not in facts.revealed_entity_ids,
+                    }
                 )
         if not candidates:
             return None
@@ -744,10 +774,16 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
             verification.action_quote = action
             rule = ModuleInteraction.model_validate(chosen["rule"])
             plan.needs_host_review = plan.needs_clarification = False
+            if chosen.get("reveal_method_target"):
+                # Only the independently checked automatic local method target
+                # can reach this branch. The ordinary reveal tool still validates
+                # it before applying the selected method and moving the party.
+                plan.proposed_reveal_entity_ids = [chosen["entity_id"]]
             if rule.elapsed_minutes and plan.parsed_intent.type == "wait":
                 plan.parsed_intent.type = "interact"
             plan.parsed_intent.requires_clarification = False
-            plan.proposed_transition_id = None
+            if plan.parsed_intent.type != "move":
+                plan.proposed_transition_id = None
             args = {
                 "entity_id": chosen["entity_id"],
                 "interaction_id": rule.id,
@@ -812,6 +848,16 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 and context["actor"] in data.module_runtime.initial_belongings
             ):
                 needs_check = False
+            if needs_check and rule.inventory_operation == "initial":
+                from app.preparation.inventory import unsettled_initial_check
+
+                original = await unsettled_initial_check(
+                    session, room, context["actor"], rule.item_id
+                )
+                if original:
+                    plan.action_authority["continued_check_id"] = original.id
+                    needs_check = False
+                    plan.proposed_check = None
             if needs_check:
                 possession_check = rule.inventory_operation in {"initial", "recover"}
                 check_target = rule.item_id if possession_check else chosen["entity_id"]
@@ -822,6 +868,7 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 )
                 plan.focus.obstacle = rule.situation or rule.instruction
                 plan.proposed_check = CheckProposal(
+                    transition_id=plan.proposed_transition_id,
                     target_member_id=context["actor"],
                     kind="attribute"
                     if rule.check_name

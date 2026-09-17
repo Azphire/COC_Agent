@@ -9,6 +9,8 @@ import re
 from app.preparation.inventory import held_instance
 
 VERBS = {
+    "first_aid": r"急救|包扎|止血|\bfirst aid\b",
+    "medicine": r"医学治疗|\bmedical treatment\b",
     "throw": r"扔|抛|投(?:出|向|掷)|掷|甩(?:出|向)|砸向|\bthrow\b|\btoss\b|\bhurl\b",
     "give": (
         r"交(?:还|回)?(?:给|到|出)|归还|还给|递(?:给|到|出)|转交|塞.{0,16}手里"
@@ -21,8 +23,9 @@ VERBS = {
     ),
     "consume": r"吃|喝|吞|用掉|耗用|消耗|\b(?:eat|drink|consume)\b",
     "search": (
-        r"寻找|找|搜|翻(?:找|查|开|看|过|转)|揭下|检查|查看.{0,8}(?:包|袋|背面|反面|正反面)"
+        r"寻找|找|搜|摸索|翻(?:找|查|开|看|过|转)|揭下|检查|查看.{0,8}(?:包|袋|背面|反面|正反面)"
         r"|(?:看看|观察)(?:一下)?(?:(?:我|你|自己)(?:的)?)?(?:口袋|衣袋|随身物|随身东西|背包)"
+        r"|摸(?:索|摸)?(?:一下)?(?:自己|我的)?(?:的)?(?:口袋|衣袋|背包)"
         r"|\b(?:search|rummage|find|inspect)\b"
     ),
     "clear": r"清理|搬开|移开|\bclear\b",
@@ -38,7 +41,7 @@ VERBS = {
         r"|插入.{0,16}锁孔|转动.{0,8}钥匙|\b(?:unlock|open)\b"
     ),
     "close": r"关(?:门|上|闭)|拉上.{0,8}门|\bclose\b",
-    "pass": r"通过|穿过|绕过|潜行|溜过|悄悄.{0,8}走|\b(?:sneak|pass)\b",
+    "pass": r"通过|穿过|绕过|潜行|溜过|冲进|冲过|跳|悄悄.{0,8}走|\b(?:sneak|pass)\b",
     "carry": r"背(?:起|上|着|负)|抱起|扶起|\bcarry\b",
     "release": r"挣脱|挣开|摆脱|\bescape\b|\bbreak free\b",
     "control": r"推|拉|加速|减速|停车|\b(?:push|pull|accelerate|stop)\b",
@@ -63,11 +66,11 @@ def declared_action(text):
             r"\s*(?:我(?:们)?(?:现在|这就|先|想|要|打算|准备)?)?"
             r"(?:仔细|认真|先|再|然后|接着|继续|试着|尝试|实际)*"
             r"(?:(?:靠近|走近|凑近)[^，。；,.!?;]{0,16}?)?"
-            r"(?:检查|查看|看看|搜索|寻找|搜寻|翻看|翻转|翻过|揭下|观察|拿起|取下|使用|潜行|"
+            r"(?:急救|包扎|止血|检查|查看|看看|摸|搜索|寻找|搜寻|翻看|翻转|翻过|揭下|观察|拿起|取下|使用|潜行|"
             r"(?:把|将).{1,24}(?:翻过|翻转|揭下|拿起|扔|抛|交给|打开)|交给|交还|归还|递给)",
             c,
         )
-        for c in re.split(r"[，。；,;.!\n]", text)
+        for c in re.split(r"(?<=[，。；！？,;.!?\n])", text)
     )
 
 
@@ -76,7 +79,7 @@ def action_kinds(text):
         return []
     clauses = [
         c
-        for c in re.split(r"[，。；,;.!\n]", text)
+        for c in re.split(r"(?<=[，。；！？,;.!?\n])", text)
         if c and (not NON_ACTION.search(c) or declared_action(c))
     ]
     # The question describes what is being checked, not additional operations:
@@ -97,17 +100,33 @@ def action_kinds(text):
 
 def speaker_action(text):
     """A present first-person operation remains owned by its speaker."""
-    for clause in re.split(r"(?<=[，。；,;.!\n])", text):
-        if re.match(r"\s*我(?:们)?", clause) and declared_action(clause):
+    for clause in re.split(r"(?<=[，。；！？,;.!?\n])", text):
+        if re.match(r"\s*我(?:是|想)?请你|\s*我(?:希望|让|叫)你", clause):
+            continue
+        if not re.match(r"\s*我(?:们)?", clause) or re.match(
+            r"\s*我(?:们)?(?:先|暂时)?(?:不|没|未)", clause
+        ):
+            continue
+        if declared_action(clause) or (
+            not NON_ACTION.search(clause) and set(action_kinds(clause)) - {"converse"}
+        ):
             return clause
     return None
+
+
+def addressed_request_text(raw, name):
+    """A named request ends before another sentence or the speaker's own act."""
+    match = re.search(r"(?:^|[。！？；])\s*" + re.escape(name) + r"[，,:：]([^。！？；]*)", raw)
+    if not match:
+        return raw
+    return re.split(r"[，,]\s*我(?:们)?(?!是请|想请|希望你)", match[1], maxsplit=1)[0]
 
 
 def requested_action_kinds(text):
     """A requestee does not inherit a separate first-person requester action."""
     clauses = [
         c
-        for c in re.split(r"[，。；,;.\n]", text)
+        for c in re.split(r"[，。；！？,;.!?\n]", text)
         if not speaker_action(c)
         and not re.match(r"\s*我(?:们)?(?:来|去|先|要|会|再|接着|随后|自己)", c)
     ]
@@ -163,18 +182,27 @@ def teammate_request(raw, members, actor, *, action=None):
     for mid, name in members.items():
         if mid == actor:
             continue
+        addressed = re.search(
+            r"(?:^|[。！？；])\s*" + re.escape(name) + r"[，,:：]([^。！？；]*)", raw
+        )
+        if addressed and re.search(r"[?？]|(?:请教|询问|想问)", raw[addressed.start() :]):
+            # A salutation can precede background and several sentences before
+            # the actual question. It still gives the named peer a reply turn.
+            return mid
+        if addressed and not re.match(r"\s*我(?:们)?", addressed[1]) and action_kinds(addressed[1]):
+            return mid
         if re.search(
-            r"^\s*我(?:对|向)"
+            r"(?:^|[。！？；])\s*我(?:对|向)"
             + re.escape(name)
             + r"(?:说道?|表示)[：:]\s*(?:请|麻烦你|劳驾|你|把)",
             raw,
         ):
             return mid
         if re.search(
-            r"^\s*"
+            r"(?:^|[。！？；])\s*"
             + re.escape(name)
             + r"[，,:：]\s*(?:(?:现在|这就|马上|接着|随后|先|再)\s*)*"
-            + r"(?:请|你|帮|把|打开|关|拿|用|麻烦你|劳驾|我(?:是|想)?请你|我希望你|"
+            + r"(?:请|你|帮|把|打开|关|拿|用|过来|来|麻烦你|劳驾|我(?:是|想)?请你|我希望你|"
             r"能不能|可不可以|能否|可否|可以|能)",
             raw,
         ):
@@ -233,7 +261,7 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
         "target_id": target,
         "action": action,
         "utterance": raw,
-        "clauses": [c.strip() for c in re.split(r"[，。；,;.!\n]", raw) if c.strip()],
+        "clauses": [c.strip() for c in re.split(r"[，。；！？,;.!?\n]", raw) if c.strip()],
         "kinds": kinds,
         "item_instances": instances,
         "held_instances": held,

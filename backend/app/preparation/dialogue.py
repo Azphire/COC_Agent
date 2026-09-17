@@ -95,7 +95,10 @@ def dialogue_target(raw, candidates, previous=None, selected=None, *, member_nam
         return None
     salutation = re.match(r"\s*([\w·]{2,20}?)(?:先生|女士)?[，,：:]", raw)
     if any(
-        name and re.search(re.escape(name) + r"(?:先生|女士)?[，,：:]", raw)
+        name
+        and re.match(
+            r"\s*(?:(?:你好|您好)[，,]\s*)?" + re.escape(name) + r"(?:先生|女士)?[，,：:]", raw
+        )
         for name in member_names
     ):
         return None
@@ -132,16 +135,20 @@ def repair_dialogue_focus(plan, raw, candidates, previous=None, *, member_names=
     direct = any(
         re.match(re.escape(e["title"]) + r"(?:先生|女士)?[，,：:]", raw) for e in candidates
     )
-    if readonly_recall(raw) and not (
-        direct and not re.search(r"回顾|复述|记错|原话|说过|告诉我们", raw)
-    ):
-        return None
     focus = plan.focus or TurnFocus()
     npc = dialogue_target(
-        raw, candidates, previous, focus.addressee_id or focus.action_target_id,
+        raw,
+        candidates,
+        previous,
+        focus.addressee_id or focus.action_target_id,
         member_names=member_names,
     )
     if not npc:
+        return None
+    if readonly_recall(raw) and (
+        re.search(r"回顾|复述|记错|原话|说过|告诉我们", raw)
+        or not (direct or focus.action or re.search(r"你|您", focus.question))
+    ):
         return None
     clauses = utterance_clauses(raw)
     questions = [
@@ -149,19 +156,36 @@ def repair_dialogue_focus(plan, raw, candidates, previous=None, *, member_names=
         for i, c in enumerate(clauses)
         if re.search(r"问|说|你好|您好|听得见|[?？]|告诉|请教|打招呼", c["text"])
     ]
-    focus.question = "".join(c["text"] for c in clauses[min(questions) :]) if questions else raw
+    if not focus.question or focus.question not in raw:
+        focus.question = (
+            "".join(c["text"] for c in clauses[min(questions) : max(questions) + 1])
+            if questions
+            else raw
+        )
     focus.addressee_id = npc["id"]
-    # Preserve a simultaneous concrete treatment/action clause, including a
-    # clause that also contains speech. Merely asking is not an operation.
-    if focus.action and not re.search(
-        r"包扎|急救|治疗|背起|扶起|拿起|使用|交给|打开|检查|观察|按住|照向|照明|照射", focus.action
-    ):
-        focus.action = ""
-        focus.action_target_id = None
-        plan.proposed_check = None
-        plan.proposed_tool_calls = []
-        plan.proposed_transition_id = None
-        plan.proposed_reveal_entity_ids = []
+    if focus.action and re.search(r"[?？]", focus.action):
+        # Repair a purely addressed question; a separate present first-person
+        # declaration (including verbs outside the operation lexicon) survives.
+        declarations = [
+            c["text"]
+            for c in utterance_clauses(focus.action)
+            if re.match(r"\s*我(?:们)?", c["text"])
+            and not re.search(r"[?？]|(?:询问|问|说|建议|请教)", c["text"])
+        ]
+        from app.agents.action_policy import explicit_movement
+        from app.preparation.action_authority import action_kinds
+
+        if (
+            not declarations
+            and not set(action_kinds(focus.action)) - {"converse"}
+            and not explicit_movement(focus.action)
+            and not compound_treatment(focus.action)
+        ):
+            focus.action = ""
+            focus.action_target_id = None
+    # Dialogue repair binds a speaker, not a second action classifier. The
+    # selected action clauses still pass the ordinary authority/check guards.
+    # An incomplete verb whitelist used to erase valid simultaneous actions.
     plan.focus = focus
     if not focus.action:
         plan.parsed_intent.type = "converse"
@@ -173,13 +197,54 @@ def repair_dialogue_focus(plan, raw, candidates, previous=None, *, member_names=
 
 def repair_teammate_focus(plan, raw, members, actor):
     request = teammate_request(raw, members, actor)
-    own_action = speaker_action(plan.focus.action) if plan.focus and plan.focus.action else None
+    own_action = (
+        speaker_action(plan.focus.action)
+        if plan.focus and plan.focus.action
+        else speaker_action(raw)
+    )
+    if not own_action and plan.focus and plan.focus.action:
+        from app.agents.generation_contracts import utterance_clauses
+
+        # The primary KP has already selected actual action clauses. Preserve
+        # its first-person statement even when it uses an unlisted action verb.
+        own_action = next(
+            (
+                c["text"]
+                for c in utterance_clauses(plan.focus.action)
+                if re.match(r"\s*我(?:们)?(?!.*[?？])", c["text"])
+                and not re.search(r"如果|假如|假设|我(?:想问|问|说|建议)", c["text"])
+                and not re.match(r"\s*我(?:们)?(?:没|不|是|有|觉得|知道|听说|还得)", c["text"])
+            ),
+            None,
+        )
+    if (
+        own_action
+        and plan.focus
+        and plan.focus.action
+        and plan.focus.action in raw
+        and plan.focus.action.startswith(own_action)
+    ):
+        # A selected span can include speech between two actual operations.
+        # The clause contract already preserves its questions separately. Do
+        # not discard the later operation merely because that span contains '?'.
+        own_action = plan.focus.action
+        from app.agents.generation_contracts import utterance_clauses
+
+        selected = utterance_clauses(own_action)
+        for index, clause in enumerate(selected):
+            if not re.match(r"\s*我(?:们)?", clause["text"]) and teammate_request(
+                clause["text"], members, actor
+            ):
+                own_action = "".join(c["text"] for c in selected[:index])
+                break
     if request and own_action and own_action in raw:
         # Preserve the model's actual first-person action; only the separate
         # request belongs to the addressee. Do not manufacture another act.
         plan.focus.action = own_action
-        plan.focus.question = raw.replace(own_action, "", 1)
-        plan.focus.addressee_id = request
+        if not plan.focus.addressee_id or plan.focus.addressee_id in members:
+            if not plan.focus.question:
+                plan.focus.question = raw.replace(own_action, "", 1)
+            plan.focus.addressee_id = request
         plan.addressed_member_id = request
     elif request:
         plan.focus = TurnFocus(question=raw, addressee_id=request, answer_basis="teammate")
@@ -190,6 +255,7 @@ def repair_teammate_focus(plan, raw, members, actor):
         plan.proposed_tool_calls = []
         plan.proposed_transition_id = None
         plan.proposed_reveal_entity_ids = []
+        plan.needs_clarification = plan.parsed_intent.requires_clarification = False
 
 
 async def prepare_dialogue(runtime, state, run_id):
@@ -259,7 +325,7 @@ async def prepare_dialogue(runtime, state, run_id):
                 if not set(topic.get("required_entity_ids", [])) <= facts.revealed_entity_ids:
                     continue
                 plan.focus.addressee_id = eid
-                plan.focus.question = facts.raw_text
+                plan.focus.question = plan.focus.question or facts.raw_text
                 plan.focus.answer_basis = "facts"
                 # The NPC is publicly described in the current scene, and the
                 # topic's own source-approved disclosure gates remain in force.

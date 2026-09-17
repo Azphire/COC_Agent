@@ -158,6 +158,7 @@ class ActionAdjudicationService:
             facts.visible_entity_ids = {e.source_entity_id for e in rows if e.state != "hidden"}
             facts.revealed_entity_ids = set(facts.visible_entity_ids)
             facts.local_entity_ids = set(facts.approved_entities)
+            condition_context = {}
             for entity in rows:
                 for for_check, errors in (
                     (False, facts.reveal_errors),
@@ -165,7 +166,12 @@ class ActionAdjudicationService:
                 ):
                     try:
                         await agents.entities.check_conditions(
-                            session, room, entity, cycle.id, for_check=for_check
+                            session,
+                            room,
+                            entity,
+                            cycle.id,
+                            for_check=for_check,
+                            condition_context=condition_context,
                         )
                     except RoomError as error:
                         errors[entity.source_entity_id] = error.message
@@ -300,6 +306,12 @@ class ActionAdjudicationService:
                 for t in snapshot.transitions
                 if t.approved and t.source_scene_node_id == facts.scene_id
             }
+            for transition in facts.transitions.values():
+                target = facts.approved_entities.get(transition.get("target_entity_id"), {})
+                transition["target_description"] = target.get("public_summary", "")[:200]
+                transition["is_previous_scene"] = (
+                    transition["target_scene_node_id"] == state.previous_scene_node_id
+                )
             await agents.navigation.refresh(session, room, state, snapshot)
             facts.available_transition_ids = set(state.available_transition_ids)
         # An object named in the public scene can be addressed before revealing its content.

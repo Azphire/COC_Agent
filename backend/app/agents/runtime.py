@@ -371,7 +371,8 @@ class AgentRuntime(ActionRuntimeMixin):
                 )
                 from app.agents.action_policy import error_category
 
-                await self.fail(room_id, cycle_id, error_category(error), safe)
+                if await self.fail(room_id, cycle_id, error_category(error), safe):
+                    self.schedule(room_id)
 
     async def fail(self, room_id, cycle_id, error_type, safe_error):
         async def operation(session, room):
@@ -415,7 +416,39 @@ class AgentRuntime(ActionRuntimeMixin):
             )
             self.service.cycle_event(session, room, cycle)
 
-        await self.service.mutate(room_id, operation)
+            if (
+                error_type == "model_schema_error"
+                and cycle.state.get("origin") == "teammate"
+                and cycle.state.get("current_node") == "plan_keeper_action"
+                and not cycle.state.get("tool_count")
+                and not cycle.state.get("pending_check_id")
+            ):
+                # The bounded format repair already failed before execution.
+                # This optional teammate attempt must not lock the human turn.
+                cycle.status, cycle.finished_at = "completed", utc_now()
+                cycle.state = {
+                    **cycle.state,
+                    "status": "completed",
+                    "teammate_attempt_failed": True,
+                }
+                self.rooms.append(
+                    session,
+                    room,
+                    "keeper.narration",
+                    room.host_member_id,
+                    {
+                        "cycle_id": cycle.id,
+                        "text": "这次同伴的尝试未能完成，没有产生新的行动结果。",
+                        "safe_fallback": True,
+                    },
+                )
+                self.service.cycle_event(session, room, cycle)
+                from app.agents.conversation import activate_next
+
+                await activate_next(self.service, session, room)
+                return True
+
+        return await self.service.mutate(room_id, operation)
 
     async def node(self, state, name):
         async def operation(session, room):
@@ -1583,6 +1616,9 @@ class AgentRuntime(ActionRuntimeMixin):
             from app.agents.sanity_runtime import complete_keeper_bouts
 
             await complete_keeper_bouts(self.service, session, room)
+            from app.preparation.runtime import complete_pending_outcome
+
+            await complete_pending_outcome(self.service, session, room)
             if cycle.state.get("combat_other_action"):
                 from app.rooms.combat_service import current_actor, load_state, store_state
 

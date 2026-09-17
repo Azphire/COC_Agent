@@ -25,6 +25,24 @@ from app.preparation.inventory import bind_item_prose
 from app.rooms.service import RoomError
 
 
+def rejected_narration_fallback(context, draft):
+    """Reject invented outcomes before rendering the bounded receipt fallback."""
+    from app.agents.narration import NarrationValidator, fallback_narration
+
+    results = context.get("public_tool_results", {"events": []})
+    brief = context.get("response_brief", {})
+    restored = restore_output(draft, KeeperNarration, context)
+    assert restored.public_narration == draft.public_narration
+    with pytest.raises(RoomError):
+        NarrationValidator().validate(
+            restored, documents=[], public_ids=set(restored.public_entity_references),
+            scene_id="hall", results=results, brief=brief,
+            inventory_state=context.get("inventory_state"),
+        )
+    return fallback_narration("investigate", results, "大厅", brief=brief,
+                              inventory_state=context.get("inventory_state"))
+
+
 def test_memory_budget_counts_full_auxiliary_envelope_and_actual_plan_view():
     from copy import deepcopy
 
@@ -60,7 +78,9 @@ def test_memory_budget_counts_full_auxiliary_envelope_and_actual_plan_view():
     teammate_prompt = generation_prompt(teammate, TeammateDecision)
     assert prompt_context_size(teammate) == len(json.dumps(teammate_prompt, ensure_ascii=False))
     assert teammate_prompt["inventory_state"] == teammate["inventory_state"]
-    assert teammate_prompt["characters"] == teammate["characters"]
+    assert (
+        teammate_prompt["characters"][0]["abilities"] == teammate["characters"][0]["skill_values"]
+    )
 
 
 def test_compact_prompt_omits_routing_metadata_but_keeps_pending_check_and_inventory():
@@ -910,9 +930,12 @@ def test_local_stealth_cannot_take_wrong_exit_and_arrival_uses_receipt(raw):
         },
     )
     fixed = restore_output(
-        KeeperNarration(public_narration="你悄无声息地穿过2号车厢。"), KeeperNarration, context
+        KeeperNarration(public_narration="你回到3号车厢，脚边仍是散落的行李。"),
+        KeeperNarration,
+        context,
     )
-    assert fixed.public_narration == "你已抵达3号车厢。行李散落满地。"
+    assert fixed.public_narration == "你回到3号车厢，脚边仍是散落的行李。"
+    assert fixed.transition_result_reference == "8"
 
 
 def test_npc_question_publishes_speech_even_when_model_only_narrates(client, game):  # noqa: F811
@@ -1687,10 +1710,10 @@ def test_selected_interaction_receipt_cannot_be_rewritten_as_no_clue():
             "events": [event(20, "module.interaction", text="封条背面写着：向东门前进。")]
         }
     )
-    result = restore_output(
-        KeeperNarration(public_narration="封条背面没有任何文字。"), KeeperNarration, context
+    result = rejected_narration_fallback(
+        context, KeeperNarration(public_narration="封条背面没有任何文字。")
     )
-    assert result.public_narration == "封条背面写着：向东门前进。"
+    assert result == "封条背面写着：向东门前进。"
 
 
 @pytest.mark.parametrize("document", ["便签", "木牌"])
@@ -1740,18 +1763,16 @@ def test_repeated_observation_uses_public_writing_not_old_improvised_absence():
     )
     brief, _ = response_brief(plan, context, {"events": []})
     assert brief["source_quotes"] == ["封条背面写着：向东门前进。"]
-    value = restore_output(
-        KeeperNarration(public_narration="封条背面没有文字。"),
-        KeeperNarration,
-        {"response_brief": brief},
+    value = rejected_narration_fallback(
+        {"response_brief": brief}, KeeperNarration(public_narration="封条背面没有文字。")
     )
-    assert value.public_narration == "封条背面写着：向东门前进。"
+    assert value == "封条背面写着：向东门前进。"
     context["public_entities"][0]["fact_scope"] = "historical"
     assert response_brief(plan, context, {"events": []})[0]["source_quotes"] == []
 
 
 def test_named_writing_alias_survives_wrong_teammate_focus():
-    from app.agents.narration import response_brief
+    from app.agents.narration import NarrationValidator, fallback_narration, response_brief
 
     raw = "我走近布告，看看背面有没有文字。"
     plan = plan_for(raw, "converse", None)
@@ -1776,7 +1797,15 @@ def test_named_writing_alias_survives_wrong_teammate_focus():
         KeeperNarration,
         {"response_brief": brief},
     )
-    assert result.public_narration == "布告写着：沿东廊前进。"
+    with pytest.raises(RoomError, match="已公开来源"):
+        NarrationValidator().validate(
+            result, documents=[], public_ids={"note"}, scene_id="hall",
+            results={"events": []}, brief=brief,
+        )
+    assert (
+        fallback_narration("observe", {"events": []}, "hall", brief=brief)
+        == "布告写着：沿东廊前进。"
+    )
 
 
 def test_compact_prompt_keeps_server_bindings_and_real_prerequisites():
@@ -2095,28 +2124,25 @@ def test_actual_roll_and_reveals_constrain_body_even_with_correct_reference(pass
     ]
     if passed:
         events.append(event(31, "entity.revealed", public_summary="航海日志日期：六月五日。"))
-    output = restore_output(
+    output = rejected_narration_fallback(
+        {"public_tool_results": {"events": events}},
         KeeperNarration(
             public_narration="你读到日志日期为七月一日，还有一宗失踪案。",
             check_result_reference="roll",
             incidental_details=["新闻写着失踪案"],
         ),
-        KeeperNarration,
-        {"public_tool_results": {"events": events}},
     )
-    assert "七月" not in output.public_narration and "失踪案" not in output.public_narration
-    assert not output.incidental_details
-    assert ("六月五日" in output.public_narration) == passed
-    assert ("检定失败" in output.public_narration) != passed
+    assert "七月" not in output and "失踪案" not in output
+    assert ("六月五日" in output) == passed
+    assert ("检定失败" in output) != passed
 
 
 def test_unconfirmed_written_target_cannot_acquire_content_from_prose():
-    output = restore_output(
-        KeeperNarration(public_narration="你翻开信封，看见约定地点是钟楼。"),
-        KeeperNarration,
+    output = rejected_narration_fallback(
         {"response_brief": {"unconfirmed_target": True}},
+        KeeperNarration(public_narration="你翻开信封，看见约定地点是钟楼。"),
     )
-    assert "尚未实际确认" in output.public_narration and "钟楼" not in output.public_narration
+    assert "尚未实际确认" in output and "钟楼" not in output
 
 
 def test_focus_evidence_does_not_replace_a_different_observation_with_old_text():
@@ -2197,12 +2223,11 @@ def test_rejected_detail_cannot_be_invented_under_a_visible_parent():
     from app.agents.narration import fallback_narration
 
     results = {"events": [], "failed_tools": [], "blocked_discovery": True}
-    output = restore_output(
-        KeeperNarration(public_narration="档案的签名是林某。", public_entity_references=["file"]),
-        KeeperNarration,
+    output = rejected_narration_fallback(
         {"public_tool_results": results},
+        KeeperNarration(public_narration="档案的签名是林某。", public_entity_references=["file"]),
     )
-    assert "尚未确认" in output.public_narration and "林某" not in output.public_narration
+    assert "尚未确认" in output and "林某" not in output
     assert "尚未确认" in fallback_narration("investigate", results, "档案室")
 
 
@@ -2211,12 +2236,11 @@ def test_actual_new_reveal_supplies_content_even_without_a_check_this_turn():
         "events": [event(32, "entity.revealed", public_summary="档案签名：季青。")],
         "blocked_discovery": True,
     }
-    output = restore_output(
-        KeeperNarration(public_narration="档案签名是林某。"),
-        KeeperNarration,
+    output = rejected_narration_fallback(
         {"public_tool_results": results},
+        KeeperNarration(public_narration="档案签名是林某。"),
     )
-    assert output.public_narration == "档案签名：季青。"
+    assert "档案签名：季青。" in output and "林某" not in output
 
 
 def test_named_child_detail_accepts_natural_modifiers_without_revealing_all_details():
@@ -3054,6 +3078,10 @@ def test_inventory_probe_cannot_publish_unregistered_discovery(invented, mode):
         inventory_state=view,
         actor_id="peer",
     )
+    if is_action:
+        assert not result.accepted and result.reason == "unsettled_result"
+        assert not view["holders"]
+        return
     assert result.accepted and invented not in output_text(decision)
     assert (
         "检查自己的口袋" in output_text(decision)
@@ -3130,16 +3158,16 @@ def test_unsettled_inventory_narration_uses_state_and_keeps_actual_pending_check
         public_tool_results={"events": []},
     )
     draft = KeeperNarration(public_narration="你拿着刚找到的蓝色罗盘。")
-    fixed = restore_output(draft, KeeperNarration, context)
+    fixed = rejected_narration_fallback(context, draft)
     assert (
-        "罗盘" not in fixed.public_narration and "林舟的随身物还没有确认" in fixed.public_narration
+        "罗盘" not in fixed and "林舟的随身物还没有确认" in fixed
     )
     context["public_tool_results"]["events"] = [
         event(1, "entity.revealed", public_summary="一只蓝色罗盘。")
     ]
-    assert "还没有确认" in restore_output(draft, KeeperNarration, context).public_narration
+    assert "还没有确认" in rejected_narration_fallback(context, draft)
     context["public_tool_results"]["events"] = [event(1, "check.requested")]
-    assert "请先完成" in restore_output(draft, KeeperNarration, context).public_narration
+    assert "请先完成" in rejected_narration_fallback(context, draft)
 
 
 @pytest.mark.parametrize("target", ["hall", "hall_entity"])
@@ -3352,13 +3380,13 @@ def test_rejected_handover_cannot_be_narrated_as_received_even_with_correct_clai
     context = dict(
         response_brief=brief, public_tool_results=dict(events=[], blocked_operations=True)
     )
-    result = restore_output(
-        KeeperNarration(public_narration="你接过铜灯，握在手里。"), KeeperNarration, context
+    result = rejected_narration_fallback(
+        context, KeeperNarration(public_narration="你接过铜灯，握在手里。")
     )
-    assert result.public_narration == "这次动作没有完成，当前状态未因这次尝试改变。"
+    assert result == "这次动作没有完成，当前状态未因这次尝试改变。"
     assert (
         fallback_narration("interact", context["public_tool_results"], "大厅", brief=brief)
-        == result.public_narration
+        == result
     )
     brief.update(attempt="", responder=dict(kind="teammate", name="林女士"))
     assert (
@@ -3467,10 +3495,16 @@ def test_crossing_current_scene_then_entering_named_exit_is_a_transition(scene, 
         KeeperNarration,
         dict(response_brief=brief, public_tool_results={"events": []}),
     )
-    assert output.public_narration == f"本次没有完成转场；当前位置仍是{scene}。"
+    from app.agents.narration import NarrationValidator
+
+    with pytest.raises(RoomError, match="失败的转场"):
+        NarrationValidator().validate(
+            output, documents=[], public_ids=set(), scene_id="current",
+            results={"events": []}, brief=brief,
+        )
     assert (
         fallback_narration("interact", {"events": []}, scene, brief=brief)
-        == output.public_narration
+        == f"本次没有完成转场；当前位置仍是{scene}。"
     )
 
 

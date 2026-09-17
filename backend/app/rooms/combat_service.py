@@ -70,8 +70,29 @@ class CombatService:
         self.agents, self.rooms = agents, agents.rooms
 
     @staticmethod
-    def route(room, text):
+    def route(room, text, *, members=None, actor=None):
         # Routing only. A model still distinguishes statements, questions and actual attempts.
+        if members and not room.session_state.get("combat", {}).get("active"):
+            from app.agents.conversation import addressed_targets
+            from app.preparation.action_authority import teammate_request
+
+            direct = addressed_targets(
+                text,
+                [
+                    {"id": mid, "title": name, "type": "member"}
+                    for mid, name in members.items()
+                    if mid != actor
+                ],
+            )
+            if direct or teammate_request(text, members, actor):
+                # Requests belong to the addressee. Only the speaker's own
+                # separate attempt may enter combat before teammate response.
+                text = "。".join(
+                    clause
+                    for clause in re.split(r"[，,。！？；]", text)
+                    if re.match(r"\s*我(?:们)?", clause)
+                    and not re.search(r"我(?:请|让|叫|问|说)|如果|假如|假设", clause)
+                )
         return bool(
             room.session_state.get("combat", {}).get("active")
             or re.search(
@@ -941,9 +962,11 @@ class CombatService:
         elif stage.endswith("_roll"):
             fixed = role in action["rolls"] or any(
                 e.payload["key"] == action["id"] + ":" + role
-                for e in await session.scalars(select(RoomEvent).where(
-                    RoomEvent.room_id == room.id, RoomEvent.type == "combat.dice_fixed"
-                ))
+                for e in await session.scalars(
+                    select(RoomEvent).where(
+                        RoomEvent.room_id == room.id, RoomEvent.type == "combat.dice_fixed"
+                    )
+                )
             )
             if role.startswith("health_") or fixed:
                 await self.perform_roll(session, room, state, action, role)
@@ -957,9 +980,14 @@ class CombatService:
         else:
             require(False, "此阶段不能使用受限处理", 422)
         action.setdefault("restricted_resolutions", {})[stage] = reason
-        self.rooms.append(session, room, "combat.restricted_resolved", room.host_member_id,
-                          {"action_id": action["id"], "stage": stage, "reason": reason},
-                          "host_only")
+        self.rooms.append(
+            session,
+            room,
+            "combat.restricted_resolved",
+            room.host_member_id,
+            {"action_id": action["id"], "stage": stage, "reason": reason},
+            "host_only",
+        )
 
     async def step(self, session, room, identity, body):
         state = load_state(room)
@@ -994,14 +1022,21 @@ class CombatService:
         reason = combat_autonomy_reason(state, combat.participants[pid])
         if restricted:
             require(reason, "该参与者可自主行动，不适用受限处理")
-            require(body.reason.strip() and body.weapon_id is None and body.spend is None,
-                    "须记录原因；受限处理不能选择武器或花费幸运", 422)
+            require(
+                body.reason.strip() and body.weapon_id is None and body.spend is None,
+                "须记录原因；受限处理不能选择武器或花费幸运",
+                422,
+            )
             await self.resolve_restricted(
                 session, room, state, action, stage, role, reason + "；" + body.reason
             )
         else:
-            require(not reason or (stage.endswith("_choice") and body.operation == "accept")
-                    or (role.startswith("health_") and body.operation == "roll"), reason)
+            require(
+                not reason
+                or (stage.endswith("_choice") and body.operation == "accept")
+                or (role.startswith("health_") and body.operation == "roll"),
+                reason,
+            )
         if restricted:
             pass
         elif stage == "defense":
@@ -1054,8 +1089,10 @@ class CombatService:
             await self.queue_health(session, room, "行动顺序推进后继续强制伤势检查")
             return
         pid = current_actor(state.combat)
-        if pid and autonomous(state, state.combat.participants[pid]) and await self.automatic(
-            session, state.combat.participants[pid]
+        if (
+            pid
+            and autonomous(state, state.combat.participants[pid])
+            and await self.automatic(session, state.combat.participants[pid])
         ):
             await self.make_cycle(
                 session, room, pid, "轮到你行动，依据公开局势选择自己的行动。", automatic=True
@@ -1354,8 +1391,11 @@ class CombatService:
                 "team": p.team,
                 "incapacitated": not capable(p),
                 "autonomy_blocked": bool(combat_autonomy_reason(state, p)),
-                "autonomy_reason": combat_autonomy_reason(state, p) if full else
-                    "当前不能自主行动" if combat_autonomy_reason(state, p) else None,
+                "autonomy_reason": combat_autonomy_reason(state, p)
+                if full
+                else "当前不能自主行动"
+                if combat_autonomy_reason(state, p)
+                else None,
                 **(
                     {
                         "hp": p.hp,
@@ -1392,9 +1432,15 @@ class CombatService:
             )
             result["pending"]["participant_id"] = pid
             reason = combat_autonomy_reason(state, combat.participants[pid]) if pid else None
-            result["pending"]["restricted_reason"] = reason if (
-                identity.is_host or pid and combat.participants[pid].member_id == identity.member_id
-            ) else ("当前不能自主行动" if reason else None)
+            result["pending"]["restricted_reason"] = (
+                reason
+                if (
+                    identity.is_host
+                    or pid
+                    and combat.participants[pid].member_id == identity.member_id
+                )
+                else ("当前不能自主行动" if reason else None)
+            )
             result["pending"]["weapon_kind"] = action.get("weapon", {}).get("kind")
             result["pending"]["luck_options"] = (
                 self.options(state, action, role)

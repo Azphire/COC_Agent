@@ -37,7 +37,11 @@ def addressed_targets(text, targets):
         if t["type"] in {"npc", "member"}
         and (
             t["title"].endswith(name)
-            or (name.endswith(("先生", "女士")) and t["title"].startswith(name[:-2]))
+            or (
+                len(name) > 2
+                and name.endswith(("先生", "女士"))
+                and t["title"].startswith(name[:-2])
+            )
         )
     }
 
@@ -159,6 +163,8 @@ async def enqueue_teammate(service, session, room, parent, event, binding):
     cycle_id = str(uuid4())
     state = initial_state(room.id, cycle_id, binding.member_id, event.seq, [], origin="teammate")
     state["related_player_cycle_id"] = parent.id
+    if service.combat.route(room, event.payload["text"]):
+        state.update(combat_flow=True, combat_actor_id=binding.member_id)
     session.add(AgentCycle(id=cycle_id, room_id=room.id, status="queued", state=state))
 
 

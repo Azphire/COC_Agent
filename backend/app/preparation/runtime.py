@@ -9,6 +9,147 @@ from app.rooms.combat_service import load_state, store_state
 from app.rooms.service import require
 
 
+async def complete_pending_outcome(agents, session, room):
+    """Finish the already chosen ending after its consequences, using normal gates.
+
+    No new player choice or host approval is manufactured. The origin receipt
+    fixes the outcome; all item, encounter, SAN and readiness checks in
+    apply_interaction still apply. The original plan remains in the audit.
+    """
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    from app.agents.adjudication_schemas import AdjudicationRecord, TurnFocus
+    from app.persistence.adjudication_models import ActionPlanRecord
+    from app.persistence.agent_models import AgentRun
+    from app.preparation.runtime_schemas import ModuleActionArgs
+    from app.rooms.service import RoomError
+
+    state = load_state(room)
+    pending = state.module_runtime.pending_outcome
+    if not pending or state.module_runtime.outcome:
+        return None
+    origins = [
+        r for r in state.module_runtime.receipts.values() if r.get("prepare_outcome") == pending
+    ]
+    if len(origins) != 1 or not origins[0].get("kp_ruling"):
+        return None
+    origin = origins[0]
+    rows = await agents.entities.rows(session, room.id)
+    candidates = [
+        (e, r)
+        for e in rows
+        if e.state != "hidden"
+        for r in e.snapshot.get("interactions", [])
+        if r.get("outcome") == pending and r.get("kp_enabled")
+    ]
+    if len(candidates) != 1:
+        return None
+    entity, rule = candidates[0]
+    # A continuation settles consequences, never a new equipment/encounter act.
+    if any(
+        rule.get(k)
+        for k in ("inventory_operation", "encounter_operation", "use_effect", "check_name")
+    ):
+        return None
+    event = await session.get(RoomEvent, (room.id, origin["source_event_seq"]))
+    if not event or not event.payload.get("cycle_id"):
+        return None
+    cycle = await session.get(AgentCycle, event.payload["cycle_id"])
+    record = await session.get(ActionPlanRecord, cycle.id) if cycle else None
+    if not record:
+        return None
+    records = list(
+        await session.scalars(
+            select(CheckRecord).where(
+                CheckRecord.room_id == room.id,
+                CheckRecord.cycle_id == cycle.id,
+            )
+        )
+    )
+    for required in rule.get("required_sanity", []):
+        for slot in await agents.rooms.slots(session, room):
+            if slot.member_id and not any(
+                c.target_member_id == slot.member_id
+                and c.status == "resolved"
+                and not c.document.get("sanity_rewound")
+                and (c.document.get("sanity") or {}).get("stage") == "done"
+                and (c.document.get("sanity") or {}).get("entity_id") == required["entity_id"]
+                and (c.document.get("sanity") or {}).get("effect", {}).get("id")
+                == required["effect_id"]
+                for c in records
+            ):
+                return None
+    original = deepcopy(record.document)
+    doc = AdjudicationRecord.model_validate(original)
+    quote = origin["kp_ruling"].get("action", "")
+    if not quote or quote not in event.payload.get("text", ""):
+        return None
+    plan = doc.plan
+    plan.focus = TurnFocus(action=quote, action_target_id=entity.source_entity_id)
+    plan.parsed_intent.type = "interact"
+    plan.parsed_intent.target_id = entity.source_entity_id
+    plan.parsed_intent.target_kind = entity.entity_type
+    plan.proposed_transition_id = None
+    plan.proposed_check = None
+    plan.action_authority = {
+        **origin["kp_ruling"].get("action_authority", plan.action_authority),
+        "terminal_confirmation": {
+            "outcome": pending,
+            "interaction_id": rule["id"],
+            "source_event_seq": event.seq,
+        },
+    }
+    key = f"{event.seq}:{entity.source_entity_id}:{rule['id']}"
+    state.module_runtime.rulings[key] = {**origin["kp_ruling"], "continuation_of": event.seq}
+    before = deepcopy(room.session_state)
+    store_state(room, state)
+    record.document = doc.model_dump(mode="json")
+    source_run = await session.get(AgentRun, record.run_id)
+    run = SimpleNamespace(
+        id=record.run_id,
+        profile_id=source_run.profile_id if source_run else record.run_id,
+        cycle_id=cycle.id,
+        context={
+            "public_entities": await agents.entities.public(session, room.id),
+        },
+    )
+    try:
+        receipt = await apply_interaction(
+            agents,
+            session,
+            room,
+            ModuleActionArgs(
+                entity_id=entity.source_entity_id,
+                interaction_id=rule["id"],
+                evidence_quote=quote,
+            ),
+            run=run,
+        )
+    except RoomError as error:
+        room.session_state = before
+        agents.rooms.append(
+            session,
+            room,
+            "module.outcome_continuation_waiting",
+            room.host_member_id,
+            {"source_event_seq": event.seq, "reason": error.message},
+            "host_only",
+        )
+        return None
+    finally:
+        record.document = original
+    agents.rooms.append(
+        session,
+        room,
+        "module.outcome_continued",
+        room.host_member_id,
+        {"source_event_seq": event.seq, "plan": plan.model_dump(mode="json"), "receipt": receipt},
+        "host_only",
+    )
+    return receipt
+
+
 async def apply_interaction(agents, session, room, args, *, run=None, host=False):
     from app.preparation.inventory import held_instance
 
@@ -134,7 +275,7 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         from app.preparation.adjudication import matches_action_focus
 
         require(
-            intent.type in {"interact", "use_item", "investigate", "observe", "converse"}
+            intent.type in {"interact", "use_item", "investigate", "observe", "converse", "move"}
             and matches_action_focus(doc.plan, node, args.entity_id, rule),
             "交互目标不匹配玩家实际行动",
         )
@@ -258,6 +399,13 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         require(value is not None, "背负伤员需要行动者的力量／体质")
         needs_check = value < 70
     if needs_check:
+        from app.preparation.inventory import unsettled_initial_check
+
+        continued = (
+            await unsettled_initial_check(session, room, actor, rule.item_id)
+            if rule.inventory_operation == "initial"
+            else None
+        )
         checks = list(
             await session.scalars(
                 select(CheckRecord).where(
@@ -272,7 +420,11 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             check_cycle = await session.get(AgentCycle, check.cycle_id)
             if (
                 check_cycle
-                and check_cycle.state.get("triggering_event_seq") == seq
+                and (
+                    check_cycle.state.get("triggering_event_seq") == seq
+                    or continued
+                    and check.id == continued.id
+                )
                 and check.document.get("name") == rule.check_name
             ):
                 relevant.append(check)
@@ -294,7 +446,10 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         matched = []
         for check in checks:
             check_cycle = await session.get(AgentCycle, check.cycle_id)
-            if not check_cycle or check_cycle.state.get("triggering_event_seq") != seq:
+            if not check_cycle or (
+                check_cycle.state.get("triggering_event_seq") != seq
+                and not (continued and check.id == continued.id)
+            ):
                 continue
             c = check.document
             if (

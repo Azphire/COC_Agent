@@ -319,6 +319,20 @@ class ModuleNavigationService:
                 "navigation_revision": state.navigation_revision,
             }
         elif not host and not legal:
+            configured = next(
+                (
+                    t
+                    for t in snapshot.transitions
+                    if t.source_scene_node_id == state.current_scene_node_id
+                    and t.target_scene_node_id == target.node_id
+                    and t.approved
+                ),
+                None,
+            )
+            require(
+                not configured or configured.transition_type == "host_only",
+                "转换前置条件尚未满足，须先解决途中障碍",
+            )
             require(run, "无批准转换，请由主机提出一次性转换")
             pending_id = cycle.state.get("pending_check_id")
             pending = await session.get(CheckRecord, pending_id) if pending_id else None
@@ -386,6 +400,7 @@ class ModuleNavigationService:
                 "当前终幕须先结算；已结束模组不能继续转场",
             )
             source_id = state.current_scene_node_id
+            visit_kind = "revisit" if target.node_id in state.visited_scene_node_ids else "first"
             state.previous_scene_node_id, state.current_scene_node_id = source_id, target.node_id
             if target.node_id not in state.visited_scene_node_ids:
                 state.visited_scene_node_ids.append(target.node_id)
@@ -402,6 +417,7 @@ class ModuleNavigationService:
                 {
                     "scene_title": target.public_title,
                     "scene_summary": target.public_summary,
+                    "visit_kind": visit_kind,
                     "cycle_id": run.cycle_id if run else None,
                 },
             )

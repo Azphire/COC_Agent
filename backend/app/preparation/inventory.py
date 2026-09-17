@@ -205,8 +205,10 @@ async def inventory_context(agents, session, room, question=""):
             continue
         names = [e["title"], *e.get("aliases", [])]
         # Named searches may discuss an item, but do not reveal hidden contents.
-        if row.source_entity_id not in visible | chosen and not any(n in question for n in names):
-            continue
+        if row.source_entity_id not in visible | chosen:
+            names = [n for n in names if n in question]
+            if not names:
+                continue
         items.append({"id": row.source_entity_id, "names": names})
     members = []
     for slot in await agents.rooms.slots(session, room):
@@ -398,6 +400,48 @@ def inventory_probe(text):
     )
 
 
+async def unsettled_initial_check(session, room, actor, item_id):
+    """Recover a rolled self-inspection whose inventory receipt was interrupted."""
+    from sqlalchemy import select
+
+    from app.persistence.agent_models import AgentCycle, CheckRecord
+    from app.persistence.room_models import RoomEvent
+
+    if actor in room.session_state.get("module_runtime", {}).get("initial_belongings", {}):
+        return None
+    last_move = (
+        await session.scalar(
+            select(RoomEvent.seq)
+            .where(RoomEvent.room_id == room.id, RoomEvent.type == "scene.updated")
+            .order_by(RoomEvent.seq.desc())
+            .limit(1)
+        )
+        or 0
+    )
+    matches = []
+    for check in await session.scalars(
+        select(CheckRecord).where(
+            CheckRecord.room_id == room.id,
+            CheckRecord.target_member_id == actor,
+            CheckRecord.status == "resolved",
+        )
+    ):
+        value = check.document
+        cycle = await session.get(AgentCycle, check.cycle_id)
+        if (
+            cycle
+            and cycle.state.get("triggering_event_seq", 0) > last_move
+            and value.get("name") == "luck"
+            and value.get("kind") == "attribute"
+            and value.get("policy_target_id", value.get("clue_id")) == item_id
+            and inventory_probe(value.get("attempt_method", ""))
+            and not value.get("superseded_by")
+            and not value.get("settlement_rewound")
+        ):
+            matches.append(check)
+    return matches[0] if len(matches) == 1 else None
+
+
 def requested_handover(text, view, actor, requester):
     """Bind an agreed handover to one named held instance and an actual recipient."""
     from app.preparation.action_authority import mentions_alias, requested_action_kinds
@@ -489,6 +533,29 @@ def asserted_item_uses(text, view, actor):
                     uses.append((item["id"], holder))
                     break
     return list(dict.fromkeys(uses))
+
+
+def validate_item_locations(text, view):
+    """Settled narration cannot put a held instance back in the environment."""
+    held = {h["item_id"] for h in view.get("holders", [])}
+    dropped = {h.get("item_id") for h in view.get("dropped_items", [])}
+    for sentence in re.split(r"[。；！？;!?\n]", text):
+        if re.search(r"之前|此前|先前|刚才|当时|记得|并非|没有|不是", sentence):
+            continue
+        normalized = sentence.replace("的", "")
+        for item in view.get("known_items", []):
+            if item["id"] not in held - dropped:
+                continue
+            if any(
+                re.search(
+                    re.escape(name.replace("的", ""))
+                    + r".{0,16}(?:躺|落|放|在).{0,5}(?:地上|地板|座位上|角落)",
+                    normalized,
+                )
+                for name in item["names"]
+                if name
+            ):
+                require(False, "该物品已有实际持有人，不能叙述为仍遗落在环境中", 422)
 
 
 def bind_item_prose(text, view, actor):

@@ -15,6 +15,7 @@ AccessPolicy = Literal["automatic", "requires_check", "requires_condition", "hos
 
 
 class CheckProposal(CheckRequest):
+    transition_id: str | None = None
     purpose: str = Field(default="", max_length=240, json_schema_extra={"x-explicit-output": True})
     method: str = Field(default="", max_length=240, json_schema_extra={"x-explicit-output": True})
     continues_check_id: str | None = None
@@ -146,10 +147,21 @@ class CheckPolicyEvaluator:
             intent.target_id in facts.member_ids
             or facts.approved_entities.get(intent.target_id, {}).get("type") == "npc"
         )
+        route = facts.transitions.get(p.transition_id, {})
+        route_check = bool(
+            intent.type == "move"
+            and route
+            and route.get("source_scene_node_id") == facts.scene_id
+            and intent.target_id
+            in {route.get("target_scene_node_id"), route.get("target_entity_id"), p.transition_id}
+            and target in facts.local_entity_ids | {facts.scene_id}
+            and p.basis_entity_id == target
+        )
         if (
             intent.target_id
             and intent.target_id not in {target, facts.scene_id}
             and not speaking_to_member
+            and not route_check
         ):
             return decision(False, "intent_target_mismatch", "检定目标与玩家行动目标不一致")
         if access == "host_review" and not facts.host_review_approved:
@@ -200,6 +212,13 @@ class CheckPolicyEvaluator:
                 return decision(False, "repeat_unchanged", "相同状态下已完成此检定，不再掷骰")
         if p.clue_id and target in facts.revealed_entity_ids:
             return decision(False, "already_public", "信息已经公开，无需再次检定")
+        if (
+            target in facts.revealed_entity_ids
+            and entity.get("type") in {"clue", "item"}
+            and intent.type in {"observe", "investigate"}
+            and any(w in facts.raw_text for w in ("读", "写了什么", "写着什么", "原文"))
+        ):
+            return decision(False, "already_public", "正常可读的公开内容直接回答，无需重复检定")
         expected = entity.get("reveal_conditions", {}).get("successful_check")
         configured = access == "requires_check" and expected and p.clue_id == target
         if (

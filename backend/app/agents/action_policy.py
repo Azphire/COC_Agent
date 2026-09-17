@@ -57,7 +57,8 @@ def movement_question_view(text: str) -> str:
 def explicit_movement(text: str) -> bool:
     """A conservative corroboration of a model-parsed move, never an intent classifier."""
     text = movement_question_view(text)
-    sentences = [s for s in re.split(r"[。；;\n]", text) if s.strip()]
+    text = re.sub(r'“[^”]*”|‘[^’]*’|「[^」]*」|"[^"]*"', "", text)
+    sentences = [s for s in re.split(r"(?<=[，。；！？,;!?\n])", text) if s.strip()]
     if len(sentences) > 1 and not re.search(r"如果|假如|假设|\bif\b", text, re.I):
         # A separate historical failure does not negate a new declared move.
         return any(explicit_movement(s) for s in sentences)
@@ -71,12 +72,26 @@ def explicit_movement(text: str) -> bool:
         compact,
     ):
         return False
+    if re.match(
+        r"(?:我(?:们)?)?(?:现在|这就|先|再|然后|接着|继续)*"
+        r"(?:去|回|进|出|退)(?:到|向|入)?[^，。；！？,;!?\n]+",
+        compact,
+    ):
+        return True
     movement = re.search(
-        r"进入|走进|走入|迈进|迈入|踏入|前往|走向|走到|离开|返回|回到|退回|穿过|过去|进去|出发|赶往|回去|移步|抵达|进到|进门|出门|跨进|跨入|穿门|\b(?:move|enter|return|leave|walk)\b",
+        r"进入|走进|走入|迈进|迈入|踏入|前往|走向|走到|离开|远离|返回|回到|退回|穿过|过去|进去|出发|赶往|回去|移步|抵达|进到|进门|出门|跨进|跨入|穿门|冲进|冲出|跑进|跑出|跳|(?:朝|向|往).{1,24}(?:走|跑|冲)|\b(?:move|enter|return|leave|walk)\b",
         compact,
     )
     if not movement:
         return False
+    from app.preparation.action_authority import VERBS
+
+    if re.search(VERBS["throw"], compact[:movement.start()], re.I):
+        return False  # A thrown object's destination does not move its thrower.
+    if movement.group() in {"过去", "进去"} and compact[
+        max(0, movement.start() - 1) : movement.start()
+    ] in {"照", "看", "望", "指", "递", "扔", "抛"}:
+        return False  # Directional complement of seeing/aiming/transferring, not locomotion.
     return not re.search(r"观察|检查|调查|打听|建议|提议", compact[: movement.start()])
 
 
@@ -84,18 +99,56 @@ def named_move_exits(text, transitions):
     """Corroborate a destination named after a movement verb, not a later door mention."""
     verbs = (
         r"进入|走进|走入|前往|走向|走到|返回|回到|退回|赶往|抵达|跨入|跨进|"
+        r"穿过|通过|冲进|冲入|跑进|跳进|去|回|"
         r"\b(?:enter|return to|move to|walk to)\b"
     )
-    return [
+    named = [
         t
         for t in transitions
         if t.get("target_public_title")
+        and explicit_movement(text)
+        and not re.search(
+            r"(?:远离|离开|背离|避开|不去|不进)[^，。！？；,.!?;\n]{0,12}"
+            + re.escape(t["target_public_title"]),
+            text,
+        )
         and re.search(
             rf"(?:{verbs})[^，。！？；,.!?;\n]{{0,12}}{re.escape(t['target_public_title'])}",
             text,
             re.IGNORECASE,
         )
     ]
+    if named or not explicit_movement(text):
+        return named
+    # Resolve relational directions against actual adjacent edges. A previous
+    # location is an exclusion for "away", not a newly guessed destination.
+    unquoted = re.sub(r'“[^”]*”|‘[^’]*’|「[^」]*」|"[^"]*"', "", text)
+    clauses = [c for c in re.split(r"(?<=[，。；！？,;!?\n])", unquoted) if explicit_movement(c)]
+    previous = any(
+        re.search(r"(?:远离|背离|背对|离开|避开).{0,12}(?:刚才|原来|来时)", c) for c in clauses
+    )
+    forward = any(
+        re.search(r"(?:向|往|朝).{0,10}前(?:方|面|头|走|进)|向前|往前", c) for c in clauses
+    )
+    backward = any(
+        re.search(r"(?:向|往|朝).{0,10}后(?:方|面|头|走|退)|向后|往后", c) for c in clauses
+    )
+    excluded = [
+        t
+        for t in transitions
+        if (
+            previous
+            and t.get("is_previous_scene")
+            or forward
+            and not backward
+            and re.match(r"后(?:方|面|头)", t.get("target_description", ""))
+            or backward
+            and not forward
+            and re.match(r"前(?:方|面|头)", t.get("target_description", ""))
+        )
+    ]
+    remaining = [t for t in transitions if t not in excluded]
+    return remaining if excluded and len(remaining) == 1 else []
 
 
 def local_scene_movement(text, targets, transitions=()):
@@ -103,6 +156,11 @@ def local_scene_movement(text, targets, transitions=()):
     text = movement_question_view(text)
     if re.search(r"如果|假如|假设|不要|并未|没有|要不要|是否|能否|[?？]", text):
         return False
+    # A boundary viewpoint is local unless another clause actually crosses it.
+    if re.search(r"(?:到|在|靠近).{0,12}(?:门边|门旁|门口|入口边)", text) and not re.search(
+        r"进入|走进|走入|跨入|冲进|穿过|跳进", text
+    ):
+        return True
     if named_move_exits(text, transitions):
         return False
     # A later destination clause outranks traversing the present room first.
@@ -524,7 +582,7 @@ class ActionPolicyValidator:
                             ):
                                 code, reason = (
                                     "precondition_failed",
-                                    "转换前置条件尚未满足，需要主机处理",
+                                    "转换前置条件尚未满足，须先解决途中障碍",
                                 )
                             elif (
                                 transition.get("transition_type") == "host_only"
@@ -552,7 +610,14 @@ class ActionPolicyValidator:
                             code, reason = "context_missing", "交互目标不在当前可用实体中"
                         elif (
                             intent.type
-                            not in {"interact", "use_item", "investigate", "observe", "converse"}
+                            not in {
+                                "interact",
+                                "use_item",
+                                "investigate",
+                                "observe",
+                                "converse",
+                                "move",
+                            }
                             or not method
                             or not matches_action_focus(
                                 plan,
@@ -637,15 +702,6 @@ class ActionPolicyValidator:
                 result.rejected_actions.append(
                     ActionRejection(index=i, tool=tool.name, code=code, reason=reason)
                 )
-                if (
-                    tool.name == "transition_scene"
-                    and code == "precondition_failed"
-                    and reason == "转换前置条件尚未满足，需要主机处理"
-                ):
-                    result.approved_actions.append(
-                        ValidatedAction(index=i, tool=tool, phase="proposal")
-                    )
-                    result.required_interrupt = "host_review"
             else:
                 phase = (
                     "read"
