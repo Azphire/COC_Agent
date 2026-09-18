@@ -77,6 +77,12 @@ def unresolved_search_plan(plan, context):
         and not plan.proposed_transition_id
         and any(
             r.get("access_policy") == "requires_check" and r.get("successful_check")
+            and (
+                not r.get("entity_id")  # Legacy task-scoped contexts lack identities.
+                or r["entity_id"] == focus.action_target_id
+                or any(name and name in focus.action for name in
+                       [r.get("title", ""), *r.get("aliases", []), *r.get("search_aliases", [])])
+            )
             for r in context.get("check_requirements", [])
         )
     )
@@ -483,6 +489,32 @@ def repair_observation_target(value, context):
     action = focus.get("action", "")
     kinds = set(action_kinds(action))
     if "observe" not in kinds or kinds - {"observe", "converse"}:
+        return
+    target = next((t for t in context.get("current_targets", [])
+                   if t["id"] == focus.get("action_target_id")), {})
+    if (
+        target.get("type") in {"item", "clue"}
+        and not value.get("proposed_check")
+        and not context.get("readonly_recall")
+        and not re.search(r"它|这(?:个|些|份|张)|那(?:个|些|份|张)|上面|下面", action)
+        and not any(name and name in action for name in
+                    [target.get("title", ""), *target.get("aliases", [])])
+        and not any(t.get("name") not in {"reveal_entity", "reveal_clue"}
+                    for t in value.get("proposed_tool_calls", []))
+    ):
+        # An unrelated old clue is not the ordinary object named in this turn.
+        # Keep the observation in scene scope; this grants no resource/result.
+        old = target["id"]
+        focus["action_target_id"] = context["action_identifiers"]["current_scene_id"]
+        focus["public_fact_ids"] = [i for i in focus.get("public_fact_ids", []) if i != old]
+        value["parsed_intent"]["type"] = "observe"
+        value["proposed_reveal_entity_ids"] = [
+            i for i in value.get("proposed_reveal_entity_ids", []) if i != old
+        ]
+        value["proposed_tool_calls"] = [
+            t for t in value.get("proposed_tool_calls", [])
+            if t.get("arguments", {}).get("entity_id") != old
+        ]
         return
     if not any(
         alias and alias in action

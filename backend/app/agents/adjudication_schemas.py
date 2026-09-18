@@ -170,7 +170,7 @@ class NPCAnswer(DomainModel):
     evidence_quote: str = Field(
         default="", max_length=600, json_schema_extra={"x-explicit-output": True}
     )
-    certainty: Literal["sourced", "inference", "unknown"]
+    certainty: Literal["sourced", "inference", "unknown", "social"]
     text: str = Field(min_length=1, max_length=300)
 
 

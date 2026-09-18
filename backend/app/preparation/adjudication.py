@@ -158,6 +158,16 @@ def matches_action_focus(plan, scene_id, entity_id, rule):
     )
 
 
+def settled_route_obstacle(plan, runtime):
+    route = plan.action_authority.get("route", {})
+    return bool(
+        plan.parsed_intent.type == "move"
+        and route.get("transition_id") == plan.proposed_transition_id
+        and route.get("required_flags")
+        and all(runtime.flags.get(k, False) == v for k, v in route["required_flags"].items())
+    )
+
+
 def decision_contract(context, candidates):
     owned = [i["item_id"] for i in context["items"] if i["holder_id"] == context["actor"]]
     if context.get("action_authority") is not None:
@@ -437,6 +447,18 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
             run.structured_output = plan.model_dump(mode="json")
             return None
         candidates = []
+        route_settled = settled_route_obstacle(plan, data.module_runtime)
+        if route_settled and plan.proposed_check:
+            proposal = plan.proposed_check
+            basis = facts.approved_entities.get(proposal.target_entity_id, {})
+            if proposal.transition_id == plan.proposed_transition_id and any(
+                matches_action_focus(plan, facts.scene_id, proposal.target_entity_id,
+                                     ModuleInteraction.model_validate(r))
+                for r in basis.get("interactions", [])
+            ):
+                plan.proposed_check = None
+                plan.focus.obstacle = ""
+                run.structured_output = plan.model_dump(mode="json")
         for eid, entity in facts.approved_entities.items():
             searching = bool(plan.proposed_check and str(plan.proposed_check.clue_id) == eid)
             route_method = bool(
@@ -482,6 +504,8 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                     continue
                 if not matches_action_focus(plan, facts.scene_id, eid, rule):
                     continue
+                if route_settled:
+                    continue  # The existing route window already resolved this obstacle.
                 # Item selection is checked once the option supplies it. Every
                 # other capability is checked before showing a method candidate.
                 if rule.encounter_operation != "sound_once" and authority_error(

@@ -1,0 +1,206 @@
+"""Batch 37 isolated real-model probes and normal API play, reusing batch 36 tools."""
+
+import argparse
+import hashlib
+import json
+import os
+import sqlite3
+import time
+from pathlib import Path
+from uuid import uuid4
+
+ROOT = Path(__file__).resolve().parents[2]
+BASE = ROOT / "data/prepared/changan/batch-37"
+# Protect the default application constructed at import as well as the active app.
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + (BASE / "bootstrap.db").as_posix()
+os.environ["CHECKPOINT_DB_PATH"] = str(BASE / "bootstrap-checkpoint.db")
+os.environ["KNOWLEDGE_DB_PATH"] = str(BASE / "bootstrap-knowledge.db")
+os.environ["MODEL_SETTINGS_PATH"] = str(BASE / "bootstrap-model-settings.json")
+
+from scripts import audit_batch36, play_batch36, probe_batch36  # noqa: E402
+
+
+class Session(play_batch36.Session):
+    def req(self, method, path, body=None, player=False):
+        if method == "POST" and path == "/rooms":
+            body = {**body, "name": "第37批 常暗之厢 本地真实局"}
+        return super().req(method, path, body, player)
+
+    def poll(self):
+        until = time.monotonic() + 45
+        while time.monotonic() < until:
+            room = self.req("GET", self.prefix, player=True)
+            cycle = room.get("game", {}).get("cycle") or {}
+            if cycle.get("status") not in {"running", "queued", "waiting_for_roll"}:
+                break
+            # A request event precedes the graph's wait checkpoint. Only act
+            # when the original current cycle is actually ready for the roll.
+            if cycle.get("status") == "waiting_for_roll":
+                for check in self.req("GET", self.prefix + "/checks"):
+                    if check["status"] != "pending":
+                        continue
+                    player = check.get("target_member_id") == self.state["player_id"]
+                    cid = check["id"]
+                    stage = (check.get("settlement") or {}).get("stage")
+                    if stage in {"choice", "awaiting_choice"}:
+                        self.req("POST", self.prefix + f"/checks/{cid}/choice",
+                                 {"operation": "accept"}, player=player)
+                    elif check.get("sanity"):
+                        stage = check["sanity"]["stage"]
+                        if stage in {"san", "loss", "int", "duration"}:
+                            self.req("POST", self.prefix + f"/sanity/checks/{cid}/roll",
+                                     {"expected_stage": stage}, player=player)
+                    else:
+                        self.req("POST", self.prefix + f"/checks/{cid}/roll", {}, player=player)
+            time.sleep(1)
+        self.observe()
+
+
+def version(directory):
+    probe_batch36.record_version_original(directory)
+    path = directory / "code-version.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for folder in ("scripts", "tests"):
+        for file in (ROOT / "backend" / folder).glob("*batch37*.py"):
+            data["files"][str(file.relative_to(ROOT))] = hashlib.sha256(
+                file.read_bytes()
+            ).hexdigest()
+    play_batch36.write(path, data)
+
+
+def audit(directory):
+    audit_batch36.audit(directory)
+    from scripts.audit_batch37 import audit_quality
+
+    audit_quality(directory)
+    path = directory / "session-full.md"
+    path.write_text(path.read_text(encoding="utf-8").replace("第36批", "第37批"), encoding="utf-8")
+    manifest = directory / "audit-manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    if not any(e["path"] == "interaction-metrics.json" for e in data):
+        data.append({"path": "interaction-metrics.json"})
+    for entry in data:
+        entry["sha256"] = hashlib.sha256((directory / entry["path"]).read_bytes()).hexdigest()
+    play_batch36.write(manifest, data)
+
+
+def receipt_state(directory):
+    with sqlite3.connect(f"file:{(directory / 'game.db').as_posix()}?mode=ro", uri=True) as db:
+        return {
+            table: db.execute("select * from " + table + " order by id").fetchall()
+            for table in ("agent_tool_receipts", "pending_checks")
+        }
+
+
+probe_batch36.record_version_original = probe_batch36.record_version
+probe_batch36.record_version = version
+probe_batch36.audit = audit
+probe_batch36.Session = Session
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "command",
+        choices=[
+            "probe",
+            "serve",
+            "init",
+            "act",
+            "poll",
+            "observe",
+            "restore",
+            "export",
+            "version",
+        ],
+    )
+    parser.add_argument("directory")
+    parser.add_argument("args", nargs="*")
+    args = parser.parse_args()
+    directory = (BASE / args.directory).resolve()
+    assert directory.is_relative_to(BASE) and directory != BASE
+    if args.command == "probe":
+        source, snapshot, *actions = args.args
+        probe_batch36.run_case(
+            directory,
+            args.directory,
+            source=ROOT / source,
+            case=(None if snapshot == "-" else snapshot, actions),
+        )
+        return
+    directory.mkdir(parents=True, exist_ok=True)
+    if args.command == "serve":
+        play_batch36.serve(directory)
+        return
+    if args.command == "version":
+        version(directory)
+        return
+    if args.command == "export":
+        audit(directory)
+        return
+    session = Session(directory)
+    try:
+        if args.command == "init":
+            version(directory)
+            session.setup()
+        elif args.command == "act":
+            session.req(
+                "POST",
+                session.prefix + "/actions",
+                {"text": args.args[0], "client_request_id": str(uuid4())},
+                player=True,
+            )
+            session.poll()
+        elif args.command == "restore":
+            before = session.req("GET", session.prefix + "/checks")
+            receipts = receipt_state(directory)
+            behavior = session.req("GET", session.prefix + "/teammate-behavior")
+            saved = session.req("POST", session.prefix + "/snapshots", {"name": "第37批途中保存"})
+            play_batch36.write(directory / "natural-save.json", saved)
+            session.req("POST", session.prefix + "/pause")
+            snapshot = saved.get("snapshot", saved)
+            session.req("POST", session.prefix + f"/snapshots/{snapshot['id']}/load")
+            session.req("POST", session.prefix + "/resume")
+            after = session.req("GET", session.prefix + "/checks")
+            same_receipts = receipts == receipt_state(directory)
+            settled = next(
+                (c for c in reversed(after) if c["status"] == "resolved" and not c.get("sanity")),
+                None,
+            )
+            replay = None
+            if settled:
+                try:
+                    session.req(
+                        "POST",
+                        session.prefix + f"/checks/{settled['id']}/roll",
+                        {},
+                        player=settled.get("target_member_id") == session.state["player_id"],
+                    )
+                    replay = "idempotent_response"
+                except RuntimeError as error:
+                    replay = str(error)
+            replay_unchanged = after == session.req("GET", session.prefix + "/checks")
+            replay_unchanged = replay_unchanged and receipts == receipt_state(directory)
+            play_batch36.write(
+                directory / "restore-verification.json",
+                {
+                    "before_checks": before,
+                    "after_checks": after,
+                    "equal_checks": before == after,
+                    "equal_receipts": same_receipts,
+                    "settled_roll_replay": replay,
+                    "replay_unchanged": replay_unchanged,
+                    "before_behavior": behavior,
+                    "after_behavior": session.req("GET", session.prefix + "/teammate-behavior"),
+                },
+            )
+            assert before == after and same_receipts and replay_unchanged
+            session.observe()
+        else:
+            getattr(session, args.command)()
+    finally:
+        session.http.close()
+
+
+if __name__ == "__main__":
+    main()

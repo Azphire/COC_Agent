@@ -46,12 +46,17 @@ PLAN_INSTRUCTION = (
     "compound_candidates列出可选对手和准备的技能；不要编造NPC数值，不处理战斗。"
     "answer_basis选facts相关公开事实、improvise普通留白、social当下意愿、teammate队友回答或rules规则。"
     "普通未记载见闻可以适度即兴，不需主机审阅；人物介绍供表达性格，public_fact_ids仅选相关候选ID。"
+    "npc_knowledge是本地NPC可披露的批准证词；当前确向该NPC提问时，"
+    "选择回答本次问题所需的entity_id填public_fact_ids，服务端会核验并提供给答话。"
+    "普通杂物可用当前场景为目标，依据incidental_memories和公开外观继续查看，不必先成为实体。"
     "incidental_memories是先前公开的KP即兴，保留说话人和地点以便续聊，不能当作关键发现；私有知识仍受公开条件限制。"
     "conversation_parent是等待事项：放弃未掷尝试填pending_action=withdraw，改方法replace，独立交流independent，依赖原结果defer；同句问题仍保留。"
     "发现和转场必须对应当前动作与批准条件；proposed_transition_id从approved_exits选，旧模组用已有移动工具。"
     "前后方向结合出口target_description和已知路线判断，不按候选排列默认第一项；"
     "后方出口不能解释成玩家所说的向前。出口描述只是候选依据，尚未进入不能宣告在那里看到东西。"
-    "automatic_discoveries是尚未公开、已满足免检定条件的本地候选。按实际观察范围选择action_target_id，"
+    "automatic_discoveries是尚未公开的本地免检定候选，仍须符合disclosure_basis的情境条件。"
+    "可选事件、时间压力和实际目击不能因普通翻找就视为发生；没有本轮或公开结果依据就不揭示。"
+    "按实际观察范围选择action_target_id，"
     "并在proposed_reveal_entity_ids填写同一ID，读取资料本身不是公开发现。玩家不必预先知道隐藏对象名称。"
     "看见对象与识别其隐藏细节是不同任务；仅观察外观时不要提议揭示check_requirements中的隐藏细节。"
     "module_interactions列出当前批准交互。拿物品、开锁、操作装置、诱导怪物时，"
@@ -91,14 +96,18 @@ NARRATION_INSTRUCTION = (
     "已公开文字可以直接读，不再叫骰。visit_kind=revisit时按现状描述回到此地，不复述醒来的开场。"
     "recent_dialogue包含近期问答，dialogue_answers是可用证词而非必背台词；先回答新问题。"
     "questions中的多个问题逐项回答，不把玩家问句复述成自己提出的问题。"
-    "npc_speech.answers按questions索引逐项填写：先找直接支持此问题的evidence_quote原文，"
+    "npc_speech.answers按questions索引逐项填写：evidence_id选择直接支持此问题的"
+    "allowed_facts.id、testimony.entity_id或portrayal，服务端填写原文；"
     "再写第一人称text。证据只说受伤，不等于知道傷害经过；只提到两个物件，不证明二者相同或包含。"
     "没有对应依据时certainty=unknown，具体说明不知道什么；有据推测用inference并说出保留。"
+    "听得见吗、感觉怎么样等普通关切可用social，根据interaction_state及伤势自然回应，无需原文台词。"
     "player_statement只证明玩家说过，"
     "其中的猜测不是真相。每条allowed_facts只证明该条写明的对象关系；两个事实同时出现不能推出包含、因果或同一关系。"
     "伤害原因、关键物件位置与内部物品、路线和设备效果必须有对应来源；缺少依据就具体说明不知道什么。"
     "旧即兴只保持语气和小动作，不用来推导这些关键关系。允许有依据的有限判断，但必须表明是推测。"
     "观察不要求修改状态；根据目标公开外观、可读说明和本次结果具体回应，未确认新内容时说明哪部分仍不清楚。"
+    "ordinary_observation为true时，必须回答具体看到了什么：普通杂物可补充材质、外观、摆放，"
+    "并记入incidental_details供后续指代；不能仅写你试图看、蹲下检查或光线照着物品。"
     "blocked_operations时描述眼前可感知的障碍与可尝试方向，不宣称通过或要求批准正常行动。"
 )
 
@@ -231,6 +240,7 @@ def planning_prompt(context):
             result.pop(key, None)
         result["approved_exits"] = []
     else:
+        result.pop("fact_evidence", None)  # Old verbatim answers must not drive a new action.
         from app.agents.action_policy import explicit_movement
         from app.preparation.action_authority import action_kinds
         from app.preparation.inventory import held_item_acknowledgement
@@ -457,6 +467,9 @@ def generation_prompt(context, schema):
         result = dict(context)
     result = deepcopy(result)
     if schema is TeammateDecision:
+        if not context.get("readonly_recall"):
+            result.pop("fact_evidence", None)
+        result["recent_outputs"] = list(dict.fromkeys(result.get("recent_outputs", [])))
         result.pop("rule_concepts", None)  # KP retrieval query terms, not teammate evidence.
         if result.get("behavior_rejection"):
             result["behavior_rejection"] = {"reason": result["behavior_rejection"]["reason"]}
@@ -475,6 +488,15 @@ def generation_prompt(context, schema):
                     "last_result",
                 }
             }
+            last_result = result["behavior_state"].get("last_result", {})
+            if (
+                last_result.get("kind") == "answer"
+                and last_result.get("event_seq", 0)
+                < result.get("triggering_action", {}).get("seq", 0)
+            ):
+                # A previous opinion is conversation history, not an action
+                # receipt or a current fact about the world.
+                result["behavior_state"].pop("last_result", None)
         # The memory gate runs before self_identity is appended. Compact at
         # both gates; otherwise an irrelevant full skill list can prevent the
         # named teammate from ever reaching the model.
@@ -533,6 +555,20 @@ def generation_prompt(context, schema):
                 for r in result["addressed_requests"]
             ]
             result.pop("addressed_question", None)
+            result["current_task"] = {
+                "requests": result["addressed_requests"],
+                "instruction": (
+                    "只回应这些当前请求；旧台词不作本轮答复。接受委托时发布本人具体尝试。"
+                ),
+            }
+            # The ledger retains old work and validates repetition. Its verbatim
+            # promise is not an answer candidate for a new request.
+            result.pop("recent_outputs", None)
+            result.pop("recent_output_summary", None)
+            result.get("behavior_state", {}).pop("current_short_term_goal", None)
+            result["events"] = [e for e in result.get("events", []) if e.get("type") not in {
+                "agent.spoke", "agent.action_proposed"
+            }]
         # Requests and participant assignments also live in the server ledger.
         # Keep the actual speaker, action, roster and state once in this prompt.
         for key in (
@@ -596,6 +632,11 @@ def generation_prompt(context, schema):
         # The same IDs and statements already occur in brief.allowed_facts.
         # Keep the complete claim/provenance objects on the run for validation.
         result.pop("PUBLIC_CLAIM_OPTIONS", None)
+        if brief.get("responder", {}).get("kind") == "npc":
+            # Current questions, sourced testimony and scoped incidental memory
+            # carry continuity. Replaying the old conversation here can make a
+            # rejected previous answer look like fresh evidence for this reply.
+            brief["recent_dialogue"] = []
         if result.get("triggering_action"):
             result["triggering_action"]["payload"]["text"] = brief.get("player_statement", "")
         result.pop("fact_evidence", None)
@@ -606,10 +647,51 @@ def generation_prompt(context, schema):
                 (d.get("speaker_id"), d.get("text")): d
                 for d in details
                 if d.get("speaker_id") == brief.get("responder", {}).get("id")
+                or brief.get("responder", {}).get("kind") == "keeper"
+                and d.get("fact_scope") == "current_scene"
             }.values()
         )[-2:]
+        if (
+            brief.get("responder", {}).get("kind") == "keeper"
+            and any(e["type"] == "scene.updated"
+                    for e in result.get("public_tool_results", {}).get("events", []))
+        ):
+            # Arrival is narrated from the actual new scene and receipts. The
+            # previous arrival paragraph is not a description of this place.
+            brief["recent_dialogue"] = []
+            brief["incidental_memories"] = []
+        if brief.get("ordinary_observation"):
+            import re
+
+            # Old room narration is context, not an answer to a newly named
+            # ordinary object. Keep matching incidental detail for follow-ups;
+            # receipts and the authoritative run context are never filtered.
+            subject = brief.get("observation_subject") or {}
+            topic = (subject.get("title", "") if subject.get("type") not in {None, "scene"}
+                     else brief.get("attempt", ""))
+            topic = re.sub(
+                r"我(?:们)?|过去|走近|凑近|靠近|看看|查看|观察|检查|情况|现在|一下", "", topic
+            )
+            grams = {topic[i:i + 2] for i in range(len(topic) - 1)
+                     if re.fullmatch(r"[\w\u4e00-\u9fff]{2}", topic[i:i + 2])}
+            if grams and not re.search(r"它|这个|那个|这些|那些", topic):
+                brief["incidental_memories"] = [
+                    d for d in brief["incidental_memories"]
+                    if any(g in d.get("text", "") for g in grams)
+                ]
+                brief["recent_dialogue"] = [
+                    d for d in brief.get("recent_dialogue", [])
+                    if d.get("type") != "action.submitted"
+                    and any(g in d.get("text", "") for g in grams)
+                ]
+                brief["allowed_facts"] = [
+                    f for f in brief.get("allowed_facts", [])
+                    if f.get("id") == "scene" or any(g in f.get("text", "") for g in grams)
+                ]
         result["current_task"] = {
-            k: brief.get(k) for k in ("question", "attempt", "source_quotes", "dialogue_answers")
+            k: brief.get(k) for k in (
+                "question", "attempt", "observation_subject", "source_quotes", "dialogue_answers",
+            )
         }
         result["current_task"]["settled_feedback"] = [
             e["payload"].get("public_summary") or e["payload"].get("text")
@@ -658,11 +740,11 @@ def compact_planning_prose(context, budget):
         local_ids = {t["id"] for t in result.get("current_targets", [])}
         raw = result.get("triggering_action", {}).get("payload", {}).get("text", "")
         inventory = result.get("inventory_state", {})
-        inventory["known_items"] = [
-            item
-            for item in inventory.get("known_items", [])
-            if item.get("id") in local_ids or any(n in raw for n in item.get("names", []) if n)
-        ]
+        if "known_items" in inventory:
+            inventory["known_items"] = [
+                item for item in inventory["known_items"]
+                if item.get("id") in local_ids or any(n in raw for n in item.get("names", []) if n)
+            ]
     if prompt_size() > budget:
         module["blocks"] = []  # Approved entity/task summaries remain below.
     if prompt_size() > budget:
@@ -680,12 +762,13 @@ def compact_planning_prose(context, budget):
         actor = result.get("action_identifiers", {}).get("actor_member_id")
         # Current possession for everyone remains in holders. Only the actor's
         # initial-choice status can authorize an initial inventory operation.
-        inventory["members"] = [m for m in inventory.get("members", []) if m.get("id") == actor]
-        inventory["other_actors"] = [
-            entry
-            for entry in inventory.get("other_actors", [])
-            if any(name in raw for name in entry.get("names", []))
-        ]
+        if "members" in inventory:
+            inventory["members"] = [m for m in inventory["members"] if m.get("id") == actor]
+        if "other_actors" in inventory:
+            inventory["other_actors"] = [
+                entry for entry in inventory["other_actors"]
+                if any(name in raw for name in entry.get("names", []))
+            ]
         for entity in module.get("approved_entities", []):
             if entity.get("state") == "revealed":
                 entity.pop("reveal_conditions", None)
@@ -743,7 +826,7 @@ class ActionRuntimeMixin:
             record = await session.get(ActionPlanRecord, state["cycle_id"])
             parent_plan = AdjudicationRecord.model_validate(record.document).plan
             intent = parent_plan.parsed_intent
-        from app.preparation.turn_focus import requests_for
+        from app.preparation.turn_focus import question_request, requests_for
 
         async def remember_requests(session, room):
             cycle = await session.get(AgentCycle, state["cycle_id"])
@@ -751,10 +834,17 @@ class ActionRuntimeMixin:
                 return
             for binding in await self.service.bindings(session, room.id):
                 requests = requests_for(parent_plan, binding.member_id)
-                if not requests:
-                    continue
                 row = await session.get(AgentBehaviorRecord, (room.id, binding.member_id))
                 behavior = BehaviorState.model_validate(row.document) if row else BehaviorState()
+                profile = await session.get(ProfileRecord, binding.profile_id)
+                previous_pending = behavior.pending_requests
+                behavior.pending_requests = [
+                    r for r in previous_pending
+                    if r["kind"] != "question"
+                    or question_request(r["text"], profile.document["name"])
+                ]
+                if not requests and behavior.pending_requests == previous_pending:
+                    continue
                 for request in requests:
                     key = f"{state['triggering_event_seq']}:{request.source_start}"
                     if any(r["key"] == key for r in behavior.pending_requests):
@@ -768,8 +858,10 @@ class ActionRuntimeMixin:
                         }
                     )
                 behavior.pending_requests = behavior.pending_requests[-12:]
-                if behavior.task_status != "proposed":
+                if behavior.pending_requests and behavior.task_status != "proposed":
                     behavior.task_status = "pending"
+                elif not behavior.pending_requests and behavior.task_status == "pending":
+                    behavior.task_status = "completed"
                 if row:
                     row.document = behavior.model_dump(mode="json")
                 else:
@@ -1098,6 +1190,13 @@ class ActionRuntimeMixin:
                             "self_identity是你本人。用我指代自己，不能呼叫自己或把自己当成另一个被照顾的人。"
                             "只说本人知道的情况；照顾其他人先写尝试，等待KP反馈。"
                         )
+                    elif rejected.reason == "repeated_output":
+                        additions["behavior_repair"] = (
+                            "上次复读旧话，尚未回答本轮。请直接回应当前请求："
+                            + (request_text or trigger.payload["text"])
+                            + "。若无新的观察或依据可pass；"
+                            "直接提问则解释当前情况或可提供的具体协助。"
+                        )
                     elif rejected.reason == "item_not_held":
                         additions["inventory_repair"] = (
                             "物品没有实际持有记录。不要说还在口袋、拿着或已经找到了；"
@@ -1112,6 +1211,7 @@ class ActionRuntimeMixin:
                     elif rejected.reason in {
                         "assistance_does_not_attempt_requested_operation",
                         "action_request_requires_response",
+                        "accepted_task_needs_attempt",
                     }:
                         additions["behavior_repair"] = (
                             "请回应本轮原请求："
@@ -1119,6 +1219,8 @@ class ActionRuntimeMixin:
                             + "。选择协助必须实际尝试请求的操作；不愿执行则用speak明确回应，"
                             "不能只复述物品现状或另提无关用途。"
                             "明确对你提出的请求不能用pass跳过；可以明确拒绝，但要回应。"
+                            "若你决定接受检查或治疗，用act/assist并填写action_text具体当前尝试，"
+                            "不能只用speak承诺我先检查。尚未执行，不能写成功结果。"
                         )
                     additions["recent_output_summary"] = [
                         *recent,
@@ -1281,7 +1383,7 @@ class ActionRuntimeMixin:
                         from app.agents.conversation import enqueue_teammate
 
                         child_id = await enqueue_teammate(
-                            self.service, session, room, cycle, event, binding
+                            self.service, session, room, cycle, event, binding, requests
                         )
                 updated = policy.advance(
                     previous,
@@ -1297,7 +1399,6 @@ class ActionRuntimeMixin:
                         r["key"]
                         for r in requests
                         if r["kind"] == "question"
-                        or chosen.mode in {"act", "assist"}
                         or chosen.goal_status == "abandon"
                     }
                     updated.pending_requests = [
@@ -1461,6 +1562,8 @@ class ActionRuntimeMixin:
                             if k in {"passed", "outcome", "winner_id", "display_text"}
                         }
                 # Small identifiers allow selection without exposing omitted entity descriptions.
+                from app.agents.check_policy import entity_access
+
                 context["current_targets"] = [
                     {"id": facts.scene_id, "title": "当前所在场景（含自身动作）", "type": "scene"}
                 ] + [
@@ -1471,6 +1574,11 @@ class ActionRuntimeMixin:
                     }
                     for eid in sorted(facts.visible_entity_ids | facts.searchable_entity_ids)
                     if eid in facts.approved_entities
+                    and (
+                        eid in facts.visible_entity_ids
+                        or entity_access(facts.approved_entities[eid]) != "automatic"
+                        or not facts.reveal_errors.get(eid)
+                    )
                 ]
                 from app.module_ir.facts import explicit_recall, recalling
 
@@ -1480,10 +1588,11 @@ class ActionRuntimeMixin:
                         for e in await self.service.entities.public(session, room.id)
                         if e["type"] != "scene"
                     ]
-                from app.agents.check_policy import entity_access
-
                 context["automatic_discoveries"] = [
-                    {"entity_id": eid, "title": e["title"], "aliases": e.get("aliases", [])}
+                    {
+                        "entity_id": eid, "title": e["title"], "aliases": e.get("aliases", []),
+                        "disclosure_basis": e.get("keeper_summary", ""),
+                    }
                     for eid, e in facts.approved_entities.items()
                     if eid in facts.local_entity_ids
                     and eid not in facts.revealed_entity_ids
@@ -1512,6 +1621,9 @@ class ActionRuntimeMixin:
                     for eid, e in facts.approved_entities.items()
                     if eid in facts.local_entity_ids and e["type"] == "item"
                 ]
+                from app.preparation.dialogue import npc_knowledge_candidates
+
+                context["npc_knowledge"] = npc_knowledge_candidates(facts)
                 observation_ids = {
                     r.get("observation_entity_id")
                     for eid, entity in facts.approved_entities.items()
@@ -1654,6 +1766,7 @@ class ActionRuntimeMixin:
                             "target_entity_id",
                             "target_public_title",
                             "target_description",
+                            "direction",
                             "is_previous_scene",
                             "condition_summary",
                             "required_flags",
@@ -1763,6 +1876,11 @@ class ActionRuntimeMixin:
                         for e in context.get("public_entities", [])
                         if e["id"] in cycle.state.get("dialogue_fact_ids", [])
                     ]
+                    brief["testimony"] = list({
+                        e["entity_id"]: e for e in [
+                            *brief["testimony"], *cycle.state.get("dialogue_available_facts", [])
+                        ]
+                    }.values())
                     brief["recent_dialogue"] = [
                         {
                             **d,
@@ -2339,6 +2457,12 @@ class ActionRuntimeMixin:
             if any(r.code == "permission_denied" for r in doc.validation.rejected_actions):
                 return None
             if doc.validation.rejected_actions and all(
+                r.code == "context_missing" for r in doc.validation.rejected_actions
+            ):
+                # Missing application context is handled by supplement_context.
+                # Replanning here used to discard an already approved real check.
+                return None
+            if doc.validation.rejected_actions and all(
                 r.code == "invalid_arguments" for r in doc.validation.rejected_actions
             ):
                 return None  # Reuse the existing one-shot argument repair.
@@ -2742,6 +2866,44 @@ class ActionRuntimeMixin:
 
     async def create_checks(self, state):
         state = await self.node(state, "create_checks")
+        if state.get("requires_clarification"):
+            return state
+
+        async def visible_check_target(session, room):
+            from app.agents.check_policy import entity_access
+
+            cycle = await session.get(AgentCycle, state["cycle_id"])
+            record = await session.get(ActionPlanRecord, cycle.id)
+            doc = AdjudicationRecord.model_validate(record.document)
+            proposal = doc.plan.proposed_check
+            if not proposal:
+                return None
+            target = proposal.target_entity_id or proposal.clue_id
+            run = await session.get(AgentRun, record.run_id)
+            facts = await self.service.adjudication.facts(session, room, cycle, run)
+            entity = facts.approved_entities.get(target)
+            if (
+                not entity or target in facts.revealed_entity_ids
+                or target not in facts.local_entity_ids
+                or entity_access(entity) != "automatic" or facts.reveal_errors.get(target)
+            ):
+                return None
+            return next((
+                (record.run_id, a) for a in doc.validation.approved_actions
+                if a.tool.name == "reveal_entity" and a.tool.arguments.get("entity_id") == target
+            ), None)
+
+        prerequisite = await self.service.mutate(state["room_id"], visible_check_target)
+        if prerequisite:
+            # An approved automatic local target can become visible before its
+            # method check. Keep the same indexed receipt; gated discoveries and
+            # method effects still wait for the original real roll.
+            run_id, action = prerequisite
+            result = await self.tools.execute(
+                state["room_id"], run_id, action.index, action.tool.name, action.tool.arguments,
+            )
+            if result.get("ok"):
+                state = await self._validate_plan(state)
         return await self._execute_phase(state, {"request_skill_check", "request_sanity_check"})
 
     async def execute_state_tools(self, state):
@@ -2847,7 +3009,10 @@ class ActionRuntimeMixin:
         plan = AdjudicationRecord.model_validate(record.document).plan
         public_ids = {e["id"] for e in await self.service.entities.public(session, room.id)}
         target = plan.focus.action_target_id if plan.focus else plan.parsed_intent.target_id
-        observation = plan.parsed_intent.type == "observe" and target in public_ids
+        observation = (
+            plan.parsed_intent.type in {"observe", "investigate"}
+            and target in public_ids | {plan.current_scene_id}
+        )
         relevant_rejected = [
             r
             for r in rejected
@@ -2891,6 +3056,14 @@ class ActionRuntimeMixin:
         public = {e["id"]: e for e in await self.service.entities.public(session, room.id)}
         if cycle.state.get("dialogue_npc"):
             public[cycle.state["dialogue_npc"]["id"]] = cycle.state["dialogue_npc"]
+        # These are server-selected local, automatic, approved NPC disclosures,
+        # not general hidden facts. The normal reveal API publishes used sources.
+        for item in cycle.state.get("dialogue_available_facts", []):
+            if output.npc_speech and output.npc_speech.entity_id == item["npc_id"]:
+                public[item["entity_id"]] = {
+                    "id": item["entity_id"], "type": "clue", "title": item["title"],
+                    "public_summary": item["text"], "fact_scope": "current_scene",
+                }
         text = "\n".join(
             [
                 output.public_narration,
@@ -2911,6 +3084,17 @@ class ActionRuntimeMixin:
                 422,
             )
         brief = run.context.get("response_brief", {})
+        current_text = run.context.get("triggering_action", {}).get("payload", {}).get("text", "")
+        if not run.context.get("readonly_recall"):
+            for dialogue in brief.get("recent_dialogue", []):
+                if dialogue.get("type") != "action.submitted":
+                    continue
+                for question in re.findall(r"[^，,。；;！？!?]+[？?]", dialogue.get("text", "")):
+                    require(
+                        len(question) < 8 or question in current_text or question not in text,
+                        "复播了旧玩家问题；请回应本轮原话：" + current_text,
+                        422,
+                    )
         from app.preparation.inventory import (
             bind_item_prose,
             inventory_context,
@@ -2926,7 +3110,12 @@ class ActionRuntimeMixin:
                 run.context.get("triggering_action", {}).get("actor_member_id"),
             )
             if output.npc_speech:
-                bind_item_prose(output.npc_speech.text, inventory, output.npc_speech.entity_id)
+                from app.preparation.dialogue import current_item_statements
+
+                bind_item_prose(
+                    current_item_statements(output.npc_speech.text),
+                    inventory, output.npc_speech.entity_id,
+                )
             scene = run.context.get("module", {}).get("scene", {})
             for entity in public.values():
                 if entity.get("type") != "scene" or entity["id"] == scene.get("id"):
@@ -3165,7 +3354,77 @@ class ActionRuntimeMixin:
                         select(AgentModelCall).where(AgentModelCall.run_id == run.id)
                     )
                 )
-                for call in reversed(calls):
+                valid_answer_map = {}
+                # A repair addresses rejected content; it cannot replace an
+                # already valid answer from the first attempt with a new claim.
+                for call in sorted(calls, key=lambda c: c.document.get("attempt", 0)):
+                    generated = call.document.get("generated_output") or {}
+                    brief = run.context.get("response_brief", {})
+                    if (generated.get("npc_speech") or {}).get(
+                        "answers"
+                    ):
+                        from app.agents.adjudication_schemas import NPCAnswer, NPCSpeech
+                        from app.agents.generation_contracts import generation_contract
+
+                        accepted_answers = []
+                        for position, answer in enumerate(generated["npc_speech"]["answers"]):
+                            index = answer.get("question_index", position)
+                            questions = brief.get("questions", [])
+                            if not isinstance(index, int) or not 0 <= index < len(questions):
+                                continue
+                            if index in valid_answer_map:
+                                continue
+                            local_context = {**run.context, "response_brief": {
+                                **brief, "questions": [questions[index]]
+                            }}
+                            try:
+                                speech_schema = generation_contract(
+                                    KeeperNarration, local_context
+                                ).model_fields["npc_speech"].annotation
+                                speech = speech_schema.model_validate({
+                                    "answers": [{**answer, "question_index": 0}]
+                                })
+                                component = KeeperNarration(npc_speech=NPCSpeech(
+                                    entity_id=speech.entity_id, text=speech.text
+                                ))
+                                await self.validate_narration_output(
+                                    session, room, cycle, run, component, partial=True
+                                )
+                            except (ValueError, KeyError, ModelFormatError, RoomError):
+                                continue
+                            bound_answer = speech.answers[0].model_dump(exclude={"evidence_id"})
+                            bound_answer["question_index"] = index
+                            accepted_answers.append((index, NPCAnswer.model_validate(bound_answer)))
+                        if accepted_answers:
+                            from app.preparation.dialogue import sourced_dialogue_reply
+
+                            valid_answer_map.update(accepted_answers)
+                            found = valid_answer_map
+                            repaired_answers = [found.get(i) or NPCAnswer(
+                                question_index=i, certainty="unknown",
+                                text=sourced_dialogue_reply(q, []),
+                            ) for i, q in enumerate(brief["questions"])]
+                            retained.npc_speech = NPCSpeech(
+                                entity_id=brief["responder"]["id"],
+                                text="\n".join(a.text for a in repaired_answers),
+                                answers=repaired_answers,
+                            )
+                    # Validate narration independently even if the NPC structure failed.
+                    if (
+                        not retained.public_narration and generated.get("public_narration")
+                        and set(generated.get("claim_ids", [])) <= {
+                            c["claim_id"] for c in run.context.get("PUBLIC_CLAIM_OPTIONS", [])
+                        }
+                    ):
+                        component = KeeperNarration(public_narration=generated["public_narration"])
+                        try:
+                            await self.validate_narration_output(
+                                session, room, cycle, run, component, partial=True
+                            )
+                        except RoomError:
+                            pass
+                        else:
+                            retained.public_narration = component.public_narration
                     try:
                         candidate = restore_output(
                             KeeperNarration.model_validate(
@@ -3239,7 +3498,7 @@ class ActionRuntimeMixin:
             from app.agents.narration import fallback_narration
 
             results = await self.public_results(session, room, cycle)
-            fallback_reason = None
+            fallback_reason = run.safe_error if "validated_partial" in run.context else None
 
             async def fallback_text():
                 if run.context.get("readonly_recall"):
@@ -3368,6 +3627,13 @@ class ActionRuntimeMixin:
                 content = run.context.get("validated_partial", {}).get("public_narration", "")
             if fallback_reason and rule_question and not run.context.get("RULE_EVIDENCE"):
                 content = "需要主持人裁定：目前没有找到可以支持这项规则解释的依据。"
+            if output.npc_speech:
+                quotes = {a.evidence_quote for a in output.npc_speech.answers if a.evidence_quote}
+                for item in cycle.state.get("dialogue_available_facts", []):
+                    if item["text"] in quotes:
+                        await self.service.entities.reveal(
+                            session, room, item["entity_id"], room.host_member_id, cycle_id=cycle.id
+                        )
             from app.memory.events import published_incidental_details
 
             if fallback_reason:

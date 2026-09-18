@@ -9,7 +9,7 @@ import re
 from app.preparation.inventory import held_instance
 
 VERBS = {
-    "first_aid": r"急救|包扎|止血|\bfirst aid\b",
+    "first_aid": r"急救|包扎|止血|处理(?:一下)?(?:[^，。；！？,;.!?]{1,10}的)?伤口|\bfirst aid\b",
     "medicine": r"医学治疗|\bmedical treatment\b",
     "throw": r"扔|抛|投(?:出|向|掷)|掷|甩(?:出|向)|砸向|\bthrow\b|\btoss\b|\bhurl\b",
     "give": (
@@ -23,7 +23,7 @@ VERBS = {
     ),
     "consume": r"吃|喝|吞|用掉|耗用|消耗|\b(?:eat|drink|consume)\b",
     "search": (
-        r"寻找|找|搜|摸索|翻(?:找|查|开|看|过|转)|揭下|检查|查看.{0,8}(?:包|袋|背面|反面|正反面)"
+        r"寻找|找|搜|摸索|翻(?:找|查|开|看|过|转|翻)|揭下|检查|查看.{0,8}(?:包|袋|背面|反面|正反面)"
         r"|(?:看看|观察)(?:一下)?(?:(?:我|你|自己)(?:的)?)?(?:口袋|衣袋|随身物|随身东西|背包)"
         r"|摸(?:索|摸)?(?:一下)?(?:自己|我的)?(?:的)?(?:口袋|衣袋|背包)"
         r"|\b(?:search|rummage|find|inspect)\b"
@@ -66,7 +66,8 @@ def declared_action(text):
             r"\s*(?:我(?:们)?(?:现在|这就|先|想|要|打算|准备)?)?"
             r"(?:仔细|认真|先|再|然后|接着|继续|试着|尝试|实际)*"
             r"(?:(?:靠近|走近|凑近|过去|蹲下|弯腰)[^，。；,.!?;]{0,16}?)?"
-            r"(?:急救|包扎|止血|检查|查看|看看|摸|搜索|寻找|搜寻|翻看|翻转|翻过|揭下|观察|拿起|取下|使用|潜行|"
+            r"(?:(?:透过|隔着|借着|顺着)[^，。；,.!?;]{1,12}?)?"
+            r"(?:急救|包扎|止血|检查|查看|看看|摸|搜索|寻找|搜寻|翻看|翻翻|翻转|翻过|揭下|观察|拿起|取下|使用|潜行|"
             r"(?:把|将).{1,24}(?:翻过|翻转|揭下|拿起|扔|抛|交给|打开)|交给|交还|归还|递给)",
             c,
         )
@@ -102,7 +103,13 @@ def speaker_action(text):
     """A present first-person operation remains owned by its speaker."""
     from app.agents.action_policy import explicit_movement
 
-    for clause in re.split(r"(?<=[，。；！？,;.!?\n])", text):
+    quotes = [m.span() for m in re.finditer(r'“[^”]*”|‘[^’]*’|「[^」]*」|"[^"]*"', text)]
+    offset = 0
+    for clause in re.split(r"(?<=[，。；！？,;.!?\n])|(?<=……)", text):
+        start = offset + len(clause) - len(clause.lstrip())
+        offset += len(clause)
+        if any(left <= start < right for left, right in quotes):
+            continue
         if re.match(r"\s*我(?:是|想)?请你|\s*我(?:希望|让|叫)你", clause):
             continue
         if not re.match(r"\s*我(?:们)?", clause) or re.match(
@@ -130,6 +137,7 @@ def addressed_request_text(raw, name, members=None):
 def addressed_spans(raw, members):
     """Explicit address boundaries, not a classifier of an utterance's meaning."""
     found = []
+    quotes = [m.span() for m in re.finditer(r'“[^”]*”|‘[^’]*’|「[^」]*」|"[^"]*"', raw)]
     for mid, name in members.items():
         for match in re.finditer(
             r"(?:^|(?<=[，,。！？；;\n]))\s*(?:(?:我)?(?:请|让|叫|问|向|对))?"
@@ -138,7 +146,18 @@ def addressed_spans(raw, members):
             + r"(?=[，,:：、]|(?:帮|照看|照顾|检查|查看|观察|负责|去|来|说|问))",
             raw,
         ):
-            found.append((mid, match.start(), match.end()))
+            if not any(left <= match.start() < right for left, right in quotes):
+                found.append((mid, match.start(), match.end()))
+        # A named conversation can follow a request to somebody else without a
+        # second salutation: "I crouch beside the guard and ask ...".
+        for match in re.finditer(
+            r"(?:^|(?<=[，,。！？；;\n]))\s*我(?:蹲在|站在|坐在|走到|来到|转向|看着|靠近)"
+            + re.escape(name)
+            + r"(?:旁边|身旁|面前)?(?:，?)(?:并|然后)?(?:询问|问|说|请教)[：:，,]?",
+            raw,
+        ):
+            if not any(left <= match.start() < right for left, right in quotes):
+                found.append((mid, match.start(), match.end()))
     found.sort(key=lambda item: item[1])
     spans = []
     for i, (mid, start, name_end) in enumerate(found):
@@ -148,6 +167,10 @@ def addressed_spans(raw, members):
             r"(?<=[，,。！？；;])\s*我(?:们)?(?!是请|想请|希望你|想问|没|不|觉得|知道|听)",
             raw[name_end:end],
         )
+        if own:
+            clause = re.split(r"[，,。！？；;]", raw[name_end + own.start():end])[0]
+            if re.search(r"(?:可以|能|该|要|怎么|如何).*(?:帮|做|配合)|做些?什么", clause):
+                own = None  # "我可以帮你做些什么？" remains addressed speech.
         if own:
             end = name_end + own.start()
         if end > name_end:
@@ -160,6 +183,8 @@ def information_question(text):
     return bool(
         re.search(
             r"你(?:们)?(?:知道|觉得|认为|看法|怎么看)|有什么(?:用|建议)|"
+            r"我(?:可以|能|该|要|怎么|如何)[^。！？?]{0,16}(?:帮|做|配合)"
+            r"[^。！？?]{0,12}(?:什么|如何|怎么|[？?])|"
             r"是(?:做|干|用来).{0,8}(?:什么|啥)|是什么意思|该(?:动|选|用)哪|"
             r"(?:请教|想问|问一下)|\b(?:do you know|what do you think)\b",
             text,

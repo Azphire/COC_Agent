@@ -2,7 +2,7 @@
 
 from sqlalchemy import select
 
-from app.agents.action_policy import ActionFacts, ActionPolicyValidator
+from app.agents.action_policy import ActionFacts, ActionPolicyValidator, corridor_directions
 from app.agents.adjudication_schemas import AdjudicationRecord, RecoveryDecision, SupplementContent
 from app.agents.modules import Module
 from app.agents.schemas import CheckRequest, PlannedTool
@@ -306,9 +306,21 @@ class ActionAdjudicationService:
                 for t in snapshot.transitions
                 if t.approved and t.source_scene_node_id == facts.scene_id
             }
+            scene_texts = {
+                binding.node_id: (entity.get("title", ""), entity.get("public_summary", ""))
+                for binding in snapshot.entity_bindings
+                if (entity := facts.approved_entities.get(binding.entity_id, {})).get("type")
+                == "scene"
+            }
+            directions = corridor_directions(
+                [t.model_dump() for t in snapshot.transitions if t.approved], scene_texts
+            )
             for transition in facts.transitions.values():
                 target = facts.approved_entities.get(transition.get("target_entity_id"), {})
                 transition["target_description"] = target.get("public_summary", "")[:200]
+                transition["direction"] = directions.get(
+                    (facts.scene_id, transition["target_scene_node_id"])
+                )
                 transition["is_previous_scene"] = (
                     transition["target_scene_node_id"] == state.previous_scene_node_id
                 )

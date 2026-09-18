@@ -26,25 +26,55 @@ def inherited_speaker_action(raw, start, end):
     )
 
 
-def bind_requests(focus, raw, people, actor):
+def question_request(text, name=""):
+    """A group intention is not an unanswered question to a teammate."""
+    return bool(
+        (name and name in text)
+        or information_question(text)
+        or re.search(r"你|您|[？?]|什么|怎么|怎样|如何|哪里|哪儿|谁|是否|吗|么|呢|"
+                     r"能否|能不能|有没有|告诉|说说|讲讲|解释|介绍|请问", text)
+    )
+
+
+def bind_requests(focus, raw, people, actor, *, npc_ids=()):
     """Keep valid model interpretations; repair only explicit ownership boundaries.
 
     Old saves/plans lack requests. The lexical compatibility path runs here once,
     never independently in scheduling, normalization or authority checks.
     """
     explicit = addressed_spans(raw, {mid: name for mid, name in people.items() if mid != actor})
+    # A request to treat the sole present NPC can be followed by addressing
+    # that patient as "him/her". Keep the original spans, not rewritten prose.
+    if len(npc_ids) == 1 and any(
+        "first_aid" in requested_action_kinds(raw[start:end]) for _, start, end in explicit
+    ):
+        npc_id = next(iter(npc_ids))
+        for pronoun in ("他", "她"):
+            explicit.extend(
+                span for span in addressed_spans(raw, {npc_id: pronoun})
+                if re.match(r"\s*我(?:蹲在|站在|坐在|走到|来到|转向|看着|靠近)", raw[span[1]:])
+            )
+        explicit.sort(key=lambda span: span[1])
     requests = []
     for request in focus.requests:
         if request.addressee_id not in people or request.addressee_id == actor:
             continue
         if not request.text or raw[request.source_start : request.source_end] != request.text:
             continue
+        if request.text.strip(" ，,：:；;。") == people[request.addressee_id]:
+            continue  # A salutation alone must not hide the actual request span.
         owners = {
             mid
             for mid, start, end in explicit
             if start < request.source_end and end > request.source_start
         }
         if owners and owners != {request.addressee_id}:
+            continue
+        if request.kind == "question" and not owners and not question_request(request.text):
+            continue
+        if not owners and request.kind == "delegate" and re.match(
+            r"\s*(?:咱们|我们)(?!请你|让你|希望你)", request.text
+        ):
             continue
         if not owners and (
             speaker_action(request.text)
@@ -112,6 +142,8 @@ def bind_requests(focus, raw, people, actor):
         and focus.addressee_id in people
         and focus.question in raw
         and focus.question
+        and question_request(focus.question, people.get(focus.addressee_id, ""))
+        and not re.match(r"\s*(?:咱们|我们)(?!请你|让你|希望你)", focus.question)
         and not speaker_action(focus.question)
         and not inherited_speaker_action(
             raw, raw.index(focus.question), raw.index(focus.question) + len(focus.question)
@@ -153,7 +185,7 @@ def bind_requests(focus, raw, people, actor):
 def repair_attribution(plan, raw, people, actor, *, npc_ids=()):
     focus = plan.focus or TurnFocus()
     had_requests = bool(focus.requests)
-    requests = bind_requests(focus, raw, people, actor)
+    requests = bind_requests(focus, raw, people, actor, npc_ids=npc_ids)
     if not requests:
         own = speaker_action(raw)
         if own and (had_requests or (focus.question == raw and not focus.action)):

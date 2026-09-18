@@ -159,10 +159,11 @@ def initial_state(room_id, cycle_id, actor, seq, bindings, *, parent=None, origi
     }
 
 
-async def enqueue_teammate(service, session, room, parent, event, binding):
+async def enqueue_teammate(service, session, room, parent, event, binding, requests=()):
     cycle_id = str(uuid4())
     state = initial_state(room.id, cycle_id, binding.member_id, event.seq, [], origin="teammate")
     state["related_player_cycle_id"] = parent.id
+    state["request_keys"] = [r["key"] for r in requests]
     if service.combat.route(room, event.payload["text"]):
         state.update(combat_flow=True, combat_actor_id=binding.member_id)
     session.add(AgentCycle(id=cycle_id, room_id=room.id, status="queued", state=state))
@@ -290,6 +291,15 @@ async def settle_teammate_tasks(service, session, room):
             await session.scalars(select(CheckRecord).where(CheckRecord.cycle_id == cycle.id))
         )
         failed_check = any((c.document.get("result") or {}).get("passed") is False for c in checks)
+        # Medical attempts settle in the combat receipts, not pending_checks.
+        # Completing that subcycle does not mean the treatment succeeded.
+        failed_check = failed_check or any(
+            e.type == "combat.resolved"
+            and e.payload.get("operation") in {"first_aid", "medicine"}
+            and e.payload.get("rolls", {}).get("treatment", {}).get("result", {}).get("passed")
+            is False
+            for e in events
+        )
         public_results = (
             await service.runtime.public_results(session, room, cycle)
             if record and service.runtime
@@ -300,7 +310,20 @@ async def settle_teammate_tasks(service, session, room):
             and not public_results.get("blocked_discovery")
             and not public_results.get("failed_tools")
         )
-        technical = cycle.status == "failed" or cycle.state.get("teammate_attempt_failed")
+        settled = any(
+            e.type in {
+                "check.resolved", "module.interaction", "combat.resolved",
+                "entity.revealed", "clue.revealed",
+            }
+            for e in events
+        )
+        narration_failed = (
+            record and (record.document.get("narration_validation") or {}).get("valid") is False
+        )
+        technical = (
+            cycle.status == "failed" or cycle.state.get("teammate_attempt_failed")
+            or narration_failed and not settled
+        )
         blocked = bool(
             (rejected and not observation_completed)
             or failed_check
@@ -309,17 +332,7 @@ async def settle_teammate_tasks(service, session, room):
             or cycle.status == "cancelled"
             or not feedback
         )
-        confirmed = observation_completed or any(
-            e.type
-            in {
-                "check.resolved",
-                "module.interaction",
-                "combat.resolved",
-                "entity.revealed",
-                "clue.revealed",
-            }
-            for e in events
-        )
+        confirmed = observation_completed or settled
         behavior.task_status = (
             "generation_failed"
             if technical
@@ -333,14 +346,40 @@ async def settle_teammate_tasks(service, session, room):
             "cycle_id": cycle.id,
             "kind": behavior.task_status,
             "event_seqs": [e.seq for e in feedback],
-            "text": "\n".join(
-                e.payload.get("text", e.payload.get("display_text", "")) for e in feedback[-2:]
+            "text": "" if technical else "\n".join(
+                e.payload.get("text") or e.payload.get("display_text")
+                or e.payload.get("summary", "") for e in feedback[-2:]
             )[:1000],
-            "reason": cycle.state.get("safe_error")
+            "reason": cycle.state.get("safe_error") or "本次生成未得到有效行动反馈"
             if technical
             else "; ".join(r.get("reason", "") for r in rejected)[:300]
             or ("未得到本次尝试的有效公开反馈" if not feedback else ""),
         }
+        if not technical:
+            from app.preparation.action_authority import action_kinds
+
+            action = cycle.state.get("combat_decision") or {}
+            operations = {action["operation"]} if action.get("operation") else set()
+            if record:
+                plan = record.document.get("plan", {})
+                operations.update(action_kinds((plan.get("focus") or {}).get("action", "")))
+            if "search" in operations:
+                operations.add("observe")
+            parent = await session.get(AgentCycle, cycle.state.get("related_player_cycle_id"))
+            if parent:
+                source_seq = parent.state.get("triggering_event_seq")
+                pending = []
+                for request in behavior.pending_requests:
+                    if (
+                        request.get("key") not in cycle.state.get("request_keys", [])
+                        and request.get("source_event_seq") != source_seq
+                    ):
+                        pending.append(request)
+                        continue
+                    remaining = set(request.get("operations", [])) - operations
+                    if remaining and request.get("kind") == "delegate":
+                        pending.append({**request, "operations": sorted(remaining)})
+                behavior.pending_requests = pending
         if behavior.task_status == "completed":
             behavior.current_short_term_goal = ""
         row.document = behavior.model_dump(mode="json")

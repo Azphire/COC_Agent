@@ -22,7 +22,7 @@ from app.agents.check_policy import CheckProposal
 
 
 def utterance_clauses(raw):
-    pieces = [part for part in re.split(r"(?<=[，。！？；,.!?;\n])", raw) if part]
+    pieces = [part for part in re.split(r"(?<=[，。！？；,.!?;\n])|(?<=……)", raw) if part]
     pieces = pieces[:11] + ["".join(pieces[11:])] if len(pieces) > 12 else pieces
     return [{"id": f"u{i}", "text": part} for i, part in enumerate(pieces, 1)]
 
@@ -298,12 +298,47 @@ def generation_contract(schema, context):
             speech = bound(NPCSpeech, {"entity_id": responder["id"]})
             questions = context.get("response_brief", {}).get("questions", [])
             if questions:
+                brief = context["response_brief"]
+                answer_sources = {
+                    f["id"]: f["text"] for f in brief.get("allowed_facts", [])
+                }
+                answer_sources.update({
+                    f["entity_id"]: f["text"] for f in brief.get("testimony", [])
+                })
+                answer_sources["portrayal"] = responder.get("portrayal", "")
+                answer_schema = bound(
+                    NPCAnswer, {"evidence_quote": "", "question_index": 0},
+                    evidence_id=(
+                        Literal[tuple([*answer_sources, None])],
+                        Field(default=None, json_schema_extra={"x-explicit-output": True}),
+                    ),
+                )
+
+                def bind_social_answers(value):
+                    from app.preparation.dialogue import social_question
+
+                    if isinstance(value, dict):
+                        value = {**value}
+                        answers = []
+                        for position, item in enumerate(value.get("answers", [])):
+                            item = dict(item)
+                            item.setdefault("question_index", position)
+                            if item.get("evidence_id") in answer_sources:
+                                item["evidence_quote"] = answer_sources[item["evidence_id"]]
+                            index = item.get("question_index")
+                            if isinstance(index, int) and 0 <= index < len(questions):
+                                if social_question(questions[index]):
+                                    item.update(certainty="social", evidence_quote="")
+                            answers.append(item)
+                        value["answers"] = answers
+                    return value
+
                 speech = bound(
                     NPCSpeech,
                     {"entity_id": responder["id"]},
                     text=(str, Field(default="", json_schema_extra={"x-server-bound": True})),
                     answers=(
-                        list[NPCAnswer],
+                        list[answer_schema],
                         Field(
                             default_factory=list,
                             max_length=12,
@@ -338,16 +373,49 @@ def generation_contract(schema, context):
                         if (
                             answer.evidence_quote
                             and not any(answer.evidence_quote in s for s in material)
-                        ) or (answer.certainty != "unknown" and not answer.evidence_quote):
+                        ) or (
+                            answer.certainty in {"sourced", "inference"}
+                            and not answer.evidence_quote
+                        ):
                             raise ModelFormatError(
                                 "回答缺少对应原文",
                                 [
                                     {
                                         "field": "npc_speech.answers",
-                                        "code": "evidence_quote须逐字摘录依据，且只支持原文关系；"
+                                        "code": "evidence_id须选择支持本问题的依据ID；"
                                         "没有该问题的依据请用unknown，明确哪点不清楚",
                                     }
                                 ],
+                            )
+                        from app.preparation.dialogue import social_question
+
+                        if answer.certainty == "social" and not social_question(
+                            questions[answer.question_index]
+                        ):
+                            raise ModelFormatError(
+                                "关键问题不能作为寒暄补全",
+                                [{"field": f"npc_speech.answers[{answer.question_index}]",
+                                  "code": "本项当前问题是："
+                                  + questions[answer.question_index]
+                                  + " 请回答这一项，不复播旧寒暄。其他有效答案保持原样；"
+                                  "按本问题选证词，关键未知具体说明不确定哪一点。"}],
+                            )
+                        if (
+                            re.search(r"(?:曾|原先|以前|过去|之前).{0,5}(?:保管|持有|拿着|带着)",
+                                      answer.evidence_quote)
+                            and any(
+                                re.search(r"在我(?:这里|这儿|身上|手里|手上)", clause)
+                                and not re.search(r"不在|没在|原先|以前|过去|之前|曾", clause)
+                                for clause in re.split(r"[，。；,;]", answer.text)
+                            )
+                        ):
+                            raise ModelFormatError(
+                                "过去持有不能证明当前持有",
+                                [{"field": f"npc_speech.answers[{answer.question_index}]",
+                                  "code": "证词只说明过去保管，不证明现在仍在身上。"
+                                  "请保留已知的最后位置；当前持有未知就明确不确定，"
+                                  "不要先断言在身上再说不知道。当前问题："
+                                  + questions[answer.question_index]}],
                             )
                         if answer.certainty == "unknown" and not re.search(
                             r"不|未|没|难以|说不准", answer.text
@@ -371,6 +439,7 @@ def generation_contract(schema, context):
                     "NPCSpeech",
                     __base__=speech,
                     __validators__={
+                        "bind_social_answers": model_validator(mode="before")(bind_social_answers),
                         "answers_current_questions": model_validator(mode="after")(
                             answers_current_questions
                         )
@@ -391,6 +460,21 @@ def generation_contract(schema, context):
                 json_schema_extra={"x-explicit-output": True},
             ),
         )
+        ordinary_observation = context.get("response_brief", {}).get("ordinary_observation")
+        if ordinary_observation:
+            fields["observed_detail"] = (
+                str,
+                Field(
+                    default="", min_length=8, max_length=1000,
+                    description="本轮实际可感知的目标内容或明确未能确认的部分。"
+                    "直接描述物件/伤口/环境的外观细节，不描述你试图观察的动作。"
+                    "普通杂物可即兴外观，不产生可获得资源、核心线索或治疗效果。",
+                    json_schema_extra={"x-explicit-output": True},
+                ),
+            )
+            fields["public_narration"] = (
+                str, Field(default="", json_schema_extra={"x-server-bound": True})
+            )
         result = bound(
             KeeperNarration,
             {
@@ -409,6 +493,18 @@ def generation_contract(schema, context):
             def responds_to_new_turn(value):
                 from app.agents.behavior import bigram_jaccard
 
+                if ordinary_observation and value.observed_detail:
+                    from app.models.base import ModelFormatError
+
+                    if re.match(
+                        r"(?:你|我)(?:们)?(?:正|试图|尝试|仔细|蹲|开始)", value.observed_detail
+                    ):
+                        raise ModelFormatError("观察只有动作，没有内容", [{
+                            "field": "observed_detail",
+                            "code": "直接说明目标可见的具体状况或什么仍无法确认；不要再复述动作。",
+                        }])
+                    value.public_narration = value.observed_detail
+
                 brief = context.get("response_brief", {})
                 old = [d.get("text", "") for d in brief.get("incidental_memories", [])]
                 old += [
@@ -417,6 +513,19 @@ def generation_contract(schema, context):
                     if d.get("type") in {"npc.spoke", "keeper.narration"}
                 ]
                 current = value.npc_speech.text if value.npc_speech else value.public_narration
+                if (
+                    ordinary_observation and brief.get("observation_subject")
+                    and bigram_jaccard(
+                        current, brief.get("current_scene", {}).get("public_description", "")
+                    ) >= 0.8
+                ):
+                    from app.models.base import ModelFormatError
+
+                    raise ModelFormatError("物件观察只重播场景", [{
+                        "field": "observed_detail",
+                        "code": "请直接描述attempt中所检查物件的可见情况或尚不能确认的部分；"
+                        "observation_subject提供已知对象，不能用场景简介代替查看结果。",
+                    }])
                 if not current.strip() and (brief.get("question") or brief.get("attempt")):
                     from app.models.ollama import ModelFormatError
 
@@ -489,6 +598,11 @@ def generation_contract(schema, context):
 
 def restore_output(output, schema, context):
     value = output.model_dump(mode="json")
+    if schema is KeeperNarration:
+        value.pop("observed_detail", None)
+    if schema is KeeperNarration and value.get("npc_speech"):
+        for answer in value["npc_speech"].get("answers", []):
+            answer.pop("evidence_id", None)
     if schema is KeeperPlan:
         from app.agents.action_policy import READ_TOOLS, explicit_movement, named_move_exits
 
@@ -578,6 +692,19 @@ def restore_output(output, schema, context):
             ]
     if schema is KeeperPlan and value.get("focus"):
         focus = value["focus"]
+        if (
+            value["parsed_intent"]["type"] in {"observe", "investigate"}
+            and focus.get("action")
+            and not explicit_movement(focus["action"])
+            and set(action_kinds(focus["action"])) & {"observe", "search"}
+        ):
+            # Looking toward a neighbouring room never authorizes crossing into
+            # it. Drop the stray transition before it triggers a plan repair.
+            value["proposed_transition_id"] = None
+            value["proposed_tool_calls"] = [
+                t for t in value["proposed_tool_calls"]
+                if t["name"] not in {"transition_scene", "update_scene"}
+            ]
         if focus.get("answer_basis") in {"improvise", "unrecorded"}:
             from app.agents.action_policy import READ_TOOLS
 
@@ -730,6 +857,12 @@ def restore_output(output, schema, context):
             named = remaining
         if value["parsed_intent"]["type"] == "move" and len(named) == 1:
             value["proposed_transition_id"] = named[0]["transition_id"]
+            # A uniquely corroborated destination is not an ambiguous action.
+            # Availability is still checked against live navigation conditions.
+            value["needs_clarification"] = False
+            value["parsed_intent"].update(
+                requires_clarification=False, clarification_question=None
+            )
             # Discard a model-authored movement call with a different destination.
             # The approved transition proposal is normalized by the existing planner.
             value["proposed_tool_calls"] = [
@@ -791,6 +924,21 @@ def restore_output(output, schema, context):
                     )
                 if "converse" not in action_kinds(raw):
                     focus.update(question="", addressee_id=None)
+            # Scene nodes are routing metadata, never revealable entity IDs.
+            # Do not let a redundant model reveal derail a valid transition.
+            node_ids = {
+                context.get("action_identifiers", {}).get(
+                    "current_scene_id", value["current_scene_id"]
+                )
+            } | {
+                e["target_scene_node_id"] for e in context.get("approved_exits", [])
+            }
+            # Arrival itself publishes this scene entity. A separate reveal
+            # before moving is outside the current scene and masks valid prose.
+            node_ids.add(transition.get("target_entity_id"))
+            value["proposed_reveal_entity_ids"] = [
+                eid for eid in value["proposed_reveal_entity_ids"] if eid not in node_ids
+            ]
         proposal = value.get("proposed_check")
         from app.preparation.search import (
             named_check_requirement,
@@ -844,6 +992,15 @@ def restore_output(output, schema, context):
                     context.get("inventory_state", {}),
                     context.get("triggering_action", {}).get("actor_member_id"),
                 )
+                or any(
+                    t.get("type") == "clue"
+                    and t["id"] == focus.get("action_target_id")
+                    and not any(
+                        name and name in focus.get("action", "")
+                        for name in [t.get("title", ""), *t.get("aliases", [])]
+                    )
+                    for t in context.get("current_targets", [])
+                )
             )
             and set(action_kinds(focus.get("action", ""))) & {"search", "observe"}
             and value["parsed_intent"]["type"] in {"investigate", "observe"}
@@ -867,7 +1024,15 @@ def restore_output(output, schema, context):
             "interact",
         }:
             # Resolve an explicitly named gated detail instead of its parent object.
+            previous_target = focus.get("action_target_id")
             focus["action_target_id"] = named_requirements[0]["entity_id"]
+            if previous_target != focus["action_target_id"]:
+                # A discarded focus cannot separately publish an unrelated event
+                # while the actual search still awaits its original check.
+                value["proposed_reveal_entity_ids"] = [
+                    eid for eid in value["proposed_reveal_entity_ids"]
+                    if eid != previous_target
+                ]
         required = next(
             (
                 r
@@ -1084,6 +1249,50 @@ def restore_output(output, schema, context):
             restored.parsed_intent.actor_member_id,
             npc_ids={t["id"] for t in context.get("current_targets", []) if t["type"] == "npc"},
         )
+        if (
+            restored.parsed_intent.type == "move"
+            and restored.focus and restored.focus.action
+            and set(action_kinds(restored.focus.action)) == {"observe"}
+            and re.search(r"(?:过去|走近|凑近|靠近).{0,12}(?:看看|查看|观察|打量)",
+                          restored.focus.action)
+            and not named_move_exits(restored.focus.action, context.get("approved_exits", []))
+            and not re.search(r"进入|走进|穿过|跨入|离开|返回|退回", restored.focus.action)
+        ):
+            # Approaching an unnamed ordinary object to inspect it supplies a
+            # local viewpoint, not permission to select a neighbouring scene.
+            restored.parsed_intent.type = "observe"
+            local_ids = {t["id"] for t in context.get("current_targets", [])}
+            if restored.focus.action_target_id not in local_ids:
+                restored.focus.action_target_id = restored.current_scene_id
+            restored.parsed_intent.target_id = restored.focus.action_target_id
+            restored.needs_clarification = restored.parsed_intent.requires_clarification = False
+            restored.parsed_intent.clarification_question = None
+            if not restored.proposed_check:
+                restored.proposed_reveal_entity_ids = []
+        if (
+            restored.parsed_intent.type in {"observe", "investigate"}
+            and restored.focus and restored.focus.action
+            and set(action_kinds(restored.focus.action)) <= {"observe", "search"}
+            and not (
+                explicit_movement(restored.focus.action)
+                and named_move_exits(restored.focus.action, context.get("approved_exits", []))
+            )
+        ):
+            # Attribution can recover a local inspection after the earlier
+            # movement pass. Discard its leftover exit and destination reveal
+            # together; a local "go over and look" is not a party transition.
+            restored.proposed_transition_id = None
+            restored.proposed_tool_calls = [
+                t for t in restored.proposed_tool_calls
+                if t.name not in {"transition_scene", "update_scene"}
+            ]
+            route_ids = {restored.current_scene_id} | {
+                e.get(k) for e in context.get("approved_exits", [])
+                for k in ("target_scene_node_id", "target_entity_id")
+            }
+            restored.proposed_reveal_entity_ids = [
+                eid for eid in restored.proposed_reveal_entity_ids if eid not in route_ids
+            ]
         # The speaker's local viewpoint must be checked after attribution: a
         # teammate's polite question cannot turn this into a party transition.
         if (

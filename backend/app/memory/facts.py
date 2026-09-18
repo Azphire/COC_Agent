@@ -39,6 +39,14 @@ def recall_question(text):
 def readonly_recall(text):
     if not recall_question(text):
         return False
+    # Asking someone about their experience is a new conversation, even when
+    # it concerns "just now". Historical quote/state requests still use recall.
+    if (
+        re.search(r"我[^。！？]{0,24}(?:问|询问|请教)", text)
+        and re.search(r"发生|遭遇|伤|为什么|怎么样|听得见", text)
+        and not re.search(r"原话|原文|复述|回顾|说过|告诉过|记错", text)
+    ):
+        return False
     from app.preparation.action_authority import action_kinds, declared_action
 
     # Classify independent current clauses before a historical purpose can

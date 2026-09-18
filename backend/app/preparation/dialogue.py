@@ -42,6 +42,42 @@ def can_speak(entity, participants):
     return not (injury.get("dead") or injury.get("unconscious"))
 
 
+def social_question(question):
+    """Ordinary present interaction, not a request for hidden events or causes."""
+    return bool(
+        re.search(r"听得见|听到我|感觉怎么样|感觉如何|还好吗|疼不疼|你好|您好", question)
+        and not re.search(r"发生|为什么|怎么会|哪|谁|钥匙|驾驶|停车|怪物|袭击", question)
+    )
+
+
+def npc_knowledge_candidates(facts):
+    """Select approved, local, automatic testimony explicitly attributed to an NPC."""
+    from app.agents.check_policy import entity_access
+
+    result = []
+    for nid, npc in facts.approved_entities.items():
+        if nid not in facts.local_entity_ids or npc.get("type") != "npc":
+            continue
+        for eid, entity in facts.approved_entities.items():
+            if (
+                eid in facts.local_entity_ids
+                and entity.get("type") == "clue"
+                and entity_access(entity) == "automatic"
+                and not facts.reveal_errors.get(eid)
+                and entity.get("public_summary", "").startswith(npc["title"])
+                and set(entity.get("source_block_ids", [])) & set(npc.get("source_block_ids", []))
+            ):
+                result.append(
+                    {
+                        "npc_id": nid,
+                        "entity_id": eid,
+                        "title": entity["title"],
+                        "text": entity["public_summary"],
+                    }
+                )
+    return result
+
+
 async def continue_treatment_question(service, session, room, cycle, action):
     """Continue an already requested question after the original treatment settles."""
     from uuid import uuid4
@@ -341,6 +377,49 @@ async def prepare_dialogue(runtime, state, run_id):
                 plan, facts.raw_text, candidates, previous, member_names=members.values()
             )
         if npc:
+            entity = facts.approved_entities[npc["id"]]
+            from app.agents.check_policy import entity_access
+
+            if (
+                prepared and npc["id"] not in facts.revealed_entity_ids
+                and entity_access(entity) == "automatic"
+                and not facts.reveal_errors.get(npc["id"])
+            ):
+                await service.entities.reveal(
+                    session, room, npc["id"], room.host_member_id, cycle_id=cycle.id
+                )
+                npc["public_summary"] = entity.get("public_summary", npc["public_summary"])
+            participants = room.session_state.get("combat", {}).get("participants", {})
+            actual = next((p for p in participants.values() if p.get("npc_id") == npc["id"]), {})
+            injury = actual.get("injury", (entity.get("combat_template") or {}).get("injury", {}))
+            npc["interaction_state"] = {
+                "can_speak": can_speak({**entity, "id": npc["id"]}, participants),
+                "injury": {k: v for k, v in injury.items() if isinstance(v, bool)},
+            }
+            selected = set(plan.focus.public_fact_ids) | set(plan.proposed_reveal_entity_ids)
+            available = [
+                k for k in npc_knowledge_candidates(facts) if k["npc_id"] == npc["id"]
+            ] if prepared else []
+            testimony = [
+                k
+                for k in available if k["entity_id"] in selected
+            ]
+            for item in testimony:
+                await service.entities.reveal(
+                    session, room, item["entity_id"], room.host_member_id, cycle_id=cycle.id
+                )
+            cycle.state = {
+                **cycle.state,
+                "dialogue_available_facts": available,
+                "dialogue_fact_ids": list(
+                    dict.fromkeys(
+                        [
+                            *cycle.state.get("dialogue_fact_ids", []),
+                            *[k["entity_id"] for k in testimony],
+                        ]
+                    )
+                ),
+            }
             cycle.state = {**cycle.state, "dialogue_npc": npc}
         plan.addressed_member_id = (
             next((r.addressee_id for r in plan.focus.requests if r.addressee_id in members), None)
@@ -401,6 +480,22 @@ async def prepare_dialogue(runtime, state, run_id):
         run.structured_output = plan.model_dump(mode="json")
 
     await service.mutate(state["room_id"], operation)
+
+
+def current_item_statements(text):
+    """Inventory checks apply to present NPC claims, not sourced past testimony.
+
+    This view is used only for published speech. Action authorization still
+    receives the untouched statement and requires actual held instances.
+    """
+    clauses = re.split(r"[，。；！？,;!?\n]", text)
+    return "，".join(
+        clause for clause in clauses
+        if not (
+            re.match(r"\s*(?:我)?(?:当时|那时|逃跑时|之前|以前|原先|曾经|过去)", clause)
+            and not re.search(r"现在|此刻|这就|接着|然后|仍然|还在", clause)
+        )
+    )
 
 
 def sourced_dialogue_reply(question, answers):

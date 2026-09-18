@@ -68,7 +68,8 @@ def explicit_movement(text: str) -> bool:
     if re.search(r"(?:同伴|队友|别人|他|她).*(?:建议|说|提议|希望)", compact):
         return False
     if re.search(
-        r"[?？]|要不要|是否|能否|可否|可以.*吗|如果|假如|假设|等.+再|不要|不想|不打算|没有|并未|别去|先不|暂不|想问|询问|问问|听听",
+        r"[?？]|要不要|是否|能否|可否|可以.*吗|如果|假如|假设|等.+再|不要|不想|不打算|没有|并未|"
+        r"别(?:去|往|朝|向|进|走|动|冲|跑|退)|先不|暂不|想问|询问|问问|听听",
         compact,
     ):
         return False
@@ -93,6 +94,44 @@ def explicit_movement(text: str) -> bool:
     ] in {"照", "看", "望", "指", "递", "扔", "抛"}:
         return False  # Directional complement of seeing/aiming/transferring, not locomotion.
     return not re.search(r"观察|检查|调查|打听|建议|提议", compact[: movement.start()])
+
+
+def corridor_directions(transitions, scene_texts):
+    """Carry sourced endpoint directions along unbranched approved connections.
+
+    A junction or conflicting source ends inference. Node names, numbering and
+    candidate ordering never supply an axis. Reverse edges retain the axis on
+    a revisit, regardless of the last direction the party travelled.
+    """
+    neighbours = {}
+    for edge in transitions:
+        a, b = edge["source_scene_node_id"], edge["target_scene_node_id"]
+        neighbours.setdefault(a, set()).add(b)
+        neighbours.setdefault(b, set()).add(a)
+    queue = []
+    for node, adjacent in neighbours.items():
+        if len(adjacent) != 1:
+            continue
+        title, description = scene_texts.get(node, ("", ""))
+        direction = (1 if re.search(r"车头|先头|前端", title)
+                     or re.match(r"前(?:方|面|头)", description) else
+                     -1 if re.search(r"车尾|末端", title)
+                     or re.match(r"后(?:方|面|头)", description) else 0)
+        if direction:
+            previous = next(iter(adjacent))
+            queue += [(previous, node, direction), (node, previous, -direction)]
+    seen, candidates = set(), {}
+    while queue:
+        a, b, direction = queue.pop()
+        if (a, b, direction) in seen:
+            continue
+        seen.add((a, b, direction))
+        candidates.setdefault((a, b), set()).add(direction)
+        queue.append((b, a, -direction))
+        if len(neighbours[b]) == 2:
+            queue.extend((b, c, direction) for c in neighbours[b] if c != a)
+    return {edge: "forward" if next(iter(values)) == 1 else "backward"
+            for edge, values in candidates.items() if len(values) == 1}
 
 
 def named_move_exits(text, transitions):
@@ -128,11 +167,23 @@ def named_move_exits(text, transitions):
         re.search(r"(?:远离|背离|背对|离开|避开).{0,12}(?:刚才|原来|来时)", c) for c in clauses
     )
     forward = any(
-        re.search(r"(?:向|往|朝).{0,10}前(?:方|面|头|走|进)|向前|往前", c) for c in clauses
+        re.search(r"车头|前一节|(?:向|往|朝).{0,10}前(?:方|面|头|走|进)|向前|往前", c)
+        for c in clauses
     )
     backward = any(
-        re.search(r"(?:向|往|朝).{0,10}后(?:方|面|头|走|退)|向后|往后", c) for c in clauses
+        re.search(r"车尾|后一节|(?:向|往|朝).{0,10}后(?:方|面|头|走|退)|向后|往后", c)
+        for c in clauses
     )
+    if forward != backward:
+        desired = "forward" if forward else "backward"
+        directed = [t for t in transitions if t.get("direction") == desired]
+        if len(directed) == 1:
+            return directed
+    returning = any(re.search(r"退回|原路返回|回到.{0,8}(?:刚才|来时)", c) for c in clauses)
+    if returning and not (forward or backward):
+        return [t for t in transitions if t.get("is_previous_scene")]
+    if any(re.search(r"另一端|另一个出口", c) for c in clauses) and not (forward or backward):
+        previous = True
     excluded = [
         t
         for t in transitions

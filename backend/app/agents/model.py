@@ -11,7 +11,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.models.base import ModelError, ModelFormatError, ModelResponse
 from app.models.factory import create_model
-from app.models.ollama import OllamaAgentAdapter, schema_issues
+from app.models.ollama import OllamaAgentAdapter, generation_schema, schema_issues
 
 _semaphores = WeakKeyDictionary()
 
@@ -97,6 +97,7 @@ class AgentModelClient:
                 request_id = response_model = error_category = None
                 model_finished = None
                 generated_output = None
+                raw_output = None
                 try:
                     async with asyncio.timeout(self.settings.model_timeout_seconds):
                         result = await self.adapter.generate(
@@ -110,6 +111,14 @@ class AgentModelClient:
                     if not isinstance(result, ModelResponse):
                         raise ModelFormatError("模型输出格式无效")
                     usage = result.token_usage
+                    if result.text and not any(
+                        tag in result.text.lower()
+                        for tag in ("<think", "</think", '"reasoning"', '"chain_of_thought"')
+                    ):
+                        try:
+                            raw_output = json.loads(result.text)
+                        except ValueError:
+                            pass
                     generated_output = (
                         result.structured.model_dump(mode="json")
                         if isinstance(result.structured, BaseModel)
@@ -149,6 +158,7 @@ class AgentModelClient:
                     response_model = response_model or getattr(error, "response_model", None)
                     usage = usage or getattr(error, "token_usage", None)
                     generated_output = generated_output or getattr(error, "generated_output", None)
+                    raw_output = raw_output or getattr(error, "generated_output", None)
                     issues = (
                         schema_issues(error, response_schema)
                         if isinstance(error, ValidationError)
@@ -198,9 +208,12 @@ class AgentModelClient:
                         "error_category": error_category,
                         "validation_issues": issues,
                         "schema": response_schema.__name__ if response_schema else None,
+                        "output_contract": generation_schema(response_schema.model_json_schema())
+                        if response_schema else None,
                         "input_chars": len(json.dumps(call_prompt, ensure_ascii=False)),
                         "input_messages": call_prompt,
                         "generated_output": generated_output,
+                        "raw_output": raw_output,
                     }
                     self.calls.append(call)
                     if on_result:

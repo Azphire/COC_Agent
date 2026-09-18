@@ -6,6 +6,21 @@ from app.rooms.service import require
 from app.rules.display import check_display
 
 
+def question_parts(question):
+    """Separate current factual questions joined by a comma, retaining their wording."""
+    result = []
+    for sentence in re.findall(r"[^？?]+[？?]", question):
+        parts = re.split(r"[，,：:]", sentence)
+        pending = ""
+        for part in parts:
+            if re.search(r"什么|为何|为什么|怎么|哪|谁|是否|能否|听得见|感觉|[？?]", part):
+                result.append((pending + part).rstrip("？?") + "？")
+                pending = ""
+            else:
+                pending += part + "，"
+    return result
+
+
 def response_brief(plan, context, results, *, withdrawal=None):
     """Project approved public candidates and receipts, never private KP prose."""
     focus = plan.focus
@@ -126,6 +141,7 @@ def response_brief(plan, context, results, *, withdrawal=None):
             "name": npc["title"],
             "kind": "npc",
             "portrayal": npc["public_summary"],
+            "interaction_state": npc.get("interaction_state", {}),
         }
         if npc
         else {"id": addressee, "name": people[addressee], "kind": "teammate"}
@@ -140,10 +156,19 @@ def response_brief(plan, context, results, *, withdrawal=None):
             }
             for c in facts
         ],
-        "questions": [s.strip() for s in re.findall(r"[^？?]+[？?]", question)],
-        "player_statement": raw if npc else attempt or question,
+        "questions": question_parts(question),
+        "player_statement": (
+            question if npc and focus and focus.requests
+            and any(r.addressee_id != addressee for r in focus.requests)
+            else raw if npc else attempt or question
+        ),
         "source_quotes": list(dict.fromkeys(written_sources))[:3],
         "current_scene": scene,
+        "observation_subject": next((
+            {k: e[k] for k in ("id", "type", "title", "public_summary") if k in e}
+            for e in context.get("public_entities", [])
+            if focus and e["id"] == focus.action_target_id and e["type"] != "scene"
+        ), None),
         "current_inventory": context.get("item_holders", []),
         "current_state": [
             r
@@ -162,6 +187,18 @@ def response_brief(plan, context, results, *, withdrawal=None):
             "continuing",
         ),
         "completed_results": results,
+        "ordinary_observation": bool(
+            (
+                results.get("observation_completed")
+                or not npc and addressee not in people and question and not plan.proposed_check
+                and not movement_requested
+                and re.search(r"看|观察|检查|表面|杂物|东西", raw)
+                and re.search(r"什么|字迹|外观|颜色|样子|形状", raw)
+            )
+            and not results.get("blocked_discovery")
+            and not results.get("blocked_operations")
+            and not results.get("failed_tools")
+        ),
         "withdrawal": withdrawal,
         "pending_decisions": list(
             filter(

@@ -94,7 +94,63 @@ class TeammateBehaviorPolicy:
         if decision.related_player_action_seq != action_seq:
             return BehaviorRejection(accepted=False, reason="unrelated_player_action")
         speech, action = decision.speech_text or "", decision.action_text or ""
+        if (
+            decision.mode in {"act", "assist"}
+            and re.match(r"我(?:注意到|看到|听说|记得|觉得|认为)", action.strip())
+            and not re.search(
+                r"[，,。；;]\s*我(?!们|注意到|看到|听说|记得|觉得|认为)", action
+            )
+        ):
+            # A comment about another attempt is speech, not authority to
+            # perform the verbs embedded in that comment as this character.
+            decision.mode = "speak"
+            decision.speech_text = speech or action
+            decision.action_text = None
+            decision.action_type = "converse"
+            decision.target_id = None
+            decision.related_public_entity_ids = []
+            speech, action = decision.speech_text, ""
+        if decision.mode in {"act", "assist"} and re.fullmatch(
+            r"我?(?:先|也|马上)?(?:跟上(?:大家|你们|你|同伴)?|走到同伴旁边)"
+            r"(?:[，,]?(?:先)?(?:看看|检查|观察|留意)(?:一下)?"
+            r"(?:前头|前面|车头|周围|车厢|房间|现场)?"
+            r"(?:有没?有|能不能)?(?:什么)?(?:能)?(?:的)?(?:帮(?:上)?忙的?|异常|情况|帮什么))?"
+            r"[。！!]?",
+            action.strip(),
+        ):
+            # Co-located following is a gesture, even when a model selected move.
+            # Normalize before response-mode, public-target and inventory guards.
+            decision.mode = "speak"
+            decision.speech_text = speech or action
+            decision.action_text = None
+            decision.action_type = "interact"
+            decision.target_id = None
+            decision.related_public_entity_ids = []
+            speech, action = decision.speech_text, ""
+        if decision.mode == "speak" and explicit_action_request:
+            from app.preparation.action_authority import action_kinds
+
+            promised = set(action_kinds(speech))
+            if "search" in promised:
+                promised.add("observe")
+            if (
+                re.search(r"(?:^|[，,。；;])\s*(?:好[的吧]?[,，。]?\s*)?我", speech)
+                and promised & set(requested_operations or [])
+                and not re.search(
+                    r"不想|不愿|不懂|不能|无法|没法|没有条件|先不|如果|建议|等.+再|可以请", speech
+                )
+            ):
+                return BehaviorRejection(accepted=False, reason="accepted_task_needs_attempt")
         if decision.mode in {"act", "assist"}:
+            from app.preparation.action_authority import action_kinds
+
+            promised_effects = set(action_kinds(speech)) & {"first_aid", "medicine", "give", "use"}
+            if (
+                promised_effects - set(action_kinds(action))
+                and re.search(r"(?:^|[，,。；;])\s*我", speech)
+                and not re.search(r"已经|成功|好了|如果|建议|不能|没法|不愿|等.+再", speech)
+            ):
+                return BehaviorRejection(accepted=False, reason="accepted_task_needs_attempt")
             if re.search(
                 r"(?:^|[，。；,;])\s*(?:你|他|她)(?:们)?(?:去|来|先|帮|负责|照看)", action
             ):
@@ -112,6 +168,12 @@ class TeammateBehaviorPolicy:
         ):
             return BehaviorRejection(accepted=False, reason="addressing_self")
         if speech and action and normalized(speech) == normalized(action):
+            decision.speech_text = None
+            speech = ""
+        elif decision.mode in {"act", "assist"} and speech and any(
+            bigram_jaccard(speech, old) >= self.threshold for old in recent_outputs[-3:]
+        ):
+            # Keep a new chosen attempt when only its optional speech repeats.
             decision.speech_text = None
             speech = ""
         elif speech and action and bigram_jaccard(speech, action) >= self.threshold:
@@ -273,7 +335,7 @@ class TeammateBehaviorPolicy:
 
             if decision.mode != "speak" or not recalling(output_text(decision)):
                 return BehaviorRejection(accepted=False, reason="target_not_current")
-        if decision.action_type == "move" and decision.mode in {"act", "assist"}:
+        if decision.mode in {"act", "assist"} and decision.action_type == "move":
             return BehaviorRejection(accepted=False, reason="teammate_cannot_move_scene")
         if decision.mode == "assist" and requested_operations:
             from app.preparation.action_authority import action_kinds
@@ -308,7 +370,11 @@ class TeammateBehaviorPolicy:
             and state.last_result.get("kind") == "blocked"
             and not state.last_result.get("reviewed_in_cycle")
         )
-        if relevant_change or information_request:
+        technical_retry = bool(
+            explicit_action_request and decision.mode in {"act", "assist"}
+            and state.pending_requests and state.last_result.get("kind") == "generation_failed"
+        )
+        if relevant_change or technical_retry:
             recent = []  # A changed world permits a new attempt through the normal KP/check gates.
         compared = [*recent, *other_outputs]
         if not (explicit_action_request and decision.mode in {"act", "assist"}):
@@ -321,6 +387,7 @@ class TeammateBehaviorPolicy:
         if (
             decision.mode in {"act", "assist"}
             and not adjusted_after_result
+            and not technical_retry
             and any(
                 c.remaining_cycles > 0
                 and c.action_type == decision.action_type
