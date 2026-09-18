@@ -372,6 +372,26 @@ def recalled_inventory(view, question):
     return records
 
 
+def inventory_question(text, view):
+    """Limit possession fallback to the addressed question's actual object."""
+    if inventory_probe(text):
+        return True
+    owner = (
+        r"(?:我|你|他|她|谁)(?:们)?(?:现在|目前|还)?"
+        r"(?:有|有没有|是否有|拿着|带着|持有|保管)(?:这|那|一|几|个|把|盏|支|只|些)*"
+    )
+    return any(
+        re.search(owner + re.escape(name), text)
+        or re.search(
+            re.escape(name) + r"(?:现在|目前|还)?(?:在谁(?:的)?(?:手里|手中|身上)|由谁保管)",
+            text,
+        )
+        for item in view.get("known_items", [])
+        for name in item.get("names", [])
+        if name
+    )
+
+
 def inventory_reply(view, actor):
     """Answer a failed possession proposal from current state, without acting."""
     held = [h["title"] for h in view.get("holders", []) if h["holder_id"] == actor]

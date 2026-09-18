@@ -18,7 +18,7 @@ def responder(messages, kwargs):
     context = json.loads(messages[-1]["content"])
     if context.get("phase") == "summary":
         return {"content": "Public scene and revealed entities only."}
-    if context.get("phase") == "generate_keeper_narration":
+    if kwargs["response_schema"].__name__ == "KeeperNarration":
         scene = context["module"]["scene"]
         return {
             "claims": [
@@ -63,7 +63,9 @@ def responder(messages, kwargs):
                     "name": "transition_scene",
                     "arguments": {
                         "target_scene_node_id": transition["target_scene_node_id"],
-                        "expected_revision": context["module_context_audit"]["navigation_revision"],
+                        "expected_revision": context["action_identifiers"][
+                            "expected_navigation_revision"
+                        ],
                         "request_id": "move-request",
                     },
                 }

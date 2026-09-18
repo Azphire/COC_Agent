@@ -57,6 +57,18 @@ class PlayerIntent(DomainModel):
     clarification_question: str | None = Field(default=None, max_length=300)
 
 
+class TurnRequest(DomainModel):
+    """One attributed utterance; source offsets are bound by the server."""
+
+    kind: Literal["question", "delegate", "suggestion", "hypothesis"] = "question"
+    addressee_id: str
+    text: str = Field(default="", max_length=2000)
+    source_start: int = Field(default=0, ge=0)
+    source_end: int = Field(default=0, ge=0)
+    target_id: str | None = None
+    operations: list[str] = Field(default_factory=list, max_length=24)
+
+
 class TurnFocus(DomainModel):
     """Semantic clauses, interpreted once by KP; IDs are checked by the server."""
 
@@ -73,6 +85,7 @@ class TurnFocus(DomainModel):
     purpose: str = Field(default="", max_length=240)
     obstacle: str = Field(default="", max_length=240, json_schema_extra={"x-explicit-output": True})
     public_fact_ids: list[str] = Field(default_factory=list, max_length=5)
+    requests: list[TurnRequest] = Field(default_factory=list, max_length=12)
     answer_basis: Literal["facts", "improvise", "unrecorded", "social", "teammate", "rules"] = (
         Field(
             default="social",
@@ -152,6 +165,15 @@ class ValidatedActionPlan(DomainModel):
     check_decisions: list[CheckPolicyDecision] = Field(default_factory=list)
 
 
+class NPCAnswer(DomainModel):
+    question_index: int = Field(ge=0)
+    evidence_quote: str = Field(
+        default="", max_length=600, json_schema_extra={"x-explicit-output": True}
+    )
+    certainty: Literal["sourced", "inference", "unknown"]
+    text: str = Field(min_length=1, max_length=300)
+
+
 class NPCSpeech(DomainModel):
     entity_id: str
     text: str = Field(
@@ -159,6 +181,7 @@ class NPCSpeech(DomainModel):
         max_length=700,
         description="NPC对当前问题的第一人称答话，不是角色介绍或资料摘要",
     )
+    answers: list[NPCAnswer] = Field(default_factory=list, max_length=12)
 
 
 class KeeperNarration(DomainModel):
@@ -252,6 +275,20 @@ class BehaviorState(DomainModel):
     cooldowns: list[Cooldown] = Field(default_factory=list, max_length=24)
     last_acted_cycle: str | None = None
     consecutive_pass_count: int = Field(default=0, ge=0)
+    pending_requests: list[dict] = Field(default_factory=list, max_length=12)
+    task_status: Literal[
+        "idle",
+        "pending",
+        "generation_failed",
+        "declined",
+        "proposed",
+        "attempted",
+        "blocked",
+        "completed",
+    ] = "idle"
+    task_scene_id: str | None = None
+    task_cycle_id: str | None = None
+    last_result: dict = Field(default_factory=dict)
     updated_time: datetime = Field(default_factory=utc_now)
 
 

@@ -166,9 +166,11 @@ async def enqueue_teammate(service, session, room, parent, event, binding):
     if service.combat.route(room, event.payload["text"]):
         state.update(combat_flow=True, combat_actor_id=binding.member_id)
     session.add(AgentCycle(id=cycle_id, room_id=room.id, status="queued", state=state))
+    return cycle_id
 
 
 async def activate_next(service, session, room):
+    await settle_teammate_tasks(service, session, room)
     active = await service.cycle(session, room.id, active=True)
     queued = list(
         await session.scalars(
@@ -245,6 +247,111 @@ async def activate_next(service, session, room):
     child.state = {**child.state, "status": "running"}
     service.cycle_event(session, room, child)
     return child
+
+
+async def settle_teammate_tasks(service, session, room):
+    """Feed actual serial subcycle receipts back into saved behavior, once.
+
+    Read-only observations can finish without any state mutation. A check failure
+    or rejected operation remains blocked, with its actual public feedback.
+    """
+    from app.agents.adjudication_schemas import BehaviorState
+    from app.persistence.adjudication_models import AgentBehaviorRecord
+
+    for row in await session.scalars(
+        select(AgentBehaviorRecord).where(AgentBehaviorRecord.room_id == room.id)
+    ):
+        behavior = BehaviorState.model_validate(row.document)
+        if behavior.task_status != "proposed" or not behavior.task_cycle_id:
+            continue
+        cycle = await session.get(AgentCycle, behavior.task_cycle_id)
+        if not cycle or cycle.status not in {"completed", "failed", "cancelled"}:
+            continue
+        events = [
+            e
+            for e in await session.scalars(
+                select(RoomEvent)
+                .where(RoomEvent.room_id == room.id, RoomEvent.visibility == "public")
+                .order_by(RoomEvent.seq)
+            )
+            if e.payload.get("cycle_id") == cycle.id
+        ]
+        feedback = [
+            e
+            for e in events
+            if e.type
+            in {"keeper.narration", "check.resolved", "module.interaction", "combat.resolved"}
+        ]
+        record = await session.get(ActionPlanRecord, cycle.id)
+        rejected = (
+            (record.document.get("validation") or {}).get("rejected_actions", []) if record else []
+        )
+        checks = list(
+            await session.scalars(select(CheckRecord).where(CheckRecord.cycle_id == cycle.id))
+        )
+        failed_check = any((c.document.get("result") or {}).get("passed") is False for c in checks)
+        public_results = (
+            await service.runtime.public_results(session, room, cycle)
+            if record and service.runtime
+            else {}
+        )
+        observation_completed = (
+            public_results.get("observation_completed")
+            and not public_results.get("blocked_discovery")
+            and not public_results.get("failed_tools")
+        )
+        technical = cycle.status == "failed" or cycle.state.get("teammate_attempt_failed")
+        blocked = bool(
+            (rejected and not observation_completed)
+            or failed_check
+            or cycle.state.get("combat_rejection")
+            or cycle.state.get("requires_clarification")
+            or cycle.status == "cancelled"
+            or not feedback
+        )
+        confirmed = observation_completed or any(
+            e.type
+            in {
+                "check.resolved",
+                "module.interaction",
+                "combat.resolved",
+                "entity.revealed",
+                "clue.revealed",
+            }
+            for e in events
+        )
+        behavior.task_status = (
+            "generation_failed"
+            if technical
+            else "blocked"
+            if blocked
+            else "completed"
+            if confirmed
+            else "attempted"
+        )
+        behavior.last_result = {
+            "cycle_id": cycle.id,
+            "kind": behavior.task_status,
+            "event_seqs": [e.seq for e in feedback],
+            "text": "\n".join(
+                e.payload.get("text", e.payload.get("display_text", "")) for e in feedback[-2:]
+            )[:1000],
+            "reason": cycle.state.get("safe_error")
+            if technical
+            else "; ".join(r.get("reason", "") for r in rejected)[:300]
+            or ("未得到本次尝试的有效公开反馈" if not feedback else ""),
+        }
+        if behavior.task_status == "completed":
+            behavior.current_short_term_goal = ""
+        row.document = behavior.model_dump(mode="json")
+        service.rooms.append(
+            session,
+            room,
+            "agent.teammate_task_updated",
+            room.host_member_id,
+            {"member_id": row.member_id, **behavior.last_result},
+            "host_only",
+        )
 
 
 async def route(runtime, state):

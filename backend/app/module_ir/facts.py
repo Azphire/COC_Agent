@@ -91,6 +91,26 @@ def nonlocal_source_claims(text, entities):
 
 
 async def public_fact_scopes(agents, session, room_id, entities):
+    from app.memory.events import story_events
+
+    events = list(
+        await session.scalars(
+            select(RoomEvent)
+            .where(
+                RoomEvent.room_id == room_id,
+                RoomEvent.type.in_([
+                    "scene.updated", "module.scene_transition", "snapshot.loaded",
+                    "entity.revealed", "entity.corrected", "clue.revealed",
+                ]),
+            )
+            .order_by(RoomEvent.seq)
+        )
+    )
+    active, _ = story_events(
+        [dict(seq=e.seq, type=e.type, payload=e.payload, visibility=e.visibility) for e in events],
+        include_initial_reveals=True,
+    )
+    abandoned = {e.seq for e in events} - {e["seq"] for e in active}
     prepared = await agents.entities.binding(session, room_id)
     current_scene = prepared.current_scene if prepared else None
     current, visited = set(), set()
@@ -109,17 +129,10 @@ async def public_fact_scopes(agents, session, room_id, entities):
         visited_nodes = set(nav.visited_scene_node_ids)
         # Public knowledge is monotonic across saves. Older saves can restore the
         # current location, but cannot erase a scene already shown to players.
-        events = list(
-            await session.scalars(
-                select(RoomEvent)
-                .where(
-                    RoomEvent.room_id == room_id,
-                    RoomEvent.type.in_(["scene.updated", "module.scene_transition"]),
-                )
-                .order_by(RoomEvent.seq)
-            )
-        )
-        for before, event in zip(events, events[1:]):
+        transitions = [
+            e for e in events if e.type in {"scene.updated", "module.scene_transition"}
+        ]
+        for before, event in zip(transitions, transitions[1:]):
             if (
                 before.type == "scene.updated"
                 and before.visibility == "public"
@@ -146,5 +159,9 @@ async def public_fact_scopes(agents, session, room_id, entities):
                 "historical" if eid in visited and entity.get("revealed_event_seq") else "unknown"
             )
         )
+        # A load preserves public knowledge, but a disclosure from an abandoned
+        # future is not a current observation, even when bound to this scene.
+        if entity.get("revealed_event_seq") in abandoned:
+            scope = "historical"
         entity.update(fact_scope=scope, scope_label=SCOPE_LABELS[scope])
     return entities

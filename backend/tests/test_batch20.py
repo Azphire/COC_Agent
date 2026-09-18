@@ -960,7 +960,9 @@ def test_npc_question_publishes_speech_even_when_model_only_narrates(client, gam
     speeches = [
         e for e in ok(client.get(game["prefix"] + "/events"))["events"] if e["type"] == "npc.spoke"
     ]
-    assert speeches and "问题" in speeches[-1]["payload"]["text"]
+    # A failed generation now preserves the specific unanswered topic instead
+    # of the old generic "I heard your question" paragraph.
+    assert speeches and "听得见我吗" in speeches[-1]["payload"]["text"]
 
 
 def test_local_batch19_failed_room_original_evidence():

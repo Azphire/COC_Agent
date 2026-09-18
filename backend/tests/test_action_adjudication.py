@@ -310,7 +310,16 @@ def modern_response(messages, kwargs):
             plan["proposed_check"] = proposal_for(plan["proposed_check"], c)
         return plan
     if schema == "KeeperNarration":
-        claim = c["PUBLIC_CLAIM_OPTIONS"][-1]
+        claims = c.get("PUBLIC_CLAIM_OPTIONS") or [
+            {
+                "claim_id": fact["id"],
+                "statement": fact["text"],
+                "entity_ids": fact["entity_ids"],
+                "category": fact["source_kind"],
+            }
+            for fact in c["response_brief"]["allowed_facts"]
+        ]
+        claim = claims[-1]
         return {"public_narration": claim["statement"], "grounded_claims": [claim]}
     if schema == "TeammateDecision":
         return {
@@ -380,6 +389,52 @@ def test_check_wait_precedes_narration_and_duplicate_roll(client, game):  # noqa
     requested = next(e for e in events if e["type"] == "check.requested")
     assert invitation["seq"] < requested["seq"]
     assert any(e["type"] == "keeper.narration" and e["seq"] > requested["seq"] for e in events)
+
+
+def test_repaired_plan_creates_one_check_and_restore_keeps_its_original_roll(
+    client,
+    game,  # noqa: F811
+    monkeypatch,
+):
+    service = client.app.state.agent_service
+    original_generate = service.runtime.generate_action_run
+    planning_nodes = []
+
+    async def repaired_run(state, binding_id, node, *args, **kwargs):
+        # Isolate the execution boundary: the same approved proposal arrives
+        # from the correction node. No check, receipt or dice is seeded.
+        if node == "plan_keeper_action":
+            node = "repair_keeper_plan"
+            planning_nodes.append(node)
+        return await original_generate(state, binding_id, node, *args, **kwargs)
+
+    monkeypatch.setattr(service.runtime, "generate_action_run", repaired_run)
+    service.model.adapter = FakeModelAdapter(responder=modern_response)
+    ok(submit(client, game, "我冒着失去平衡的风险检查现场，请进行侦查检定"))
+    cycle = wait_cycle(client, game)
+    assert planning_nodes == ["repair_keeper_plan"] and cycle["status"] == "waiting_for_roll", cycle
+    checks = ok(client.get(game["prefix"] + "/checks"))
+    assert len(checks) == 1
+    path = game["prefix"] + f"/checks/{checks[0]['id']}/roll"
+    ok(client.post(path, json={}))
+    original = accept_original(client, game, checks[0]["id"])
+    assert wait_cycle(client, game)["status"] == "completed"
+    before_restore = ok(client.get(game["prefix"] + "/checks"))
+    snapshot = ok(client.post(game["prefix"] + "/snapshots", json={"name": "after repair roll"}))[
+        "snapshot"
+    ]
+    ok(client.post(game["prefix"] + "/pause"))
+    ok(client.post(game["prefix"] + f"/snapshots/{snapshot['id']}/load"))
+    ok(client.post(game["prefix"] + "/resume"))
+    replay = ok(client.post(path, json={}))["check"]
+    assert original["dice"] == replay["dice"]
+    assert all(
+        original["result"][key] == replay["result"][key]
+        for key in ("total", "threshold", "level", "passed", "outcome")
+    )
+    assert ok(client.get(game["prefix"] + "/checks")) == before_restore
+    events = ok(client.get(game["prefix"] + "/events"))["events"]
+    assert sum(e["type"] == "check.requested" for e in events) == 1
 
 
 def test_navigation_non_move_then_explicit_move(client, running_navigation):  # noqa: F811

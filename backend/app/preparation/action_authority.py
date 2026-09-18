@@ -44,7 +44,7 @@ VERBS = {
     "pass": r"通过|穿过|绕过|潜行|溜过|冲进|冲过|跳|悄悄.{0,8}走|\b(?:sneak|pass)\b",
     "carry": r"背(?:起|上|着|负)|抱起|扶起|\bcarry\b",
     "release": r"挣脱|挣开|摆脱|\bescape\b|\bbreak free\b",
-    "control": r"推|拉|加速|减速|停车|\b(?:push|pull|accelerate|stop)\b",
+    "control": r"推(?!测|断|理|荐)|拉(?!杆)|加速|减速|停车|\b(?:push|pull|accelerate|stop)\b",
     "converse": r"问|告诉|说|询问|答|\b(?:ask|tell|say)\b",
     "use": r"使用|启用|激活|饮用|喝|吃|服用|\b(?:use|activate|drink|eat)\b",
     "settle": r"确认.{0,12}(?:结束|终幕|结算)|继续结算|结束调查",
@@ -65,7 +65,7 @@ def declared_action(text):
         re.match(
             r"\s*(?:我(?:们)?(?:现在|这就|先|想|要|打算|准备)?)?"
             r"(?:仔细|认真|先|再|然后|接着|继续|试着|尝试|实际)*"
-            r"(?:(?:靠近|走近|凑近)[^，。；,.!?;]{0,16}?)?"
+            r"(?:(?:靠近|走近|凑近|过去|蹲下|弯腰)[^，。；,.!?;]{0,16}?)?"
             r"(?:急救|包扎|止血|检查|查看|看看|摸|搜索|寻找|搜寻|翻看|翻转|翻过|揭下|观察|拿起|取下|使用|潜行|"
             r"(?:把|将).{1,24}(?:翻过|翻转|揭下|拿起|扔|抛|交给|打开)|交给|交还|归还|递给)",
             c,
@@ -100,6 +100,8 @@ def action_kinds(text):
 
 def speaker_action(text):
     """A present first-person operation remains owned by its speaker."""
+    from app.agents.action_policy import explicit_movement
+
     for clause in re.split(r"(?<=[，。；！？,;.!?\n])", text):
         if re.match(r"\s*我(?:是|想)?请你|\s*我(?:希望|让|叫)你", clause):
             continue
@@ -107,26 +109,81 @@ def speaker_action(text):
             r"\s*我(?:们)?(?:先|暂时)?(?:不|没|未)", clause
         ):
             continue
-        if declared_action(clause) or (
+        if declared_action(clause) or explicit_movement(clause) or (
             not NON_ACTION.search(clause) and set(action_kinds(clause)) - {"converse"}
         ):
             return clause
     return None
 
 
-def addressed_request_text(raw, name):
+def addressed_request_text(raw, name, members=None):
     """A named request ends before another sentence or the speaker's own act."""
-    match = re.search(r"(?:^|[。！？；])\s*" + re.escape(name) + r"[，,:：]([^。！？；]*)", raw)
+    if members:
+        spans = addressed_spans(raw, members)
+        return next((raw[start:end] for mid, start, end in spans if members[mid] == name), "")
+    match = re.search(r"(?:^|[，,。！？；])\s*" + re.escape(name) + r"[，,:：]([^。！？；]*)", raw)
     if not match:
         return raw
     return re.split(r"[，,]\s*我(?:们)?(?!是请|想请|希望你)", match[1], maxsplit=1)[0]
 
 
+def addressed_spans(raw, members):
+    """Explicit address boundaries, not a classifier of an utterance's meaning."""
+    found = []
+    for mid, name in members.items():
+        for match in re.finditer(
+            r"(?:^|(?<=[，,。！？；;\n]))\s*(?:(?:我)?(?:请|让|叫|问|向|对))?"
+            + re.escape(name)
+            + r"(?:先生|女士)?"
+            + r"(?=[，,:：、]|(?:帮|照看|照顾|检查|查看|观察|负责|去|来|说|问))",
+            raw,
+        ):
+            found.append((mid, match.start(), match.end()))
+    found.sort(key=lambda item: item[1])
+    spans = []
+    for i, (mid, start, name_end) in enumerate(found):
+        end = found[i + 1][1] if i + 1 < len(found) else len(raw)
+        # A new first-person declaration ends the request even in the same sentence.
+        own = re.search(
+            r"(?<=[，,。！？；;])\s*我(?:们)?(?!是请|想请|希望你|想问|没|不|觉得|知道|听)",
+            raw[name_end:end],
+        )
+        if own:
+            end = name_end + own.start()
+        if end > name_end:
+            spans.append((mid, start, end))
+    return spans
+
+
+def information_question(text):
+    """Questions about meaning/advice never grant an operation capability."""
+    return bool(
+        re.search(
+            r"你(?:们)?(?:知道|觉得|认为|看法|怎么看)|有什么(?:用|建议)|"
+            r"是(?:做|干|用来).{0,8}(?:什么|啥)|是什么意思|该(?:动|选|用)哪|"
+            r"(?:请教|想问|问一下)|\b(?:do you know|what do you think)\b",
+            text,
+            re.I,
+        )
+    )
+
+
 def requested_action_kinds(text):
     """A requestee does not inherit a separate first-person requester action."""
+    if information_question(text):
+        return []
+    polite = bool(
+        re.search(
+            r"(?:能不能|可不可以|能否|可否|可以|能)(?:请|帮|把|将|检查|查看|交|递|拿|用|打开|关闭)"
+            r"|(?:请|麻烦|劳驾|帮我).{0,20}(?:检查|查看|找|观察|拿|递|交|开|关|照看)",
+            text,
+        )
+    )
+    if re.search(r"[？?]", text) and not polite:
+        return []
     clauses = [
         c
-        for c in re.split(r"[，。；！？,;.!?\n]", text)
+        for c in re.split(r"(?<=[，。；！？,;.!?\n])", text)
         if not speaker_action(c)
         and not re.match(r"\s*我(?:们)?(?:来|去|先|要|会|再|接着|随后|自己)", c)
     ]
@@ -138,10 +195,11 @@ def requested_action_kinds(text):
             "",
             c,
         )
-        .replace("？", "")
-        .replace("?", "")
         for c in clauses
     ]
+    # Only an explicit polite imperative can lose its question punctuation.
+    if polite:
+        clauses = [c.rstrip("？?") for c in clauses]
     return [kind for kind in action_kinds("，".join(clauses)) if kind != "converse"]
 
 
@@ -218,7 +276,14 @@ def teammate_request(raw, members, actor, *, action=None):
 def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
     action = plan.focus.action if plan.focus else ""
     target = plan.focus.action_target_id if plan.focus else plan.parsed_intent.target_id
-    request = teammate_request(raw, members, actor, action=action)
+    if plan.focus and plan.focus.requests:
+        request = (
+            next((r.addressee_id for r in plan.focus.requests if r.addressee_id in members), None)
+            if not action
+            else None
+        )
+    else:
+        request = teammate_request(raw, members, actor, action=action)
     kinds = action_kinds(action) if action and action in raw and not request else []
     if plan.parsed_intent.type == "observe":
         kinds = [k for k in kinds if k in {"observe", "light"}]

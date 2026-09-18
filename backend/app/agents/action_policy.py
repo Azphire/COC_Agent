@@ -86,7 +86,7 @@ def explicit_movement(text: str) -> bool:
         return False
     from app.preparation.action_authority import VERBS
 
-    if re.search(VERBS["throw"], compact[:movement.start()], re.I):
+    if re.search(VERBS["throw"], compact[: movement.start()], re.I):
         return False  # A thrown object's destination does not move its thrower.
     if movement.group() in {"过去", "进去"} and compact[
         max(0, movement.start() - 1) : movement.start()
@@ -157,7 +157,7 @@ def local_scene_movement(text, targets, transitions=()):
     if re.search(r"如果|假如|假设|不要|并未|没有|要不要|是否|能否|[?？]", text):
         return False
     # A boundary viewpoint is local unless another clause actually crosses it.
-    if re.search(r"(?:到|在|靠近).{0,12}(?:门边|门旁|门口|入口边)", text) and not re.search(
+    if re.search(r"(?:到|在|去|靠近).{0,12}(?:门边|门旁|门口|入口边)", text) and not re.search(
         r"进入|走进|走入|跨入|冲进|穿过|跳进", text
     ):
         return True

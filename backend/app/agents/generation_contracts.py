@@ -12,6 +12,7 @@ from pydantic import Field, create_model, model_validator
 from app.agents.adjudication_schemas import (
     KeeperNarration,
     KeeperPlan,
+    NPCAnswer,
     NPCSpeech,
     PlayerIntent,
     TeammateDecision,
@@ -81,8 +82,23 @@ def generation_contract(schema, context):
         )
         clauses = utterance_clauses(context["triggering_action"]["payload"]["text"])
         clause_list = list[Literal[tuple(c["id"] for c in clauses)]]
+        request = create_model(
+            "TurnRequest",
+            kind=(Literal["question", "delegate", "suggestion", "hypothesis"], ...),
+            addressee_id=(Literal[tuple(dict.fromkeys(people))] if people else str, ...),
+            clause_ids=(clause_list, Field(default_factory=list, max_length=12)),
+        )
         focus_base = bound(
-            focus_base, {k: "" for k in ("action", "question", "suggestion", "hypothesis")}
+            focus_base,
+            {k: "" for k in ("action", "question", "suggestion", "hypothesis")},
+            requests=(
+                list[request],
+                Field(
+                    default_factory=list,
+                    max_length=12,
+                    json_schema_extra={"x-explicit-output": True},
+                ),
+            ),
         )
         focus = create_model(
             "TurnFocus",
@@ -280,6 +296,86 @@ def generation_contract(schema, context):
         fields = {}
         if responder.get("kind") == "npc":
             speech = bound(NPCSpeech, {"entity_id": responder["id"]})
+            questions = context.get("response_brief", {}).get("questions", [])
+            if questions:
+                speech = bound(
+                    NPCSpeech,
+                    {"entity_id": responder["id"]},
+                    text=(str, Field(default="", json_schema_extra={"x-server-bound": True})),
+                    answers=(
+                        list[NPCAnswer],
+                        Field(
+                            default_factory=list,
+                            max_length=12,
+                            json_schema_extra={"x-explicit-output": True},
+                        ),
+                    ),
+                )
+
+                def answers_current_questions(value):
+                    from app.models.base import ModelFormatError
+
+                    if value.text and not value.answers:
+                        return value  # Older persisted outputs remain readable.
+                    brief = context["response_brief"]
+                    material = [f["text"] for f in brief.get("allowed_facts", [])]
+                    material += [f["text"] for f in brief.get("testimony", [])]
+                    material += [brief["responder"].get("portrayal", "")]
+                    if sorted(a.question_index for a in value.answers) != list(
+                        range(len(questions))
+                    ):
+                        raise ModelFormatError(
+                            "问题未逐项回答",
+                            [
+                                {
+                                    "field": "npc_speech.answers",
+                                    "code": "每个questions索引恰好回答一次，从0起；"
+                                    "无依据的问题写具体未知",
+                                }
+                            ],
+                        )
+                    for answer in value.answers:
+                        if (
+                            answer.evidence_quote
+                            and not any(answer.evidence_quote in s for s in material)
+                        ) or (answer.certainty != "unknown" and not answer.evidence_quote):
+                            raise ModelFormatError(
+                                "回答缺少对应原文",
+                                [
+                                    {
+                                        "field": "npc_speech.answers",
+                                        "code": "evidence_quote须逐字摘录依据，且只支持原文关系；"
+                                        "没有该问题的依据请用unknown，明确哪点不清楚",
+                                    }
+                                ],
+                            )
+                        if answer.certainty == "unknown" and not re.search(
+                            r"不|未|没|难以|说不准", answer.text
+                        ):
+                            raise ModelFormatError(
+                                "未知被说成事实",
+                                [
+                                    {
+                                        "field": "npc_speech.answers",
+                                        "code": "unknown的答话须自然承认当前问题中"
+                                        "具体不知道的内容，不补编经过",
+                                    }
+                                ],
+                            )
+                    value.text = "\n".join(
+                        a.text for a in sorted(value.answers, key=lambda a: a.question_index)
+                    )
+                    return value
+
+                speech = create_model(
+                    "NPCSpeech",
+                    __base__=speech,
+                    __validators__={
+                        "answers_current_questions": model_validator(mode="after")(
+                            answers_current_questions
+                        )
+                    },
+                )
             fields["npc_speech"] = (
                 speech,
                 Field(
@@ -330,8 +426,7 @@ def generation_contract(schema, context):
                             {
                                 "field": "public_narration",
                                 "code": (
-                                    "在public_narration或npc_speech回应本轮任务；"
-                                    "不能只选择旧事实ID"
+                                    "在public_narration或npc_speech回应本轮任务；不能只选择旧事实ID"
                                 ),
                             }
                         ],
@@ -366,12 +461,28 @@ def generation_contract(schema, context):
             )
         return result
     if schema is TeammateDecision:
+        fields = {
+            name: (
+                str | None,
+                Field(default=None, max_length=700, json_schema_extra={"x-explicit-output": True}),
+            )
+            for name in ("action_text", "speech_text")
+        }
+        requests = context.get("addressed_requests", [])
+        if requests and all(r["kind"] == "question" for r in requests):
+            # Constrain generation using the shared, validated request. The
+            # broader persisted schema and runtime authority checks remain.
+            fields["mode"] = (
+                TeammateDecision.model_fields["mode"].annotation,
+                Field(..., json_schema_extra={"enum": ["speak"], "x-explicit-output": True}),
+            )
         return bound(
             TeammateDecision,
             {
                 "schema_version": 1,
                 "related_player_action_seq": context["triggering_action"]["seq"],
             },
+            **fields,
         )
     return schema
 
@@ -478,6 +589,23 @@ def restore_output(output, schema, context):
             ):
                 value["needs_host_review"] = False
         clauses = utterance_clauses(context["triggering_action"]["payload"]["text"])
+        requests = []
+        for request in focus.get("requests", []):
+            if "clause_ids" not in request:
+                requests.append(request)
+                continue
+            chosen = request.pop("clause_ids")
+            positions = [i for i, c in enumerate(clauses) if c["id"] in chosen]
+            # Only contiguous original spans are accepted. Missing middle IDs
+            # cannot absorb another addressee's intervening task.
+            if not positions or positions != list(range(min(positions), max(positions) + 1)):
+                continue
+            start = sum(len(c["text"]) for c in clauses[: min(positions)])
+            text = "".join(c["text"] for c in clauses[min(positions) : max(positions) + 1])
+            requests.append(
+                {**request, "text": text, "source_start": start, "source_end": start + len(text)}
+            )
+        focus["requests"] = requests
         for name in ("action", "question", "suggestion", "hypothesis"):
             key = name + "_clause_ids"
             chosen = focus.pop(key, [])
@@ -936,4 +1064,48 @@ def restore_output(output, schema, context):
                 )
             elif event["type"] == "scene.updated":
                 value["transition_result_reference"] = str(event["seq"])
-    return schema.model_validate(value)
+    restored = schema.model_validate(value)
+    if schema is KeeperPlan:
+        from app.agents.action_policy import local_scene_movement
+        from app.preparation.turn_focus import repair_attribution
+
+        people = {
+            **context.get("current_participants", {}).get("members", {}),
+            **{
+                t["id"]: t["title"]
+                for t in context.get("current_targets", [])
+                if t["type"] == "npc"
+            },
+        }
+        repair_attribution(
+            restored,
+            context["triggering_action"]["payload"]["text"],
+            people,
+            restored.parsed_intent.actor_member_id,
+            npc_ids={t["id"] for t in context.get("current_targets", []) if t["type"] == "npc"},
+        )
+        # The speaker's local viewpoint must be checked after attribution: a
+        # teammate's polite question cannot turn this into a party transition.
+        if (
+            restored.focus
+            and restored.focus.action
+            and local_scene_movement(
+                restored.focus.action,
+                context.get("current_targets", []),
+                context.get("approved_exits", []),
+            )
+        ):
+            scene_id = restored.current_scene_id
+            restored.focus.action_target_id = scene_id
+            restored.parsed_intent.type = "interact"
+            restored.parsed_intent.target_id = scene_id
+            restored.proposed_transition_id = None
+            restored.proposed_tool_calls = [
+                t
+                for t in restored.proposed_tool_calls
+                if t.name not in {"transition_scene", "update_scene"}
+            ]
+            restored.proposed_reveal_entity_ids = [
+                eid for eid in restored.proposed_reveal_entity_ids if eid != scene_id
+            ]
+    return restored

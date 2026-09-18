@@ -80,7 +80,12 @@ class TeammateBehaviorPolicy:
         actor_id=None,
         requester_id=None,
         actor_name="",
+        information_request=False,
+        requested_targets=(),
+        named_people=None,
     ):
+        if information_request and decision.mode == "pass":
+            return BehaviorRejection(accepted=False, reason="question_requires_answer_not_action")
         if decision.mode == "pass":
             return BehaviorRejection(
                 accepted=not explicit_action_request,
@@ -89,6 +94,19 @@ class TeammateBehaviorPolicy:
         if decision.related_player_action_seq != action_seq:
             return BehaviorRejection(accepted=False, reason="unrelated_player_action")
         speech, action = decision.speech_text or "", decision.action_text or ""
+        if decision.mode in {"act", "assist"}:
+            if re.search(
+                r"(?:^|[，。；,;])\s*(?:你|他|她)(?:们)?(?:去|来|先|帮|负责|照看)", action
+            ):
+                return BehaviorRejection(accepted=False, reason="action_assigns_someone_else")
+            if requested_targets:
+                named = {
+                    mid
+                    for mid, name in (named_people or {}).items()
+                    if name and name in action and mid != actor_id
+                }
+                if named and not named.intersection(requested_targets):
+                    return BehaviorRejection(accepted=False, reason="request_target_mismatch")
         if actor_name and actor_name in re.sub(
             r"我(?:叫|是)" + re.escape(actor_name), "", speech + action
         ):
@@ -185,7 +203,7 @@ class TeammateBehaviorPolicy:
                     decision.mode = "act"
                     decision.action_text = "我检查自己的口袋与随身物，确认实际保留下来的物品。"
                     own_probe, kinds = True, {"search", "observe"}
-            if addressed_probe and not action_kinds(player_text):
+            if addressed_probe and not explicit_action_request and not action_kinds(player_text):
                 # Asking what is held is not an instruction to search again.
                 decision.mode = "speak"
                 decision.action_type = "converse"
@@ -223,6 +241,15 @@ class TeammateBehaviorPolicy:
                 decision.action_text or "",
             ):
                 return BehaviorRejection(accepted=False, reason="suggestion_requires_speak_mode")
+        # Correct the requested response mode before diagnosing an invented
+        # tool. Otherwise an opinion gets repaired into an inventory answer.
+        from app.preparation.inventory import inventory_question
+
+        if (
+            information_request and decision.mode != "speak"
+            and not inventory_question(requested_text or player_text, inventory_state or {})
+        ):
+            return BehaviorRejection(accepted=False, reason="question_requires_answer_not_action")
         if inventory_state is not None and not (
             decision.mode == "speak" and readonly_recall(player_text)
         ):
@@ -266,6 +293,8 @@ class TeammateBehaviorPolicy:
             r"我(?:叫|是)" + re.escape(actor_name), "", output_text(decision)
         ):
             return BehaviorRejection(accepted=False, reason="addressing_self")
+        if information_request and decision.mode != "speak":
+            return BehaviorRejection(accepted=False, reason="question_requires_answer_not_action")
         text = output_text(decision)
         if normalized(text) in {"继续调查", "四周很安静", "四周安静下来"}:
             return BehaviorRejection(accepted=False, reason="empty_template", repetition_score=1)
@@ -274,10 +303,12 @@ class TeammateBehaviorPolicy:
             c.target_id == decision.target_id and c.state_fingerprint != fingerprint
             for c in state.cooldowns
         )
-        if relevant_change and decision.mode in {
-            "act",
-            "assist",
-        }:
+        adjusted_after_result = bool(
+            decision.goal_status == "adjust"
+            and state.last_result.get("kind") == "blocked"
+            and not state.last_result.get("reviewed_in_cycle")
+        )
+        if relevant_change or information_request:
             recent = []  # A changed world permits a new attempt through the normal KP/check gates.
         compared = [*recent, *other_outputs]
         if not (explicit_action_request and decision.mode in {"act", "assist"}):
@@ -287,12 +318,16 @@ class TeammateBehaviorPolicy:
             return BehaviorRejection(
                 accepted=False, reason="repeated_output", repetition_score=score
             )
-        if decision.mode in {"act", "assist"} and any(
-            c.remaining_cycles > 0
-            and c.action_type == decision.action_type
-            and c.target_id == decision.target_id
-            and c.state_fingerprint == fingerprint
-            for c in state.cooldowns
+        if (
+            decision.mode in {"act", "assist"}
+            and not adjusted_after_result
+            and any(
+                c.remaining_cycles > 0
+                and c.action_type == decision.action_type
+                and c.target_id == decision.target_id
+                and c.state_fingerprint == fingerprint
+                for c in state.cooldowns
+            )
         ):
             return BehaviorRejection(
                 accepted=False, reason="target_action_cooldown", repetition_score=score
@@ -307,7 +342,7 @@ class TeammateBehaviorPolicy:
             for c in state.cooldowns
             if c.remaining_cycles > 1
         ]
-        if decision.mode != "pass":
+        if decision.mode in {"act", "assist"}:
             cooldowns = [
                 c
                 for c in cooldowns
@@ -322,6 +357,11 @@ class TeammateBehaviorPolicy:
                 )
             )
         return BehaviorState(
+            pending_requests=state.pending_requests,
+            task_status=state.task_status,
+            task_scene_id=state.task_scene_id,
+            task_cycle_id=state.task_cycle_id,
+            last_result=state.last_result,
             current_short_term_goal=(safe_goal or "")
             if decision.goal_status in {"complete", "abandon", "adjust"}
             else safe_goal or state.current_short_term_goal,

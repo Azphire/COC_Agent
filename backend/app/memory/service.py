@@ -28,6 +28,17 @@ def prompt_context_size(context):
 
         schema = KeeperPlan if context["phase"] in plan_phases else TeammateDecision
         return len(json.dumps(generation_prompt(context, schema), ensure_ascii=False))
+    if context.get("phase") == "generate_keeper_narration":
+        from app.agents.action_runtime import generation_prompt
+        from app.agents.adjudication_schemas import KeeperNarration
+
+        projected = generation_prompt(context, KeeperNarration)
+        if "response_brief" not in context:
+            # These public inputs will form the brief in ActionRuntime. The raw
+            # memory envelope also contains audit/role fields never transmitted.
+            projected.update({k: context[k] for k in ("public_entities", "module") if k in context})
+            projected["members"] = context.get("current_participants", {}).get("members", {})
+        return len(json.dumps(projected, ensure_ascii=False))
     # Auxiliary phases do not share the plan/teammate grammar. Count their
     # complete envelope rather than assuming the same audit compaction.
     return len(json.dumps(context, ensure_ascii=False))

@@ -42,6 +42,15 @@ def response_brief(plan, context, results, *, withdrawal=None):
         focus.addressee_id if focus else (intent.target_id if intent.type == "converse" else None)
     )
     people = context.get("current_participants", {}).get("members", {})
+    if focus and focus.requests:
+        npc_requests = [r for r in focus.requests if r.addressee_id not in people]
+        if npc_requests:
+            addressee = npc_requests[0].addressee_id
+            question = "\n".join(r.text for r in npc_requests if r.addressee_id == addressee)
+        elif focus.action and addressee in people:
+            # The player's own result belongs to KP; delegates await their own
+            # decision and child cycle, so are not material for this narration.
+            question, addressee = "", None
     npc = next(
         (
             e
@@ -122,7 +131,17 @@ def response_brief(plan, context, results, *, withdrawal=None):
         else {"id": addressee, "name": people[addressee], "kind": "teammate"}
         if addressee in people
         else {"kind": "keeper"},
-        "allowed_facts": [{"id": c["claim_id"], "text": c["statement"]} for c in facts],
+        "allowed_facts": [
+            {
+                "id": c["claim_id"],
+                "text": c["statement"],
+                "entity_ids": c["entity_ids"],
+                "source_kind": c["category"],
+            }
+            for c in facts
+        ],
+        "questions": [s.strip() for s in re.findall(r"[^？?]+[？?]", question)],
+        "player_statement": raw if npc else attempt or question,
         "source_quotes": list(dict.fromkeys(written_sources))[:3],
         "current_scene": scene,
         "current_inventory": context.get("item_holders", []),
@@ -192,6 +211,16 @@ class NarrationValidator:
                 *output.incidental_details,
             ]
         )
+        if output.npc_speech:
+            for question in (brief or {}).get("questions", []):
+                # Repeating the user's question as the NPC's own question does
+                # not answer it. Quoted acknowledgements without '?' are fine.
+                tail = re.split(r"[，,：:]", question)[-1].strip()
+                require(
+                    len(tail) < 7 or tail not in output.npc_speech.text,
+                    "NPC复述了玩家的问题，请回答该问题或说明具体未知之处：" + tail,
+                    422,
+                )
         require(
             not re.search(r"[a-z][a-z0-9]*_[a-z0-9_]+", text, re.I), "公开叙事包含内部标识", 422
         )

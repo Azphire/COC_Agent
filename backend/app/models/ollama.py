@@ -162,12 +162,30 @@ class OllamaAgentAdapter:
                 finish_reason=data.get("done_reason"),
                 token_usage=usage,
             )
-        except ValidationError as error:
-            raise ModelFormatError(
-                "模型输出格式无效", schema_issues(error, response_schema), usage
-            ) from None
-        except (KeyError, TypeError, ValueError):
-            raise ModelFormatError("模型输出格式无效", token_usage=usage) from None
+        except (ValidationError, ModelFormatError, KeyError, TypeError, ValueError) as error:
+            failure = (
+                error
+                if isinstance(error, ModelFormatError)
+                else ModelFormatError(
+                    "模型输出格式无效",
+                    schema_issues(error, response_schema)
+                    if isinstance(error, ValidationError)
+                    else [],
+                )
+            )
+            failure.token_usage = usage
+            # Preserve the answer for private auditing, including rejected JSON.
+            # The separate thinking channel and reasoning-tagged content remain excluded.
+            content = data.get("message", {}).get("content", "")
+            if not any(
+                tag in content.lower()
+                for tag in ("<think", "</think", '"reasoning"', '"chain_of_thought"', '"thinking"')
+            ):
+                try:
+                    failure.generated_output = json.loads(content)
+                except ValueError:
+                    failure.generated_output = {"unparsed_text": content}
+            raise failure from None
 
     async def close(self):
         await self.client.aclose()

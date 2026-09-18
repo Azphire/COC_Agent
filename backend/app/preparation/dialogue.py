@@ -196,6 +196,14 @@ def repair_dialogue_focus(plan, raw, candidates, previous=None, *, member_names=
 
 
 def repair_teammate_focus(plan, raw, members, actor):
+    from app.preparation.turn_focus import repair_attribution
+
+    repair_attribution(plan, raw, members, actor)
+    if plan.focus and plan.focus.requests:
+        plan.addressed_member_id = next(
+            (r.addressee_id for r in plan.focus.requests if r.addressee_id in members), None
+        )
+        return
     request = teammate_request(raw, members, actor)
     own_action = (
         speaker_action(plan.focus.action)
@@ -304,12 +312,41 @@ async def prepare_dialogue(runtime, state, run_id):
             for m in await service.rooms.members(session, room)
             if m.active and m.role == "player"
         }
-        npc = repair_dialogue_focus(
-            plan, facts.raw_text, candidates, previous, member_names=members.values()
+        from app.preparation.turn_focus import repair_attribution
+
+        repair_attribution(
+            plan,
+            facts.raw_text,
+            {**members, **{n["id"]: n["title"] for n in candidates}},
+            facts.actor_member_id,
+            npc_ids={n["id"] for n in candidates},
         )
+        requests = plan.focus.requests if plan.focus else []
+        if requests:
+            npc = next(
+                (n for n in candidates if any(r.addressee_id == n["id"] for r in requests)), None
+            )
+            if npc:
+                plan.focus.addressee_id = npc["id"]
+        elif (
+            plan.focus
+            and plan.focus.action
+            and not re.search(r"问|说|你好|您好|听得见|[?？]|告诉|请教|打招呼", facts.raw_text)
+        ):
+            npc = None  # A physical target is not a conversation addressee.
+            plan.focus.question = ""
+            plan.focus.addressee_id = None
+        else:
+            npc = repair_dialogue_focus(
+                plan, facts.raw_text, candidates, previous, member_names=members.values()
+            )
         if npc:
             cycle.state = {**cycle.state, "dialogue_npc": npc}
-        repair_teammate_focus(plan, facts.raw_text, members, facts.actor_member_id)
+        plan.addressed_member_id = (
+            next((r.addressee_id for r in plan.focus.requests if r.addressee_id in members), None)
+            if plan.focus
+            else None
+        )
         # Only a specifically addressed NPC and topic can disclose this clue.
         for eid, entity in facts.approved_entities.items():
             if entity.get("type") != "npc" or eid not in facts.local_entity_ids:

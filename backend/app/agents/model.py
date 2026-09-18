@@ -112,7 +112,8 @@ class AgentModelClient:
                     usage = result.token_usage
                     generated_output = (
                         result.structured.model_dump(mode="json")
-                        if isinstance(result.structured, BaseModel) else result.structured
+                        if isinstance(result.structured, BaseModel)
+                        else result.structured
                     )
                     request_id, response_model = result.request_id, result.response_model
                     if response_schema:
@@ -147,6 +148,7 @@ class AgentModelClient:
                     request_id = request_id or getattr(error, "request_id", None)
                     response_model = response_model or getattr(error, "response_model", None)
                     usage = usage or getattr(error, "token_usage", None)
+                    generated_output = generated_output or getattr(error, "generated_output", None)
                     issues = (
                         schema_issues(error, response_schema)
                         if isinstance(error, ValidationError)

@@ -945,8 +945,14 @@ class AgentService:
         policy = CheckPolicyEvaluator().evaluate(proposal, doc.plan.parsed_intent, facts)
         require(policy.allowed, policy.reason)
         require(
-            run.graph_node in {"keeper_decide", "keeper_decide_repair", "plan_keeper_action"},
-            "每轮仅允许 KP 首次决策请求一次检定",
+            run.graph_node
+            in {
+                "keeper_decide",
+                "keeper_decide_repair",
+                "plan_keeper_action",
+                "repair_keeper_plan",
+            },
+            "只有本轮已裁决的 KP 规划可以请求检定",
             422,
         )
         require(cycle.state.get("pending_check_id") is None, "本轮已请求过检定")
