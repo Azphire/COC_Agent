@@ -1500,7 +1500,10 @@ def test_teammate_requests_do_not_authorize_requesters_inventory():
     assert teammate_request("我把手机交给沈砚。", members, "human") is None
 
 
-def test_sanity_unknown_survives_snapshot_answer_settles_once(client, interactions, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("independent_move", [False, True])
+def test_sanity_unknown_survives_snapshot_answer_settles_once(
+    client, interactions, monkeypatch, independent_move,  # noqa: F811
+):
     from sqlalchemy import select
     from test_rooms import ok
 
@@ -1638,6 +1641,33 @@ def test_sanity_unknown_survives_snapshot_answer_settles_once(client, interactio
 
     monkeypatch.setattr(san, "call_model", yes)
     child, child_run = client.portal.call(make_cycle, answer)
+    if independent_move:
+        async def choose_move():
+            async with service.rooms.transaction() as session:
+                run = await session.get(AgentRun, child_run)
+                plan = KeeperPlan.model_validate(run.structured_output)
+                plan.focus.action = "我往车头方向走进下一节车厢。"
+                plan.proposed_transition_id = "next-scene"
+                plan.parsed_intent.type = "move"
+                run.structured_output = plan.model_dump(mode="json")
+                return run.structured_output
+
+        before = client.portal.call(choose_move)
+        assert not client.portal.call(
+            san.resume_sanity_clarification, service.runtime, child, child_run,
+        )
+
+        async def unchanged():
+            async with service.rooms.transaction() as session:
+                run = await session.get(AgentRun, child_run)
+                room = await service.rooms.room(session, d["room"]["id"])
+                assert run.structured_output == before
+                assert next(iter(load_state(room).module_runtime.sanity_clarifications.values()))[
+                    "status"
+                ] == "expired"
+
+        client.portal.call(unchanged)
+        return
     assert client.portal.call(san.resume_sanity_clarification, service.runtime, child, child_run)
 
     async def settle():

@@ -147,6 +147,57 @@ STORY_TYPES = {
 INITIAL_TYPES = {"entity.revealed", "entity.corrected", "clue.revealed", "scene.updated"}
 
 
+def public_accounts(events, member_id, names, entities=()):
+    """A bounded, attributed projection. Never rewrite the original event log."""
+    actions = {}
+    rows = []
+    latest = {}
+    for event in events:
+        p, kind = event["payload"], event["type"]
+        actor = p.get("actor_id") or p.get("target_member_id") or event.get("actor_member_id")
+        if kind in {"action.submitted", "agent.action_proposed"}:
+            actions[p.get("cycle_id")] = actor
+        if kind not in {"action.submitted", "agent.action_proposed", "agent.spoke", "npc.spoke",
+                        "check.resolved", "combat.resolved", "module.interaction",
+                        "entity.corrected"}:
+            continue
+        if kind in {"check.resolved", "combat.resolved", "module.interaction"}:
+            actor = (p.get("actor_id") or p.get("target_member_id")
+                     or actions.get(p.get("cycle_id"), actor))
+        if kind == "npc.spoke":
+            actor = p.get("entity_id", actor)
+        text = p.get("text") or p.get("display_text") or p.get("summary") or p.get("public_summary")
+        if not text:
+            continue
+        category = "attempt" if kind in {"action.submitted", "agent.action_proposed"} else (
+            "judgment" if kind == "agent.spoke"
+            else "testimony" if kind == "npc.spoke" else "result"
+        )
+        topics = {e["id"] for e in entities if any(
+            n and n in text for n in [e.get("title"), *e.get("aliases", [])]
+        )}
+        row = {"seq": event["seq"], "actor_id": actor,
+               "speaker": p.get("actor_name") or names.get(actor, actor),
+               "ownership": "self" if actor == member_id else "other",
+               "kind": category, "text": text[:500], "status": "current"}
+        if category == "judgment":
+            row["status"] = "unverified_opinion"
+        for old, old_topics in rows:
+            if topics & old_topics and category in {"testimony", "result"} and (
+                old["kind"] == "judgment"
+                or old["kind"] == "testimony" and actor == old["actor_id"]
+            ):
+                old.update(status="historical_superseded", superseded_by=event["seq"])
+        if category == "testimony":
+            latest[actor] = row
+        rows.append((row, topics))
+    # Keep recent receipts/attempts plus the latest NPC testimony even when the
+    # current request is for a teammate; it can correct that teammate's opinion.
+    selected = [r for r, _ in rows[-8:]]
+    selected += [r for r in latest.values() if r not in selected]
+    return selected[-10:]
+
+
 def epistemic_event(event):
     kind = event["type"]
     return {

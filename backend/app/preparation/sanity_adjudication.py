@@ -290,6 +290,16 @@ async def resume_sanity_clarification(runtime, state, run_id):
         pending = next(iter(candidates), None)
         if not pending:
             return None
+        run = await session.get(AgentRun, run_id)
+        plan = KeeperPlan.model_validate(run.structured_output)
+        from app.agents.action_policy import explicit_movement
+
+        if plan.proposed_transition_id and plan.focus and explicit_movement(plan.focus.action):
+            # An unrelated unfinished SAN question must not overwrite the KP's
+            # explicit current move merely because speech mentions a past look.
+            pending.update(status="expired", reason="已有独立的当前转场动作")
+            store_state(room, data)
+            return None
         changed_scene = nav and nav.current_scene_node_id != pending["scene_node_id"]
         redirected = bool(re.search(r"不看|不再看|转身离开|改为|先不|不观察", raw))
         related = bool(

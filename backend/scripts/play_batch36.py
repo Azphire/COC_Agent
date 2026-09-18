@@ -39,7 +39,7 @@ def clean(value):
     return value
 
 
-def serve(directory):
+def serve(directory, *, port=8036):
     import uvicorn
 
     from app.config import Settings
@@ -86,7 +86,7 @@ def serve(directory):
     )
     stop = directory / "stop-service"
     stop.unlink(missing_ok=True)
-    server = uvicorn.Server(uvicorn.Config(create_app(settings), host="127.0.0.1", port=8036))
+    server = uvicorn.Server(uvicorn.Config(create_app(settings), host="127.0.0.1", port=port))
 
     def watch():
         while not stop.exists():

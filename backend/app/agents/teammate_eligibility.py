@@ -20,6 +20,12 @@ class TeammateEligibilityPolicy:
         relevant = bool(goal and any(goal[i : i + 2] in material for i in range(len(goal) - 1)))
         relevant = relevant or any(t.strip() and t in material for t in terms)
         urgent = bool(re.search(r"受伤|流血|危险|追来|坍塌|抓住|救命", material)) and relevant
+        # Choose who gets the existing single unsolicited opportunity using
+        # actual trained abilities. This prioritizes a decision, not an action.
+        skills = profile.get("skills", {})
+        fit = max((skills.get(k, 0) for k in ("first_aid", "medicine")), default=0) if re.search(
+            r"受伤|伤口|流血|腿伤|疼", material
+        ) else 0
         last = max(
             (
                 e.seq
@@ -30,7 +36,7 @@ class TeammateEligibilityPolicy:
             ),
             default=0,
         )
-        return (not direct, not urgent, not relevant, last)
+        return (not direct, not urgent, -fit, not relevant, last)
 
     def evaluate(self, *, events, trigger, profile, member_id, goal=""):
         current = [e for e in events if e.seq > trigger.seq]
@@ -44,6 +50,8 @@ class TeammateEligibilityPolicy:
             return "direct_conversation"
         if any(e.type in {"entity.revealed", "clue.revealed"} for e in current):
             return "new_public_entity"
+        if any(e.type == "npc.spoke" for e in current):
+            return "new_testimony"
         if any(e.type == "scene.updated" for e in current):
             return "scene_changed"
         if goal and any(

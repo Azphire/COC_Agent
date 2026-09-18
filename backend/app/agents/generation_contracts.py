@@ -84,9 +84,12 @@ def generation_contract(schema, context):
         clause_list = list[Literal[tuple(c["id"] for c in clauses)]]
         request = create_model(
             "TurnRequest",
-            kind=(Literal["question", "delegate", "suggestion", "hypothesis"], ...),
+            kind=(Literal["question", "delegate", "suggestion", "hypothesis", "cancel"], ...),
             addressee_id=(Literal[tuple(dict.fromkeys(people))] if people else str, ...),
             clause_ids=(clause_list, Field(default_factory=list, max_length=12)),
+            target_id=(Literal[tuple(dict.fromkeys([*targets, *people, None]))], None),
+            continuity=(Literal["scene", "ongoing"], "scene"),
+            replaces_prior=(bool, False),
         )
         focus_base = bound(
             focus_base,
@@ -123,6 +126,21 @@ def generation_contract(schema, context):
             if any(
                 re.search(r"[?？]$", c.strip()) for c in selected
             ) and not questions.intersection(value.question_clause_ids):
+                if value.addressee_id in people and re.search(
+                    r"问|请教", context["triggering_action"]["payload"]["text"],
+                ):
+                    # The plan already chose a present interlocutor. An explicit
+                    # question is speech even if the model labelled all clauses
+                    # as actions. Preserve independent action clauses for the
+                    # existing attribution/authority pass; no new model call.
+                    value.question_clause_ids = [c["id"] for c in clauses
+                                                 if c["id"] in questions]
+                    value.action_clause_ids = [
+                        c["id"] for c in clauses if c["id"] in value.action_clause_ids
+                        and c["id"] not in questions
+                        and not re.search(r"问|请教|你|您", c["text"])
+                    ]
+                    return value
                 from app.models.ollama import ModelFormatError
 
                 raise ModelFormatError(
@@ -307,7 +325,11 @@ def generation_contract(schema, context):
                 })
                 answer_sources["portrayal"] = responder.get("portrayal", "")
                 answer_schema = bound(
-                    NPCAnswer, {"evidence_quote": "", "question_index": 0},
+                    NPCAnswer, {"evidence_quote": ""},
+                    question_index=(
+                        int, Field(default=0, ge=0, lt=len(questions),
+                                   json_schema_extra={"x-explicit-output": True}),
+                    ),
                     evidence_id=(
                         Literal[tuple([*answer_sources, None])],
                         Field(default=None, json_schema_extra={"x-explicit-output": True}),
@@ -327,7 +349,9 @@ def generation_contract(schema, context):
                                 item["evidence_quote"] = answer_sources[item["evidence_id"]]
                             index = item.get("question_index")
                             if isinstance(index, int) and 0 <= index < len(questions):
-                                if social_question(questions[index]):
+                                if social_question(questions[index], brief) and not item.get(
+                                    "evidence_quote"
+                                ):
                                     item.update(certainty="social", evidence_quote="")
                             answers.append(item)
                         value["answers"] = answers
@@ -370,6 +394,35 @@ def generation_contract(schema, context):
                             ],
                         )
                     for answer in value.answers:
+                        from app.agents.behavior import normalized
+                        from app.preparation.dialogue import item_history_evidence
+
+                        if normalized(answer.text) == normalized(questions[answer.question_index]):
+                            raise ModelFormatError(
+                                "回答只是重复问题",
+                                [{"field": f"npc_speech.answers[{answer.question_index}]",
+                                  "code": "直接回答这项问题，不把问句重复给玩家；"
+                                  "保留其他有效项。"}],
+                            )
+                        history = item_history_evidence(
+                            answer.evidence_quote,
+                            context.get("inventory_state", {}).get("known_items", []),
+                        )
+                        for item in history:
+                            if item["past_possession"] and not any(
+                                h["item_id"] == item["item_id"] and h["last_location"]
+                                for h in history
+                            ) and any(
+                                item["name"] in part and re.search(r"掉在|掉落|丢在|遗落", part)
+                                and not re.search(r"不确定|不知道|不清楚|是否|说不准", part)
+                                for part in re.split(r"[，,；;。\n]", answer.text)
+                            ):
+                                raise ModelFormatError(
+                                    "证词中的物件与最后位置被混淆",
+                                    [{"field": f"npc_speech.answers[{answer.question_index}]",
+                                      "code": item["name"] + "的依据仅为：" + item["source"]
+                                      + "。其他物件的掉落地点不能当作它的位置；保留已知内容。"}],
+                                )
                         if (
                             answer.evidence_quote
                             and not any(answer.evidence_quote in s for s in material)
@@ -390,7 +443,7 @@ def generation_contract(schema, context):
                         from app.preparation.dialogue import social_question
 
                         if answer.certainty == "social" and not social_question(
-                            questions[answer.question_index]
+                            questions[answer.question_index], brief
                         ):
                             raise ModelFormatError(
                                 "关键问题不能作为寒暄补全",
@@ -400,31 +453,53 @@ def generation_contract(schema, context):
                                   + " 请回答这一项，不复播旧寒暄。其他有效答案保持原样；"
                                   "按本问题选证词，关键未知具体说明不确定哪一点。"}],
                             )
+                        name = brief["responder"].get("name", "")
+                        if (
+                            name and re.match(re.escape(name) + r"(?:说|曾|在|的)", answer.text)
+                        ) or (
+                            re.search(r"他曾经?保管", answer.text)
+                            and re.search(r"曾.{0,3}保管", answer.evidence_quote)
+                        ):
+                            raise ModelFormatError(
+                                "NPC把自己说成第三人称",
+                                [{"field": f"npc_speech.answers[{answer.question_index}]",
+                                  "code": "用我表达自己的经历，不抄第三人称人物资料。"
+                                  "保留其他有效项及其question_index。"}],
+                            )
                         if (
                             re.search(r"(?:曾|原先|以前|过去|之前).{0,5}(?:保管|持有|拿着|带着)",
                                       answer.evidence_quote)
                             and any(
-                                re.search(r"在我(?:这里|这儿|身上|手里|手上)", clause)
-                                and not re.search(r"不在|没在|原先|以前|过去|之前|曾", clause)
+                                re.search(
+                                    r"在我(?:这里|这儿|身上|手里|手上)|"
+                                    r"(?:还在|仍在|正在)保管|保管着|"
+                                    r"(?:现在|目前|如今).{0,6}(?:不在|没在|没有|不持有)", clause,
+                                )
+                                and not re.search(
+                                    r"不确定|不知道|说不准|是否|原先|以前|过去|之前|曾", clause
+                                )
                                 for clause in re.split(r"[，。；,;]", answer.text)
                             )
                         ):
                             raise ModelFormatError(
                                 "过去持有不能证明当前持有",
                                 [{"field": f"npc_speech.answers[{answer.question_index}]",
-                                  "code": "证词只说明过去保管，不证明现在仍在身上。"
+                                  "code": "证词只说明过去保管，不证明现在在或不在身上。"
                                   "请保留已知的最后位置；当前持有未知就明确不确定，"
                                   "不要先断言在身上再说不知道。当前问题："
                                   + questions[answer.question_index]}],
                             )
                         if answer.certainty == "unknown" and not re.search(
-                            r"不|未|没|难以|说不准", answer.text
+                            r"不知|不清|不明|不了解|不记|记不|想不|说不|"
+                            r"不(?:能|敢)?(?:确定|确认|肯定)|无法|难以|"
+                            r"没(?:有)?(?:见|看|听|注意|印象|答案)|未(?:见|听|确认)",
+                            answer.text,
                         ):
                             raise ModelFormatError(
                                 "未知被说成事实",
                                 [
                                     {
-                                        "field": "npc_speech.answers",
+                                        "field": f"npc_speech.answers[{answer.question_index}]",
                                         "code": "unknown的答话须自然承认当前问题中"
                                         "具体不知道的内容，不补编经过",
                                     }
@@ -578,7 +653,7 @@ def generation_contract(schema, context):
             for name in ("action_text", "speech_text")
         }
         requests = context.get("addressed_requests", [])
-        if requests and all(r["kind"] == "question" for r in requests):
+        if requests and all(r["kind"] in {"question", "cancel"} for r in requests):
             # Constrain generation using the shared, validated request. The
             # broader persisted schema and runtime authority checks remain.
             fields["mode"] = (

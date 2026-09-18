@@ -42,12 +42,49 @@ def can_speak(entity, participants):
     return not (injury.get("dead") or injury.get("unconscious"))
 
 
-def social_question(question):
-    """Ordinary present interaction, not a request for hidden events or causes."""
-    return bool(
-        re.search(r"听得见|听到我|感觉怎么样|感觉如何|还好吗|疼不疼|你好|您好", question)
-        and not re.search(r"发生|为什么|怎么会|哪|谁|钥匙|驾驶|停车|怪物|袭击", question)
-    )
+def social_question(question, brief=None):
+    """Ordinary interaction is the default for a reachable, conscious speaker.
+
+    The plan supplies the interlocutor and state. Lexical cues guard external
+    factual questions; they are not an allowlist of permitted greetings.
+    Source-backed and unknown answers still use the ordinary evidence contract.
+    """
+    brief = brief or {}
+    state = brief.get("responder", {}).get("interaction_state", {})
+    if state.get("can_speak") is False:
+        return False
+    if re.search(
+        r"发生|为什么|为何|怎么会|谁|哪里|哪儿|在哪|哪一|哪个|哪节|哪号|"
+        r"怎么(?:进|出|开|停|用|走)|如何(?:进|出|开|停|用)|"
+        r"钥匙|驾驶|停车|怪物|袭击|密码|里面|装着|藏着|拿走|最后看见", question
+    ):
+        return False
+    # A prepared resource/topic is evidence-bearing even when the player uses
+    # a wording absent from the generic boundary cues above.
+    topics = [f.get("title", "") for f in brief.get("testimony", [])]
+    topics += [i.get("title", "") for i in brief.get("current_inventory", [])]
+    return not any(t and t in question for t in topics)
+
+
+def npc_voice(text, name):
+    """Project explicitly attributed source prose, keeping the original as evidence."""
+    if not name:
+        return text
+    text = re.sub(r"^" + re.escape(name) + r"(?:说|表示|提到|称)[：:]?", "", text)
+    text = re.sub(r"^" + re.escape(name), "我", text)
+    return re.sub(r"([；;。])他(?=曾|在|的|逃|当时)", r"\1我", text)
+
+
+def item_history_evidence(text, items):
+    """Keep each source's subject with its temporal claim; no bag/content inference."""
+    parts = re.split(r"[；;。\n]", text)
+    return [
+        {"item_id": item["id"], "name": name, "source": part,
+         "past_possession": bool(re.search(r"曾|原先|以前|过去|之前", part)),
+         "last_location": bool(re.search(r"掉在|掉落|落在|丢在|遗落|最后.{0,4}见", part))}
+        for item in items for name in item.get("names", []) if name
+        for part in parts if name in part
+    ]
 
 
 def npc_knowledge_candidates(facts):
@@ -162,6 +199,18 @@ def dialogue_target(raw, candidates, previous=None, selected=None, *, member_nam
         if re.search(r"他|她|你|接着|继续|追问|那么|那", raw)
         else None
     )
+
+
+def npc_addressed_spans(raw, candidates, members):
+    """Resolve an explicit NPC opening before a named teammate's separate turn."""
+    from app.preparation.action_authority import addressed_spans
+
+    member_spans = addressed_spans(raw, members)
+    end = min((start for _, start, _ in member_spans), default=len(raw))
+    if speaker_action(raw[:end]):
+        return []  # A real first-person operation is not part of an NPC salutation.
+    npc = dialogue_target(raw[:end], candidates, member_names=members.values())
+    return [(npc["id"], 0, end)] if npc and end else []
 
 
 def repair_dialogue_focus(plan, raw, candidates, previous=None, *, member_names=()):
@@ -356,6 +405,7 @@ async def prepare_dialogue(runtime, state, run_id):
             {**members, **{n["id"]: n["title"] for n in candidates}},
             facts.actor_member_id,
             npc_ids={n["id"] for n in candidates},
+            explicit_spans=npc_addressed_spans(facts.raw_text, candidates, members),
         )
         requests = plan.focus.requests if plan.focus else []
         if requests:
@@ -482,18 +532,21 @@ async def prepare_dialogue(runtime, state, run_id):
     await service.mutate(state["room_id"], operation)
 
 
-def current_item_statements(text):
+def current_item_statements(text, sources=()):
     """Inventory checks apply to present NPC claims, not sourced past testimony.
 
     This view is used only for published speech. Action authorization still
     receives the untouched statement and requires actual held instances.
     """
-    clauses = re.split(r"[，。；！？,;!?\n]", text)
+    clauses = re.split(r"[，。；！？,;!?\n]|但是|不过|然而|可是|但", text)
     return "，".join(
         clause for clause in clauses
         if not (
-            re.match(r"\s*(?:我)?(?:当时|那时|逃跑时|之前|以前|原先|曾经|过去)", clause)
-            and not re.search(r"现在|此刻|这就|接着|然后|仍然|还在", clause)
+            (
+                re.match(r"\s*(?:我)?(?:当时|那时|逃跑时|之前|以前|原先|曾经|过去|刚才)", clause)
+                or sources and re.search(r"曾|原先|以前|逃跑时|掉在|掉落|落在|背带断", clause)
+            )
+            and not re.search(r"现在|此刻|这就|接着|然后|仍然|还在|仍在|用.+(?:开|敲|照)", clause)
         )
     )
 

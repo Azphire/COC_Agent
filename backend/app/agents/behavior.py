@@ -83,6 +83,7 @@ class TeammateBehaviorPolicy:
         information_request=False,
         requested_targets=(),
         named_people=None,
+        public_accounts=(),
     ):
         if information_request and decision.mode == "pass":
             return BehaviorRejection(accepted=False, reason="question_requires_answer_not_action")
@@ -94,6 +95,35 @@ class TeammateBehaviorPolicy:
         if decision.related_player_action_seq != action_seq:
             return BehaviorRejection(accepted=False, reason="unrelated_player_action")
         speech, action = decision.speech_text or "", decision.action_text or ""
+        # Quoting a discovered inscription is a factual claim, not free dialogue.
+        # Use receipts/testimony, never another teammate's unverified opinion.
+        quotes = re.findall(r"[‘“「『]([^’”」』]{4,})[’”」』]", speech)
+        sources = [r["text"] for r in public_accounts
+                   if r["kind"] in {"result", "testimony"} and r["status"] == "current"]
+        sources.append(state.last_attempt_result.get("text", ""))
+        if sources and any(
+            not any(normalized(q) in normalized(s) for s in sources) for q in quotes
+        ):
+            return BehaviorRejection(accepted=False, reason="unsupported_quotation")
+        if re.search(
+            r"我(?:刚才|刚|之前|已经|先前)|(?:刚才|之前|先前)我|"
+            r"我[^，。；!?]{0,12}(?:过|了)(?!去|来)", speech,
+        ):
+            from app.preparation.action_authority import action_kinds
+
+            recalled = set(action_kinds(speech)) - {"converse"}
+            own = set().union(*(set(action_kinds(r["text"])) for r in public_accounts
+                                if r["ownership"] == "self" and r["kind"] in {"attempt", "result"}))
+            others = set().union(*(set(action_kinds(r["text"])) for r in public_accounts
+                                   if r["ownership"] == "other" and r["kind"] == "attempt"))
+            if recalled & others - own:
+                return BehaviorRejection(accepted=False, reason="borrowed_experience")
+            own_results = set().union(*(
+                set(action_kinds(r["text"])) for r in public_accounts
+                if r["ownership"] == "self" and r["kind"] == "result"
+            )) | set(state.last_attempt_result.get("operations", []))
+            if public_accounts and recalled & {"first_aid", "medicine"} - own_results:
+                return BehaviorRejection(accepted=False, reason="unconfirmed_experience")
         if (
             decision.mode in {"act", "assist"}
             and re.match(r"我(?:注意到|看到|听说|记得|觉得|认为)", action.strip())
@@ -127,7 +157,7 @@ class TeammateBehaviorPolicy:
             decision.target_id = None
             decision.related_public_entity_ids = []
             speech, action = decision.speech_text, ""
-        if decision.mode == "speak" and explicit_action_request:
+        if decision.mode == "speak":
             from app.preparation.action_authority import action_kinds
 
             promised = set(action_kinds(speech))
@@ -135,7 +165,12 @@ class TeammateBehaviorPolicy:
                 promised.add("observe")
             if (
                 re.search(r"(?:^|[，,。；;])\s*(?:好[的吧]?[,，。]?\s*)?我", speech)
-                and promised & set(requested_operations or [])
+                and (
+                    explicit_action_request and promised & set(requested_operations or [])
+                    or promised & {"first_aid", "medicine", "give", "use"}
+                    and re.search(r"我(?:现在|这就|来|先|要|准备|打算)", speech)
+                    and not re.search(r"刚才|之前|已经|先前", speech)
+                )
                 and not re.search(
                     r"不想|不愿|不懂|不能|无法|没法|没有条件|先不|如果|建议|等.+再|可以请", speech
                 )
@@ -152,7 +187,7 @@ class TeammateBehaviorPolicy:
             ):
                 return BehaviorRejection(accepted=False, reason="accepted_task_needs_attempt")
             if re.search(
-                r"(?:^|[，。；,;])\s*(?:你|他|她)(?:们)?(?:去|来|先|帮|负责|照看)", action
+                r"(?:^|[，。；,;])\s*(?:你|您|他|她)(?:们)?(?:去|来|先|帮|负责|照看)", action
             ):
                 return BehaviorRejection(accepted=False, reason="action_assigns_someone_else")
             if requested_targets:
@@ -177,7 +212,8 @@ class TeammateBehaviorPolicy:
             decision.speech_text = None
             speech = ""
         elif speech and action and bigram_jaccard(speech, action) >= self.threshold:
-            return BehaviorRejection(accepted=False, reason="speech_duplicates_action")
+            decision.speech_text = None
+            speech = ""
         if decision.mode in {"act", "assist"} and re.search(
             r"(?:已经|已|成功|终于).{0,10}(?:包扎|止血|治好|恢复|给药|喂药|拿到|找到)|"
             r"我(?:们)?(?:检查|搜索|查看|打开|找到|拿到)了.{0,30}(?:看起来|发现|里面有|藏着)|"
@@ -372,7 +408,11 @@ class TeammateBehaviorPolicy:
         )
         technical_retry = bool(
             explicit_action_request and decision.mode in {"act", "assist"}
-            and state.pending_requests and state.last_result.get("kind") == "generation_failed"
+            and state.pending_requests and (
+                state.last_result.get("kind") == "generation_failed"
+                or any(r.get("last_result_kind") == "generation_failed"
+                       for r in state.pending_requests)
+            )
         )
         if relevant_change or technical_retry:
             recent = []  # A changed world permits a new attempt through the normal KP/check gates.
@@ -425,10 +465,12 @@ class TeammateBehaviorPolicy:
             )
         return BehaviorState(
             pending_requests=state.pending_requests,
+            request_history=state.request_history,
             task_status=state.task_status,
             task_scene_id=state.task_scene_id,
             task_cycle_id=state.task_cycle_id,
             last_result=state.last_result,
+            last_attempt_result=state.last_attempt_result,
             current_short_term_goal=(safe_goal or "")
             if decision.goal_status in {"complete", "abandon", "adjust"}
             else safe_goal or state.current_short_term_goal,

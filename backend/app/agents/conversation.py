@@ -320,9 +320,9 @@ async def settle_teammate_tasks(service, session, room):
         narration_failed = (
             record and (record.document.get("narration_validation") or {}).get("valid") is False
         )
-        technical = (
+        technical = not settled and (
             cycle.status == "failed" or cycle.state.get("teammate_attempt_failed")
-            or narration_failed and not settled
+            or narration_failed
         )
         blocked = bool(
             (rejected and not observation_completed)
@@ -365,6 +365,8 @@ async def settle_teammate_tasks(service, session, room):
                 operations.update(action_kinds((plan.get("focus") or {}).get("action", "")))
             if "search" in operations:
                 operations.add("observe")
+            behavior.last_result = {**behavior.last_result, "operations": sorted(operations)}
+            behavior.last_attempt_result = dict(behavior.last_result)
             parent = await session.get(AgentCycle, cycle.state.get("related_player_cycle_id"))
             if parent:
                 source_seq = parent.state.get("triggering_event_seq")
@@ -379,7 +381,19 @@ async def settle_teammate_tasks(service, session, room):
                     remaining = set(request.get("operations", [])) - operations
                     if remaining and request.get("kind") == "delegate":
                         pending.append({**request, "operations": sorted(remaining)})
+                    else:
+                        behavior.request_history = [*behavior.request_history, {
+                            **request, "status": behavior.task_status,
+                            "result_cycle_id": cycle.id,
+                            "result_event_seqs": [e.seq for e in feedback],
+                        }][-24:]
                 behavior.pending_requests = pending
+        else:
+            behavior.pending_requests = [
+                {**r, "last_result_kind": "generation_failed"}
+                if r.get("key") in cycle.state.get("request_keys", []) else r
+                for r in behavior.pending_requests
+            ]
         if behavior.task_status == "completed":
             behavior.current_short_term_goal = ""
         row.document = behavior.model_dump(mode="json")

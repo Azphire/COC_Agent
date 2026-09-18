@@ -60,13 +60,15 @@ class PlayerIntent(DomainModel):
 class TurnRequest(DomainModel):
     """One attributed utterance; source offsets are bound by the server."""
 
-    kind: Literal["question", "delegate", "suggestion", "hypothesis"] = "question"
+    kind: Literal["question", "delegate", "suggestion", "hypothesis", "cancel"] = "question"
     addressee_id: str
     text: str = Field(default="", max_length=2000)
     source_start: int = Field(default=0, ge=0)
     source_end: int = Field(default=0, ge=0)
     target_id: str | None = None
     operations: list[str] = Field(default_factory=list, max_length=24)
+    continuity: Literal["scene", "ongoing"] = "scene"
+    replaces_prior: bool = False
 
 
 class TurnFocus(DomainModel):
@@ -276,6 +278,7 @@ class BehaviorState(DomainModel):
     last_acted_cycle: str | None = None
     consecutive_pass_count: int = Field(default=0, ge=0)
     pending_requests: list[dict] = Field(default_factory=list, max_length=12)
+    request_history: list[dict] = Field(default_factory=list, max_length=24)
     task_status: Literal[
         "idle",
         "pending",
@@ -285,10 +288,14 @@ class BehaviorState(DomainModel):
         "attempted",
         "blocked",
         "completed",
+        "cancelled",
+        "superseded",
+        "unavailable",
     ] = "idle"
     task_scene_id: str | None = None
     task_cycle_id: str | None = None
     last_result: dict = Field(default_factory=dict)
+    last_attempt_result: dict = Field(default_factory=dict)
     updated_time: datetime = Field(default_factory=utc_now)
 
 

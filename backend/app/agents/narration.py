@@ -76,6 +76,12 @@ def response_brief(plan, context, results, *, withdrawal=None):
         ),
         None,
     )
+    if npc and focus and not focus.action and all(
+        r.addressee_id == npc["id"] for r in focus.requests
+    ):
+        # A single conversation may contain several consecutive questions. A
+        # model-selected suffix must not silently discard the earlier questions.
+        question = raw
     result_ids = {
         e["payload"].get("entity_id", e["payload"].get("id"))
         for e in results["events"]

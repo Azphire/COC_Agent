@@ -36,13 +36,15 @@ def question_request(text, name=""):
     )
 
 
-def bind_requests(focus, raw, people, actor, *, npc_ids=()):
+def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
     """Keep valid model interpretations; repair only explicit ownership boundaries.
 
     Old saves/plans lack requests. The lexical compatibility path runs here once,
     never independently in scheduling, normalization or authority checks.
     """
     explicit = addressed_spans(raw, {mid: name for mid, name in people.items() if mid != actor})
+    explicit.extend(explicit_spans)
+    explicit.sort(key=lambda span: span[1])
     # A request to treat the sole present NPC can be followed by addressing
     # that patient as "him/her". Keep the original spans, not rewritten prose.
     if len(npc_ids) == 1 and any(
@@ -101,6 +103,8 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=()):
         request.operations = (
             requested_action_kinds(request.text) if request.kind == "delegate" else []
         )
+        if cancellation(request.text):
+            request.kind, request.operations = "cancel", []
         if request.kind == "delegate" and information_question(request.text):
             request.kind = "question"
         if not any(
@@ -118,7 +122,7 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=()):
         hypothetical = re.search(r"如果|假如|假设|建议|不如|要不要", text)
         delegated = bool(operations or re.search(r"照看|照顾|留意|帮忙|负责", text))
         kind = (
-            "hypothesis"
+            "cancel" if cancellation(text) else "hypothesis"
             if hypothetical and not information_question(text)
             else "question"
             if information_question(text)
@@ -170,7 +174,25 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=()):
                 operations=operations,
             )
         )
-    focus.requests = sorted(requests, key=lambda r: r.source_start)[:12]
+    expanded = []
+    for request in requests:
+        pieces = list(re.finditer(r"[^。；;！？!?]+[。；;！？!?]?", request.text))
+        replacement = next((p for p in pieces[1:]
+                            if not cancellation(p[0]) and requested_action_kinds(p[0])), None)
+        if replacement and cancellation(request.text[:replacement.start()]):
+            boundary = request.source_start + replacement.start()
+            expanded.append(request.model_copy(update={
+                "kind": "cancel", "text": request.text[:replacement.start()],
+                "source_end": boundary, "operations": [],
+            }))
+            text = request.text[replacement.start():]
+            expanded.append(request.model_copy(update={
+                "kind": "delegate", "text": text, "source_start": boundary,
+                "target_id": None, "operations": requested_action_kinds(text),
+            }))
+        else:
+            expanded.append(request)
+    focus.requests = sorted(expanded, key=lambda r: r.source_start)[:12]
     for request in focus.requests:
         targets = [
             mid
@@ -182,10 +204,12 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=()):
     return focus.requests
 
 
-def repair_attribution(plan, raw, people, actor, *, npc_ids=()):
+def repair_attribution(plan, raw, people, actor, *, npc_ids=(), explicit_spans=()):
     focus = plan.focus or TurnFocus()
     had_requests = bool(focus.requests)
-    requests = bind_requests(focus, raw, people, actor, npc_ids=npc_ids)
+    requests = bind_requests(
+        focus, raw, people, actor, npc_ids=npc_ids, explicit_spans=explicit_spans,
+    )
     if not requests:
         own = speaker_action(raw)
         if own and (had_requests or (focus.question == raw and not focus.action)):
@@ -251,5 +275,69 @@ def requests_for(plan, member_id):
     return [
         r
         for r in (plan.focus.requests if plan.focus else [])
-        if r.addressee_id == member_id and r.kind in {"question", "delegate"}
+        if r.addressee_id == member_id and r.kind in {"question", "delegate", "cancel"}
     ]
+
+
+def cancellation(text):
+    return bool(re.search(
+        r"(?:不用|不必|别|不要|停止|取消|先不).{0,8}"
+        r"(?:找|查|看|检查|照顾|照看|处理|管|做)|算了", text,
+    ))
+
+
+def reconcile_requests(behavior, requests, *, seq, scene_id, reachable_ids, name=""):
+    """Update the existing ledger before eligibility; preserve retired work for audit.
+
+    A new question replaces unanswered questions, not unrelated unfinished work.
+    A carried/reachable target and an explicit ongoing goal survive travel.
+    """
+    incoming = [{**r.model_dump(mode="json"), "key": f"{seq}:{r.source_start}",
+                 "source_event_seq": seq, "scene_id": scene_id} for r in requests]
+    active, retired = [], []
+    for old in behavior.pending_requests:
+        status = None
+        if old.get("kind") == "question" and not question_request(old["text"], name):
+            status = "superseded"
+        for new in incoming:
+            same_target = not new.get("target_id") or new.get("target_id") == old.get("target_id")
+            if new["kind"] == "cancel" and same_target:
+                status = "cancelled"
+            elif new.get("replaces_prior") or (
+                new["kind"] == old["kind"] == "question"
+                or new["kind"] == old["kind"] == "delegate" and same_target
+                and set(new.get("operations", [])) & set(old.get("operations", []))
+            ):
+                status = status or "superseded"
+        if (
+            not status and old.get("scene_id") and old["scene_id"] != scene_id
+            and old.get("continuity", "scene") != "ongoing"
+            and old.get("target_id") not in reachable_ids
+        ):
+            status = "unavailable"
+        if status:
+            retired.append({**old, "status": status, "updated_event_seq": seq})
+        else:
+            # A continuing goal survives travel but a remote physical task must
+            # wait until its target is reachable. It is not a fresh direct request.
+            available = not (
+                old.get("kind") == "delegate" and old.get("target_id")
+                and old.get("scene_id") != scene_id
+                and old["target_id"] not in reachable_ids
+            )
+            current = dict(old)
+            if available:
+                current.pop("available", None)
+            else:
+                current["available"] = False
+            active.append(current)
+    keys = {r["key"] for r in active}
+    active.extend(r for r in incoming if r["key"] not in keys)
+    behavior.pending_requests = active[-12:]
+    behavior.request_history = [*behavior.request_history, *retired][-24:]
+    if active and behavior.task_status != "proposed":
+        behavior.task_status = "pending"
+    elif retired and not active:
+        behavior.task_status = retired[-1]["status"]
+        behavior.current_short_term_goal = ""
+    return retired
