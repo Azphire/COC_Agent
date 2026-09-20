@@ -145,6 +145,9 @@ TEAMMATE_INSTRUCTION = (
     "当前请求优先，continued_requests是仍有效旧目标，只在有条件推进时考虑。取消只需回应并停止旧任务。"
     "无人点名时，可按职业能力、性格和现场危险选择一件小事或有依据的建议；无新贡献就pass。"
     "治疗、给药、取物、发现只写尝试，等KP结算；不能提前说已经包扎好、药起效或找到了东西。"
+    "result_facts是带来源的实际结果，failure失败、not_executed未执行、technical_failure技术失败；"
+    "operations只是尝试范围。按执行者、目标和操作分别判断，不用另一项成功背书。"
+    "失败后结合自己的能力、已有资源和风险选择不同办法或合理沉默；不能重试刷骰。"
 )
 
 
@@ -477,6 +480,21 @@ def generation_prompt(context, schema):
         result = dict(context)
     result = deepcopy(result)
     if schema is TeammateDecision:
+        # Current tasks and receipts get space first; strip duplicate envelopes
+        # instead of truncating actual goals or the latest failed settlement.
+        for key in ("continued_requests", "addressed_requests"):
+            if result.get(key):
+                result[key] = [{k: v for k, v in r.items() if k in {
+                    "kind", "text", "target_id", "operations", "last_result_kind",
+                    "cancelled_keys", "needs_clarification",
+                }} for r in result[key]]
+        if result.get("self_identity"):
+            result.pop("profile", None)
+        if result.get("result_facts"):
+            result["result_facts"] = [
+                {k: v for k, v in fact.items() if k not in {"cycle_id", "source_action_seq"}}
+                for fact in result["result_facts"]
+            ]
         if result.get("public_accounts"):
             result["public_accounts"] = [
                 {**r, "text": r["text"][:240]} for r in result["public_accounts"][-5:]
@@ -519,6 +537,12 @@ def generation_prompt(context, schema):
                 # A previous opinion is conversation history, not an action
                 # receipt or a current fact about the world.
                 result["behavior_state"].pop("last_result", None)
+            for key in ("last_result", "last_attempt_result"):
+                if result["behavior_state"].get(key):
+                    result["behavior_state"][key] = {
+                        k: v for k, v in result["behavior_state"][key].items()
+                        if k in {"kind", "text", "reason", "event_seqs"}
+                    }
         # The memory gate runs before self_identity is appended. Compact at
         # both gates; otherwise an irrelevant full skill list can prevent the
         # named teammate from ever reaching the model.
@@ -573,12 +597,15 @@ def generation_prompt(context, schema):
         ]
         if result.get("addressed_requests"):
             result["addressed_requests"] = [
-                {k: v for k, v in r.items() if k in {"kind", "text", "scene_id"}}
+                {k: v for k, v in r.items() if k in {
+                    "kind", "text", "target_id", "operations", "cancelled_keys",
+                    "needs_clarification",
+                }}
                 for r in result["addressed_requests"]
             ]
             result.pop("addressed_question", None)
             result["current_task"] = {
-                "requests": result["addressed_requests"],
+                "goal": result.get("behavior_state", {}).get("current_short_term_goal", ""),
                 "instruction": (
                     "只回应这些当前请求；旧台词不作本轮答复。接受委托时发布本人具体尝试。"
                 ),
@@ -587,7 +614,6 @@ def generation_prompt(context, schema):
             # promise is not an answer candidate for a new request.
             result.pop("recent_outputs", None)
             result.pop("recent_output_summary", None)
-            result.get("behavior_state", {}).pop("current_short_term_goal", None)
             result["events"] = [e for e in result.get("events", []) if e.get("type") not in {
                 "agent.spoke", "agent.action_proposed"
             }]
@@ -612,6 +638,10 @@ def generation_prompt(context, schema):
             for key in ("cycle_id", "category", "client_request_id"):
                 trigger.get("payload", {}).pop(key, None)
         completed = result.get("public_state", {}).get("completed_interactions", [])
+        if result.get("result_facts"):
+            result.pop("recent_action_results", None)
+            result["public_accounts"] = [r for r in result.get("public_accounts", [])
+                                         if r.get("kind") != "result"]
         for entity in result.get("public_entities", []):
             # Public eligibility and provenance stay in the server ledger.
             # Keep the content, identity and current/historical scope; the same
@@ -650,6 +680,8 @@ def generation_prompt(context, schema):
     brief = result.get("response_brief", {})
     if brief.get("completed_results") == result.get("public_tool_results"):
         brief.pop("completed_results", None)
+    if brief.get("result_facts") == result.get("public_tool_results", {}).get("result_facts"):
+        brief.pop("result_facts", None)
     if schema is KeeperNarration and not context.get("readonly_recall"):
         # The same IDs and statements already occur in brief.allowed_facts.
         # Keep the complete claim/provenance objects on the run for validation.
@@ -1086,6 +1118,7 @@ class ActionRuntimeMixin:
                     if slot
                     else None,
                     "personality": profile.document.get("personality", ""),
+                    "goals": profile.document.get("goals", ""),
                     "abilities": dict(
                         sorted(
                             (
@@ -1118,6 +1151,12 @@ class ActionRuntimeMixin:
                     {"id": i["id"], "aliases": i["names"]}
                     for i in public_inventory.get("known_items", [])
                 ]],
+            )
+            from app.agents.results import relevant_results, result_facts
+
+            additions["result_facts"] = relevant_results(
+                result_facts(active_story), actor_id=binding.member_id,
+                target_id=behavior.last_target_id, text=trigger.payload["text"],
             )
             requests = [
                 r for r in behavior.pending_requests if r.get("source_event_seq") == trigger.seq
@@ -1206,13 +1245,22 @@ class ActionRuntimeMixin:
                         requested_targets=[r["target_id"] for r in requests if r.get("target_id")],
                         named_people=named_people,
                         public_accounts=additions["public_accounts"],
+                        result_facts=additions["result_facts"],
                     )
                     rejections.append(rejected)
                     if rejected.accepted:
                         accepted = candidate
                         break
                     additions["behavior_rejection"] = rejected.model_dump()
-                    if rejected.reason == "question_requires_answer_not_action":
+                    if rejected.reason.startswith("unconfirmed_result:"):
+                        additions["behavior_repair"] = (
+                            "上一稿提前声称了未确认的结果。按result_facts中的执行者、目标、operation、"
+                            "status和effect修正这部分：failure要承认尝试失败，not_executed没有执行，"
+                            "technical_failure没有得到结果；不存在成功回执就不能说已经成功或有所改善。"
+                            "直接回答当前问题，保留其余有效判断和建议。若mode为act/assist，"
+                            "action_text只写当前尝试，其结果留给后续KP结算。"
+                        )
+                    elif rejected.reason == "question_requires_answer_not_action":
                         additions["behavior_repair"] = (
                             "这是向你询问信息或意见，只用speak实际回答；不要操作或申请检定。"
                             "说明判断依据；不清楚时说清具体未知之处，可以给出下一步建议。"
@@ -1331,23 +1379,40 @@ class ActionRuntimeMixin:
                     related_player_action_seq=trigger.seq,
                     confidence=1,
                 )
+            result_reply_sources = []
+            if accepted.mode == "pass" and eligibility == "direct_conversation" \
+                    and requests and not requested_action:
+                from app.agents.results import result_reply
+
+                reply, result_reply_sources = result_reply(
+                    additions["result_facts"], request_text, binding.member_id,
+                )
+                if reply:
+                    accepted.mode, accepted.speech_text = "speak", reply
+                    accepted.reason_summary = "依据已确认结果回应；生成失败记录保留"
             from app.preparation.inventory import inventory_question
 
             if (
                 accepted.mode == "pass"
                 and eligibility == "direct_conversation"
-                and any(r.reason == "item_not_held" for r in rejections)
                 and (
-                    inventory_question(request_text, run.context.get("inventory_state", {}))
-                    or bool(set(requested_operations) & {"give", "take", "use", "drop"})
+                    inventory_question(request_text, public_inventory)
+                    or any(r.reason == "item_not_held" for r in rejections)
+                    and bool(set(requested_operations) & {"give", "take", "use", "drop"})
                 )
             ):
+                import re
+
                 from app.preparation.inventory import inventory_reply
 
                 accepted.mode = "speak"
-                accepted.speech_text = inventory_reply(
-                    run.context.get("inventory_state", {}), binding.member_id
-                )
+                owner = trigger.actor_member_id if re.search(
+                    r"在我(?:的)?(?:手里|手中|身上)|我(?:现在|目前|还)?(?:有|有没有|拿着|持有)",
+                    request_text,
+                ) else binding.member_id
+                accepted.speech_text = inventory_reply(public_inventory, owner)
+                if owner != binding.member_id:
+                    accepted.speech_text = accepted.speech_text.replace("我", "你", 1)
                 accepted.reason_summary = "按实际物品状态回答，未发布无权执行的行动"
             # Goals are intentions from a public-only character prompt, not facts.
             safe_goal = accepted.short_term_goal or (
@@ -1426,6 +1491,8 @@ class ActionRuntimeMixin:
                             "target_id": chosen.target_id,
                             "item_instance_ids": chosen.item_instance_ids,
                             "fact_ids": chosen.fact_ids,
+                            **({"result_source_event_seqs": result_reply_sources}
+                               if result_reply_sources else {}),
                         },
                         request_id=cycle.id + ":" + binding.member_id,
                     )
@@ -2186,6 +2253,15 @@ class ActionRuntimeMixin:
                             **run.context,
                             "fact_evidence": run.context["fact_evidence"][:-1],
                         }
+                # Preserve current requests, inventory, scene and the newest
+                # relevant receipts. Old attributed dialogue comes first to go.
+                while len(run.context.get("public_accounts", [])) > 1 and context_size() > budget:
+                    run.context["public_accounts"] = run.context["public_accounts"][1:]
+                while len(run.context.get("result_facts", [])) > 3 and context_size() > budget:
+                    earliest = run.context["result_facts"][0]
+                    if earliest.get("source_event_seq", 0) >= cycle.state["triggering_event_seq"]:
+                        break
+                    run.context["result_facts"] = run.context["result_facts"][1:]
             if schema is KeeperNarration:
                 brief = run.context.get("response_brief", {})
                 for key in ("recent_dialogue", "incidental_memories"):
@@ -2852,6 +2928,10 @@ class ActionRuntimeMixin:
                 if check and check.status != "resolved":
                     return state
             approved = list(doc.validation.approved_actions)
+            from app.agents.conversation import cancelled_request
+
+            if await cancelled_request(session, cycle):
+                return state
             if "state" in phases and check and not check.document["result"]["passed"]:
                 approved = [a for a in approved if a.tool.name == "apply_module_action"]
             run_id = record.run_id
@@ -3038,6 +3118,7 @@ class ActionRuntimeMixin:
                 "clue.revealed",
                 "scene.updated",
                 "review.status",
+                "combat.resolved",
             }
         ]
         selected = [
@@ -3079,7 +3160,17 @@ class ActionRuntimeMixin:
             }
             for e in selected
         ]
+        # Retain the compact actual settlement (including medical failure), not
+        # just descriptive text. The same projection is used for later speech.
+        by_seq = {e["seq"]: e for e in events}
         for event in selected:
+            payload = by_seq[event["seq"]]["payload"]
+            if event["type"] == "scene.updated":
+                event["payload"]["actor_id"] = cycle.state["triggering_member_id"]
+            event["payload"].update({k: payload[k] for k in (
+                "actor_id", "target_id", "target_name", "operation", "operations", "summary",
+                "rolls", "treatment", "passed", "source_event_seq",
+            ) if k in payload})
             if event["type"] == "clue.revealed":
                 payload = event["payload"]
                 payload["entity_id"] = payload.pop("clue_id")
@@ -3095,7 +3186,8 @@ class ActionRuntimeMixin:
             (record.document.get("validation") or {}).get("rejected_actions", []) if record else []
         )
         plan = AdjudicationRecord.model_validate(record.document).plan
-        public_ids = {e["id"] for e in await self.service.entities.public(session, room.id)}
+        public_entities = await self.service.entities.public(session, room.id)
+        public_ids = {e["id"] for e in public_entities}
         target = plan.focus.action_target_id if plan.focus else plan.parsed_intent.target_id
         observation = (
             plan.parsed_intent.type in {"observe", "investigate"}
@@ -3111,8 +3203,43 @@ class ActionRuntimeMixin:
                 and set(plan.proposed_reveal_entity_ids) <= public_ids
             )
         ]
+        from app.agents.results import relevant_results, result_facts
+        from app.preparation.action_authority import action_kinds
+
+        current = result_facts(selected)
+        for fact in current:
+            if fact["operation"] == "move":
+                fact["target_id"] = fact.get("target_id") or target
+        operations = plan.action_authority.get("kinds", []) or action_kinds(
+            plan.focus.action if plan.focus else ""
+        )
+        if plan.parsed_intent.type == "move":
+            operations = [*operations, "move"]
+        for operation in operations:
+            if operation in {"converse", "observe", "search", "rest"} or any(
+                f["operation"] == operation for f in current
+            ):
+                continue
+            current.append({
+                "actor_id": cycle.state["triggering_member_id"], "target_id": target,
+                "target_name": plan.action_authority.get("route", {}).get("target_public_title")
+                if operation == "move" else next(
+                    (e.get("title") for e in public_entities if e["id"] == target), None,
+                ),
+                "operation": operation,
+                "status": "technical_failure" if any(r.get("ok") is False
+                                                       for r in latest_results.values())
+                else "not_executed",
+                "effect": next((r.get("reason", "") for r in relevant_rejected), "")
+                or plan.action_authority.get("rejection_message") or "本次操作没有实际结算。",
+                "source_event_seq": cycle.state["triggering_event_seq"], "cycle_id": cycle.id,
+            })
         return {
             "events": selected,
+            "current_result_facts": current,
+            "result_facts": relevant_results(
+                [*result_facts(events), *current], target_id=target, operations=operations,
+            ),
             # Rejected proposals never ran, so they are absent from failed_tools.
             # Their absence must not license the narrator to supply a discovery.
             "blocked_discovery": any(r.get("tool") == "reveal_entity" for r in relevant_rejected),
@@ -3219,10 +3346,12 @@ class ActionRuntimeMixin:
             bind_item_prose,
             inventory_context,
             validate_item_locations,
+            validate_resource_claims,
         )
 
+        inventory = await inventory_context(self.service, session, room, text)
+        validate_resource_claims(text, inventory)
         if not run.context.get("readonly_recall"):
-            inventory = await inventory_context(self.service, session, room, text)
             validate_item_locations(output.public_narration, inventory)
             bind_item_prose(
                 "\n".join([output.public_narration, *output.incidental_details]),
@@ -3611,6 +3740,12 @@ class ActionRuntimeMixin:
 
             results = await self.public_results(session, room, cycle)
             fallback_reason = run.safe_error if "validated_partial" in run.context else None
+            if results["current_result_facts"]:
+                self.rooms.append(
+                    session, room, "action.result", cycle.state["triggering_member_id"],
+                    {"cycle_id": cycle.id, "facts": results["current_result_facts"]},
+                    request_id=cycle.id + ":result_facts",
+                )
 
             async def fallback_text():
                 if run.context.get("readonly_recall"):

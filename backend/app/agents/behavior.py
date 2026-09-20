@@ -84,6 +84,7 @@ class TeammateBehaviorPolicy:
         requested_targets=(),
         named_people=None,
         public_accounts=(),
+        result_facts=(),
     ):
         if information_request and decision.mode == "pass":
             return BehaviorRejection(accepted=False, reason="question_requires_answer_not_action")
@@ -95,6 +96,51 @@ class TeammateBehaviorPolicy:
         if decision.related_player_action_seq != action_seq:
             return BehaviorRejection(accepted=False, reason="unrelated_player_action")
         speech, action = decision.speech_text or "", decision.action_text or ""
+        from app.agents.results import result_error
+        items = (inventory_state or {}).get("known_items", [])
+
+        # A public scene may already name the injured person without revealing
+        # their full NPC profile. Identity/presence is enough to attempt aid;
+        # the combat executor still validates the actual participant and result.
+        public_ids = public_ids | {
+            p["id"] for p in (inventory_state or {}).get("other_actors", [])
+            if p.get("fact_scope") == "current_scene"
+        }
+        if decision.mode in {"act", "assist"}:
+            if actor_name and re.search(re.escape(actor_name) + r"[^，。；;]*", speech):
+                # Optional third-person narration is not the character talking
+                # to themself. Preserve the separate first-person attempt.
+                if re.match(r"我", action) and re.match(
+                    re.escape(actor_name) + r"(?:过去|正在|开始|在这里|去|检查|观察)", speech,
+                ):
+                    decision.speech_text = speech = ""
+            # Preserve a valid attempt when its tail prematurely supplies a
+            # discovery. The ensuing KP subcycle supplies the actual result.
+            attempt = re.split(r"[，,]\s*(?:并)?(?:发现|看到了|查明了)", action, maxsplit=1)[0]
+            if attempt != action:
+                decision.action_text = action = attempt.rstrip("，,") + "。"
+            # Keep an authorized attempt while removing unsupported outcome
+            # clauses, using the same receipt check as final speech/narration.
+            pieces = re.split(r"([，,。；;])", action)
+            kept = ""
+            for index in range(0, len(pieces), 2):
+                clause = pieces[index]
+                if not result_error(clause, result_facts, actor_id=actor_id, names=named_people,
+                                    items=items):
+                    kept += clause + (pieces[index + 1] if index + 1 < len(pieces) else "")
+            if kept and kept != action:
+                decision.action_text = action = kept.rstrip("，,。；;") + "。"
+            if action and result_error(speech, result_facts, actor_id=actor_id, names=named_people,
+                                       items=items):
+                # The actual attempt remains useful even if its accompanying
+                # success announcement has no receipt. Its KP subcycle answers it.
+                decision.speech_text = speech = ""
+        error = result_error(
+            speech + "\n" + action, result_facts, actor_id=actor_id, names=named_people,
+            items=items,
+        )
+        if error:
+            return BehaviorRejection(accepted=False, reason=error)
         # Quoting a discovered inscription is a factual claim, not free dialogue.
         # Use receipts/testimony, never another teammate's unverified opinion.
         quotes = re.findall(r"[‘“「『]([^’”」』]{4,})[’”」』]", speech)
@@ -121,7 +167,8 @@ class TeammateBehaviorPolicy:
             own_results = set().union(*(
                 set(action_kinds(r["text"])) for r in public_accounts
                 if r["ownership"] == "self" and r["kind"] == "result"
-            )) | set(state.last_attempt_result.get("operations", []))
+            )) | {f["operation"] for f in result_facts
+                  if f.get("actor_id") == actor_id and f.get("status") == "success"}
             if public_accounts and recalled & {"first_aid", "medicine"} - own_results:
                 return BehaviorRejection(accepted=False, reason="unconfirmed_experience")
         if (
@@ -175,7 +222,26 @@ class TeammateBehaviorPolicy:
                     r"不想|不愿|不懂|不能|无法|没法|没有条件|先不|如果|建议|等.+再|可以请", speech
                 )
             ):
-                return BehaviorRejection(accepted=False, reason="accepted_task_needs_attempt")
+                from app.preparation.action_authority import speaker_action
+
+                immediate = speaker_action(speech)
+                if immediate and not information_request and re.match(
+                    r"我(?:现在|马上|立刻|这就|先|来|就|准备)?(?:过去|上前)?"
+                    r"(?:给|为|替|帮|用|开始|进行|做|急救|包扎|按|压|检查|查看|看看|搜索|拿|取|掏|交)",
+                    immediate,
+                ):
+                    # The character already chose this immediate attempt; a
+                    # wrong response-mode label must not swallow it. It goes
+                    # through the normal queued cycle, never straight to success.
+                    decision.mode = "act"
+                    decision.action_text = action = immediate
+                    decision.speech_text = speech = ""
+                    decision.action_type = "interact"
+                    decision.goal_status = "continue"
+                    if not decision.target_id and len(set(requested_targets)) == 1:
+                        decision.target_id = requested_targets[0]
+                else:
+                    return BehaviorRejection(accepted=False, reason="accepted_task_needs_attempt")
         if decision.mode in {"act", "assist"}:
             from app.preparation.action_authority import action_kinds
 
@@ -348,6 +414,14 @@ class TeammateBehaviorPolicy:
             and not inventory_question(requested_text or player_text, inventory_state or {})
         ):
             return BehaviorRejection(accepted=False, reason="question_requires_answer_not_action")
+        if inventory_state is not None:
+            from app.preparation.inventory import validate_resource_claims
+            from app.rooms.service import RoomError
+
+            try:
+                validate_resource_claims(output_text(decision), inventory_state)
+            except RoomError:
+                return BehaviorRejection(accepted=False, reason="item_not_held")
         if inventory_state is not None and not (
             decision.mode == "speak" and readonly_recall(player_text)
         ):

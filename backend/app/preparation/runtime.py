@@ -631,6 +631,39 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             cycle_id=cycle.id if cycle else None,
             host_override=True,
         )
+    from app.preparation.action_authority import required_kinds
+
+    operated_ids = set(rule.acquire_item_ids)
+    if rule.inventory_operation or rule.use_effect:
+        operated_ids.update([rule.item_id] if rule.item_id else [])
+    if "light" in required_kinds(rule):
+        operated_ids.update(rule.required_item_ids)
+    if rule.encounter_operation == "sound_once":
+        operated_ids.update([rule.sound_item_id or args.used_item_id]
+                            if rule.sound_item_id or args.used_item_id else [])
+    operated_items = []
+    for eid in sorted(operated_ids):
+        item = await agents.entities.entity(session, room.id, eid)
+        operated_items.append({"id": eid, "names": [item.snapshot["title"],
+                                                   *item.snapshot.get("aliases", [])]})
+    if rule.encounter_operation == "sound_once" and not operated_items:
+        import re
+
+        authority = (receipt.get("kp_ruling") or {}).get("action_authority", {})
+        thrown = "".join(f["text"] for f in authority.get("actual_fragments", [])
+                         if "throw" in f.get("operations", []))
+        worn = re.search(r"鞋|衣|帽|\b(?:shoe|coat|hat)\b", thrown, re.I)
+        if worn:
+            operated_items.append({"id": "worn:" + worn[0], "names": [worn[0]]})
+    receipt["operated_items"] = operated_items
+    if rule.encounter_operation == "sound_once" and operated_items:
+        receipt["text"] = "实际投出的物品：" + "、".join(
+            item["names"][0] for item in operated_items
+        ) + "。" + receipt["text"]
+    # The receipt stored above is a Pydantic state value; persist these public
+    # operand facts too, so saving/restoring does not lose the actual item.
+    state.module_runtime.receipts[key] = receipt
+    store_state(room, state)
     agents.rooms.append(
         session,
         room,
@@ -638,6 +671,13 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         actor,
         {
             "text": receipt["text"],
+            "actor_id": actor,
+            "target_id": args.entity_id,
+            "target_name": entity.snapshot.get("title", ""),
+            "operated_items": operated_items,
+            "operations": (["search"] if rule.inventory_operation in {"initial", "recover"}
+                           else sorted(required_kinds(rule))),
+            "passed": passed and (rule.check_passed if rule.check_name else True),
             "source_event_seq": seq,
             "cycle_id": cycle.id if cycle else None,
             **(

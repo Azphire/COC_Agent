@@ -245,7 +245,8 @@ def named_local_interaction_ids(facts, action=None):
             # descriptive words. Only public, local, operation-compatible
             # candidates participate; the caller still requires uniqueness.
             or eid in facts.revealed_entity_ids
-            and bool(set(tokens(entity.get("title", ""))) & set(tokens(action)))
+            and bool(set(tokens(entity.get("title", "") + " "
+                                + entity.get("public_summary", ""))) & set(tokens(action)))
             or local_stealth
             and entity.get("type") == "location"
             and any(

@@ -93,8 +93,11 @@ class CombatService:
                     if re.match(r"\s*我(?:们)?", clause)
                     and not re.search(r"我(?:请|让|叫|问|说)|如果|假如|假设", clause)
                 )
+        from app.preparation.action_authority import action_kinds
+
         return bool(
             room.session_state.get("combat", {}).get("active")
+            or set(action_kinds(text)) & {"first_aid", "medicine"}
             or re.search(
                 r"攻击|挥拳|出拳|一拳|开(?:一|1)?枪|开火|射击|拔枪|砍向|刺向|打向|掏枪|战斗|"
                 r"急救|包扎|止血|处理(?:一下)?(?:[^，。；！？,;.!?]{1,10}的)?伤口|医学治疗",

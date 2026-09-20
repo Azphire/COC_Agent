@@ -247,6 +247,7 @@ async def inventory_context(agents, session, room, question=""):
         "other_actors": [
             {
                 "id": row.source_entity_id,
+                "fact_scope": "current_scene" if name else "historical",
                 "names": [
                     row.snapshot["title"],
                     *row.snapshot.get("aliases", []),
@@ -380,14 +381,16 @@ def inventory_question(text, view):
         r"(?:我|你|他|她|谁)(?:们)?(?:现在|目前|还)?"
         r"(?:有|有没有|是否有|拿着|带着|持有|保管)(?:这|那|一|几|个|把|盏|支|只|些)*"
     )
+    names = {name for item in view.get("known_items", []) for name in item.get("names", [])}
+    names.update(RESOURCE_TERMS.findall(text))
     return any(
         re.search(owner + re.escape(name), text)
         or re.search(
-            re.escape(name) + r"(?:现在|目前|还)?(?:在谁(?:的)?(?:手里|手中|身上)|由谁保管)",
+            re.escape(name)
+            + r"(?:现在|目前|还)?(?:在(?:谁|我|你|他|她)(?:的)?(?:手里|手中|身上)|由谁保管)",
             text,
         )
-        for item in view.get("known_items", [])
-        for name in item.get("names", [])
+        for name in names
         if name
     )
 
@@ -578,7 +581,31 @@ def validate_item_locations(text, view):
                 require(False, "该物品已有实际持有人，不能叙述为仍遗落在环境中", 422)
 
 
+RESOURCE_TERMS = re.compile(r"工具箱|工具包|急救包|药品|绷带|撬棍|绳索")
+
+
+def validate_resource_claims(text, view, *, actual=False):
+    """Important equipment must exist before any role describes it as present.
+
+    Questions, plans to obtain equipment and explicit absence remain ordinary
+    speech. Current existence is checked even in a follow-up/recall turn.
+    """
+    for clause in re.findall(r"[^，。；！？,;!?\n]+[，。；！？,;!?\n]?", text):
+        for resource in RESOURCE_TERMS.finditer(clause):
+            prefix, suffix = clause[:resource.start()], clause[resource.end():]
+            if not actual and (re.search(
+                r"[？?]|如果|假如|要是|建议|希望|需要|打算|准备|寻找|找找", clause) \
+                    or re.search(r"没|未|不知|不清楚|不确定|找", prefix) \
+                    or re.search(r"不在|没在|不存在|没有记录|未确认|尚未找到", suffix)):
+                continue
+            require(any(resource[0] in name for item in view.get("known_items", [])
+                        for name in item.get("names", [item.get("title", "")]))
+                    or any(resource[0] in h.get("title", "") for h in view.get("holders", [])),
+                    f"还没有确认{resource[0]}在场，不能把它当成现有物品。", 422)
+
+
 def bind_item_prose(text, view, actor):
+    validate_resource_claims(text, view)
     for clause in re.split(r"[，。；！？,;!?\n]", text):
         if re.search(r"没有|不用|不要|未持有|如果|假如|能否|是否|有没有", clause):
             continue
@@ -588,8 +615,18 @@ def bind_item_prose(text, view, actor):
             clause,
         )
         generic = re.search(
-            r"(?:用|使用|借助|拿着|拿出|举着).{0,8}(?:工具|道具|器具|照明设备)", clause
+            r"(?:用|使用|借助|拿着|拿出|举着).{0,12}"
+            r"(?:工具|道具|器具|照明设备|急救包|药品|绷带|撬棍|绳索)", clause
         )
+        claimed_resource = re.search(
+            r"(?:我(?:们)?|身上|手里|包里)(?:还|也)?(?:有|带着|带了|备有|拿着)"
+            r"[^，。；！？,;!?]{0,12}(?:工具箱|工具包|急救包|药品|绷带|手电|撬棍|绳索|钥匙)",
+            clause,
+        )
+        if claimed_resource:
+            require(any(h.get("title") and h["title"] in clause
+                        and h.get("holder_id") == actor for h in view.get("holders", [])),
+                    "声称可用的物品必须有实际持有记录", 422)
         if instrument and re.fullmatch(
             r"(?:我|自己|的|一只|双)?(?:手|脚|拳头|肩膀|身体|肘部|衣服|衣袖|鞋|力)(?:的|布条)?",
             instrument[1],

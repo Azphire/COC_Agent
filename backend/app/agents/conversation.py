@@ -170,6 +170,22 @@ async def enqueue_teammate(service, session, room, parent, event, binding, reque
     return cycle_id
 
 
+async def cancelled_request(session, cycle):
+    """A queued attempt cannot outlive cancellation of its originating tasks."""
+    from app.persistence.adjudication_models import AgentBehaviorRecord
+
+    keys = set(cycle.state.get("request_keys", []))
+    if not keys:
+        return False
+    row = await session.scalar(select(AgentBehaviorRecord).where(
+        AgentBehaviorRecord.room_id == cycle.room_id,
+        AgentBehaviorRecord.member_id == cycle.state["triggering_member_id"],
+    ))
+    retired = {r["key"] for r in (row.document if row else {}).get("request_history", [])
+               if r.get("status") in {"cancelled", "superseded"}}
+    return keys <= retired
+
+
 async def activate_next(service, session, room):
     await settle_teammate_tasks(service, session, room)
     active = await service.cycle(session, room.id, active=True)
@@ -182,6 +198,12 @@ async def activate_next(service, session, room):
             .order_by(AgentCycle.created_at, AgentCycle.id)
         )
     )
+    for child in list(queued):
+        if await cancelled_request(session, child):
+            child.status = "cancelled"
+            child.state = {**child.state, "status": "cancelled", "cancelled_request": True}
+            service.cycle_event(session, room, child)
+            queued.remove(child)
     if active and active.status not in {"waiting_for_roll", "waiting_for_review"}:
         return active
     if active:
@@ -305,6 +327,13 @@ async def settle_teammate_tasks(service, session, room):
             if record and service.runtime
             else {}
         )
+        if not record:
+            from app.agents.results import result_facts
+
+            public_results["current_result_facts"] = result_facts([
+                {"seq": e.seq, "type": e.type, "payload": e.payload,
+                 "actor_member_id": e.actor_member_id} for e in events
+            ])
         observation_completed = (
             public_results.get("observation_completed")
             and not public_results.get("blocked_discovery")
@@ -343,6 +372,7 @@ async def settle_teammate_tasks(service, session, room):
             else "attempted"
         )
         behavior.last_result = {
+            "result_facts": public_results.get("current_result_facts", []),
             "cycle_id": cycle.id,
             "kind": behavior.task_status,
             "event_seqs": [e.seq for e in feedback],

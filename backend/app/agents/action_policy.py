@@ -80,7 +80,7 @@ def explicit_movement(text: str) -> bool:
     ):
         return True
     movement = re.search(
-        r"进入|走进|走入|迈进|迈入|踏入|前往|走向|走到|离开|远离|返回|回到|退回|穿过|过去|进去|出发|赶往|回去|移步|抵达|进到|进门|出门|跨进|跨入|穿门|冲进|冲出|跑进|跑出|跳|(?:朝|向|往).{1,24}(?:走|跑|冲)|\b(?:move|enter|return|leave|walk)\b",
+        r"进入|走进|走入|迈进|迈入|踏入|前往|走向|走到|来到|到达|离开|远离|返回|回到|退回|穿过|过去|进去|出发|赶往|回去|移步|抵达|进到|进门|出门|跨进|跨入|穿门|冲进|冲出|跑进|跑出|跳|(?:朝|向|往).{1,24}(?:走|跑|冲)|\b(?:move|enter|return|leave|walk)\b",
         compact,
     )
     if not movement:
@@ -220,6 +220,17 @@ def local_scene_movement(text, targets, transitions=()):
         r"(?:进入|走进|前往|返回|回到)([^，。！？；,.!?;\n]+)",
         text,
     )
+    # A named room behind a local door is a subspace of this scene unless an
+    # approved exit actually names it. Derive the name from local entities,
+    # never from a guessed neighbouring node or the number of available exits.
+    local_places = {
+        re.sub(r"(?:的)?(?:门|入口|出口)$", "", name)
+        for entity in targets if entity.get("type") == "location"
+        for name in [entity.get("title", ""), *entity.get("aliases", [])]
+        if re.search(r"门|入口|出口", name)
+    } - {""}
+    if destinations and all(d.strip() in local_places for d in destinations):
+        return True
     if not re.search(r"潜行|悄悄", text) and any(
         not any(
             e.get("title") and e["title"] in destination
@@ -718,6 +729,18 @@ class ActionPolicyValidator:
                             code, reason = "precondition_failed", "缺少批准 SAN 配置，请主机裁定"
                     elif tool.name == "request_skill_check":
                         proposal = plan.proposed_check or CheckProposal(**data)
+                        from app.preparation.action_authority import check_operation_error
+
+                        actual = (plan.action_authority or {}).get("action") or (
+                            plan.focus.action if plan.focus else facts.raw_text
+                        )
+                        if proposal.clue_id and (error := check_operation_error(
+                            proposal.name, actual
+                        )):
+                            result.rejected_actions.append(ActionRejection(
+                                index=i, tool=tool.name, code="precondition_failed", reason=error,
+                            ))
+                            continue
                         decision = CheckPolicyEvaluator().evaluate(proposal, intent, facts)
                         result.check_decisions.append(decision)
                         if not decision.allowed:

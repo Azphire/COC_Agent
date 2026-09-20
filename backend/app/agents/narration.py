@@ -193,6 +193,7 @@ def response_brief(plan, context, results, *, withdrawal=None):
             "continuing",
         ),
         "completed_results": results,
+        "result_facts": results.get("result_facts", []),
         "ordinary_observation": bool(
             (
                 results.get("observation_completed")
@@ -286,6 +287,25 @@ class NarrationValidator:
             for e in results["events"]
             if e["type"] == "check.resolved"
         }
+        from app.agents.results import result_error
+
+        items = (inventory_state or {}).get("known_items", [])
+        error = result_error(text, results.get("result_facts", []), items=items) or result_error(
+            output.public_narration, results.get("result_facts", []), narration=True,
+            items=items,
+        )
+        require(not error, "叙事声称了未获实际结算支持的效果：" + (error or ""), 422)
+        negative = [f for f in results.get("current_result_facts", [])
+                    if f.get("status") in {"failure", "not_executed", "technical_failure"}]
+        if negative and output.public_narration:
+            require(
+                bool(re.search(r"失败|未|没|无法|不能|尚|不成功|不奏效", output.public_narration)),
+                "本轮存在未成功的实际结果，反馈必须说明而不能省略："
+                + "；".join(f.get("effect", "") for f in negative), 422,
+            )
+        scene_text = str((brief or {}).get("current_scene", {}))
+        if not re.search(r"白天|清晨|日光|阳光|晴天|午后", scene_text):
+            require(not re.search(r"阳光|日光|晨光", text), "叙事与当前夜间场景冲突", 422)
         transitions = {str(e["seq"]) for e in results["events"] if e["type"] == "scene.updated"}
         require(
             not output.check_result_reference or output.check_result_reference in checks,
@@ -304,10 +324,8 @@ class NarrationValidator:
             or (brief or {}).get("movement_requested")
         ):
             require(
-                not re.search(
-                    r"(?:已经|已|成功)(?:到达|抵达|进入|穿过)|你(?:们)?(?:来到了|进入了|抵达了)",
-                    text,
-                ),
+                not result_error(text, [{"operation": "move", "status": "not_executed",
+                                         "source_event_seq": 0}], narration=True),
                 "失败的转场不能叙述为已经到达",
                 422,
             )
@@ -453,6 +471,13 @@ def fallback_narration(
         for e in results["events"]
         if e["type"] == "module.interaction" and e["payload"].get("text")
     ]
+    medical = [e["payload"].get("summary", "") for e in results["events"]
+               if e["type"] == "combat.resolved"]
+    unsettled = [f for f in results.get("current_result_facts", [])
+                 if f["status"] in {"not_executed", "technical_failure", "failure"}]
+    if medical or unsettled:
+        effects = list(dict.fromkeys([*medical, *(f["effect"] for f in unsettled)]))
+        return "\n".join(filter(None, [*interactions, *effects]))
     if interactions:
         return "\n".join(dict.fromkeys(interactions))
     if (brief or {}).get("resource_gate") == "unconfirmed_item" and not any(
@@ -520,6 +545,12 @@ def fallback_narration(
         return "你尚未实际确认这个目标的内容，可以先尝试调查眼前的目标。"
     if brief.get("source_quotes"):
         return "\n".join(brief["source_quotes"])
+    if brief.get("attempt") and intent_type in {"observe", "investigate"}:
+        subject = brief.get("observation_subject") or {}
+        known = subject.get("public_summary", "")
+        return "\n".join(filter(None, [known,
+            "本次查看尚未确认新的情况；目标的具体状况和阻碍仍需核实。",
+        ]))
     if brief.get("responder", {}).get("kind") == "teammate" and not brief.get("attempt"):
         return "你向" + brief["responder"].get("name", "队友") + "说出了这番话。"
     topic = " ".join(str(brief.get(k, "")) for k in ("attempt", "question", "purpose"))

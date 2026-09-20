@@ -201,7 +201,9 @@ def test_result_reply_cannot_invent_inscription_and_chat_preserves_receipt():
         player_intent=plan_for("听得清吗？", "converse").parsed_intent,
         public_ids=set(), action_seq=5, fingerprint="same",
     )
-    assert result.reason == "accepted_task_needs_attempt"
+    assert result.accepted and decision.mode == "act"
+    assert decision.goal_status == "continue"
+    assert state.last_attempt_result == {"kind": "completed", "text": "黑包背带断裂。"}
 
 
 def test_attribution_and_corrected_opinion_keep_original_events():

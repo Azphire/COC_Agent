@@ -270,6 +270,9 @@ def interactions(client, module_battle, monkeypatch):  # noqa: F811
             entity = await svc.entities.entity(session, d["room"]["id"], d["item"])
             entity.snapshot = {
                 **entity.snapshot,
+                # This fixture repurposes the navigation entity named Notice
+                # as a key. Its Chinese action inputs need that explicit alias.
+                "aliases": [*entity.snapshot.get("aliases", []), "钥匙", "一次性测试物"],
                 "interactions": [
                     rule(inventory_operation=op, item_id=d["item"], kp_enabled=True)
                     .model_copy(update={"id": op})

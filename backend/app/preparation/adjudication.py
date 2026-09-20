@@ -20,6 +20,8 @@ from app.preparation.action_authority import (
     action_kinds,
     authority_error,
     freeze_action,
+    operation_item_ids,
+    required_kinds,
     selected_action_matches,
 )
 from app.preparation.inventory import held_instance, public_inventory
@@ -171,7 +173,12 @@ def settled_route_obstacle(plan, runtime):
 def decision_contract(context, candidates):
     owned = [i["item_id"] for i in context["items"] if i["holder_id"] == context["actor"]]
     if context.get("action_authority") is not None:
-        mentioned = context["action_authority"].get("item_instances", {})
+        authority = context["action_authority"]
+        mentioned = set().union(*(operation_item_ids(
+            authority, required_kinds(ModuleInteraction.model_validate(c["rule"])),
+        ) for c in candidates)) if "operation_item_ids" in authority else authority.get(
+            "item_instances", {},
+        )
         owned = [eid for eid in owned if eid in mentioned]
 
     @model_validator(mode="after")
@@ -429,8 +436,26 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
             plan.action_authority["route"] = route
         if terminal:
             plan.action_authority["terminal_confirmation"] = terminal
+        from app.preparation.inventory import inventory_probe
+
+        if inventory_probe(plan.action_authority["action"]) and "search" in plan.action_authority[
+            "kinds"
+        ]:
+            # A personal pocket inspection cannot use a world clue's search
+            # check. Original belongings/recovery methods retain their rules.
+            target = facts.approved_entities.get(plan.action_authority["target_id"], {})
+            if not any(r.get("inventory_operation") in {"initial", "recover"}
+                       for r in target.get("interactions", [])):
+                plan.focus.action_target_id = facts.scene_id
+                plan.action_authority["target_id"] = facts.scene_id
+                plan.proposed_check = None
+                plan.proposed_reveal_entity_ids = []
         plan.proposed_tool_calls = [
             t for t in plan.proposed_tool_calls if t.name != "apply_module_action"
+            and t.name not in {
+                r["id"] for entity in facts.approved_entities.values()
+                for r in entity.get("interactions", [])
+            }
         ]
         repair_interaction_transition(plan, facts)
         run.structured_output = plan.model_dump(mode="json")
@@ -583,6 +608,11 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                     }
                 )
         if not candidates:
+            if "light" in plan.action_authority["kinds"]:
+                plan.action_authority["rejection_message"] = (
+                    "尚未确认本地可操作的照明设备及所需条件，本次没有改变灯光。"
+                )
+                run.structured_output = plan.model_dump(mode="json")
             return None
         candidates = prefer_established_sound_methods(
             candidates, data.module_runtime, plan.action_authority

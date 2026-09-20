@@ -1027,9 +1027,33 @@ def restore_output(output, schema, context):
         repair_observation_target(value, context)
         repair_search_target(value, context)
         repair_control_target(value, context)
+        from app.preparation.action_authority import check_operation_error
+
+        # Approved conditions still belong to an operation. A search of a door
+        # cannot select an unrelated treatment-gated clue in the same scene.
+        requirements = [
+            r for r in context.get("check_requirements", [])
+            if not check_operation_error(
+                (r.get("successful_check") or {}).get("name"), focus.get("action", "")
+            )
+        ]
+        excluded = {r["entity_id"] for r in context.get("check_requirements", [])
+                    if r not in requirements}
+        if focus.get("action_target_id") in excluded:
+            focus["action_target_id"] = value["current_scene_id"]
+        value["proposed_reveal_entity_ids"] = [
+            eid for eid in value.get("proposed_reveal_entity_ids", []) if eid not in excluded
+        ]
+        if proposal and (proposal.get("clue_id") in excluded or check_operation_error(
+            proposal.get("name"), focus.get("action", "")
+        ) and proposal.get("clue_id")):
+            value["proposed_check"] = proposal = None
+            value["proposed_tool_calls"] = [
+                t for t in value["proposed_tool_calls"] if t["name"] != "request_skill_check"
+            ]
         named_requirements = [
             r
-            for r in context.get("check_requirements", [])
+            for r in requirements
             if r.get("access_policy") == "requires_check"
             and r.get("successful_check")
             and named_check_requirement(
@@ -1085,7 +1109,7 @@ def restore_output(output, schema, context):
             # to its approved real check, retaining all normal prerequisites.
             named_requirements = [
                 r
-                for r in context.get("check_requirements", [])
+                for r in requirements
                 if (
                     r["entity_id"] in value.get("proposed_reveal_entity_ids", [])
                     or r["entity_id"] == (proposal or {}).get("target_entity_id")
@@ -1111,7 +1135,7 @@ def restore_output(output, schema, context):
         required = next(
             (
                 r
-                for r in context.get("check_requirements", [])
+                for r in requirements
                 if r["entity_id"] == focus.get("action_target_id")
                 and r.get("access_policy") == "requires_check"
                 and r.get("successful_check")
@@ -1324,6 +1348,43 @@ def restore_output(output, schema, context):
             restored.parsed_intent.actor_member_id,
             npc_ids={t["id"] for t in context.get("current_targets", []) if t["type"] == "npc"},
         )
+        actual = set(action_kinds(restored.focus.action)) if restored.focus else set()
+        from app.preparation.action_authority import operative_fragments
+        from app.preparation.search import unrelated_item_focus
+
+        if "light" in actual and unrelated_item_focus(
+            "".join(f["text"] for f in operative_fragments(restored.focus.action)
+                    if "light" in action_kinds(f["text"])),
+            restored.focus.action_target_id, context,
+        ):
+            # An inferred carried item is not the stated environmental target.
+            # Keep the actual attempt in this scene; legal methods must bind
+            # its device themselves, and final authority checks the same noun.
+            restored.focus.action_target_id = restored.current_scene_id
+            restored.parsed_intent.target_id = restored.current_scene_id
+            restored.parsed_intent.type = "interact"
+            restored.proposed_tool_calls = [t for t in restored.proposed_tool_calls
+                                           if t.name != "apply_module_action"]
+        if restored.parsed_intent.type == "move" and actual - {"converse", "observe"} \
+                and not explicit_movement(restored.focus.action):
+            restored.parsed_intent.type = (
+                "investigate" if actual <= {"search", "observe"} else "interact"
+            )
+            restored.proposed_transition_id = None
+            restored.needs_clarification = restored.parsed_intent.requires_clarification = False
+            restored.parsed_intent.clarification_question = None
+            restored.proposed_tool_calls = [t for t in restored.proposed_tool_calls
+                                           if t.name not in {"transition_scene", "update_scene"}]
+        if restored.parsed_intent.type == "observe" and actual - {"observe", "converse"}:
+            restored.parsed_intent.type = (
+                "investigate" if actual <= {"search", "observe"} else "interact"
+            )
+        if restored.proposed_check and restored.proposed_check.opposed and restored.focus:
+            # Asking a peer for advice is not a contest, even alongside a search.
+            opponent = restored.proposed_check.opposed.opponent_member_id
+            if opponent and any(r.addressee_id == opponent and r.kind == "question"
+                                for r in restored.focus.requests):
+                restored.proposed_check = None
         if (
             restored.parsed_intent.type == "move"
             and restored.focus and restored.focus.action

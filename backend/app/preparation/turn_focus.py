@@ -4,6 +4,7 @@ import re
 
 from app.agents.adjudication_schemas import TurnFocus, TurnRequest
 from app.preparation.action_authority import (
+    action_kinds,
     addressed_spans,
     declared_action,
     information_question,
@@ -206,17 +207,26 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
 
 def repair_attribution(plan, raw, people, actor, *, npc_ids=(), explicit_spans=()):
     focus = plan.focus or TurnFocus()
+    # A negative account of a prior attempt is context for the question, not
+    # permission to repeat that attempt. Apply this before request attribution.
+    from app.preparation.action_authority import action_kinds
+
+    if focus.action and re.search(r"没|未|不曾", focus.action) and not action_kinds(focus.action):
+        focus.action, focus.action_target_id, focus.obstacle = "", None, ""
+        plan.focus = focus
+        plan.parsed_intent.type = "converse"
+        plan.proposed_check = plan.proposed_transition_id = None
+        plan.proposed_tool_calls, plan.proposed_reveal_entity_ids = [], []
     had_requests = bool(focus.requests)
     requests = bind_requests(
         focus, raw, people, actor, npc_ids=npc_ids, explicit_spans=explicit_spans,
     )
     if not requests:
         own = speaker_action(raw)
-        if own and (had_requests or (focus.question == raw and not focus.action)):
+        if own and (had_requests or not focus.action):
             from app.agents.action_policy import explicit_movement
-            from app.preparation.action_authority import action_kinds
-
             focus.action, focus.question, focus.addressee_id = raw[raw.index(own):], "", None
+            focus.action_target_id = focus.action_target_id or plan.parsed_intent.target_id
             plan.focus = focus
             kinds = set(action_kinds(focus.action))
             plan.parsed_intent.type = (
@@ -248,9 +258,13 @@ def repair_attribution(plan, raw, people, actor, *, npc_ids=(), explicit_spans=(
         action = next((a for a in attempts if re.search(r"我(?:们)?", a)), next(iter(attempts), ""))
     if not action:
         # Compatibility for a KP that put the entire mixed turn in question.
+        first = min(r.source_start for r in requests)
+        prefix = raw[:first]
+        if speaker_action(prefix):
+            action = prefix
         last = max(r.source_end for r in requests)
         tail = raw[last:]
-        if re.match(r"\s*我(?:们)?(?!是|想问|觉得|不|没|知道)", tail):
+        if not action and re.match(r"\s*我(?:们)?(?!是|想问|觉得|不|没|知道)", tail):
             action = tail
     focus.action = action
     primary = next((r for r in requests if r.addressee_id == focus.addressee_id), requests[0])
@@ -282,8 +296,44 @@ def requests_for(plan, member_id):
 def cancellation(text):
     return bool(re.search(
         r"(?:不用|不必|别|不要|停止|取消|先不).{0,8}"
-        r"(?:找|查|看|检查|照顾|照看|处理|管|做)|算了", text,
+        r"(?:找|查|看|检查|照顾|照看|处理|管|做)|算了|(?:全部|都)(?:停|别|不用)", text,
     ))
+
+
+def cancellation_keys(request, pending, name=""):
+    """Resolve against existing tasks, never a newly guessed scene target."""
+    text = request["text"]
+    tasks = [r for r in pending if r.get("kind") == "delegate"]
+    if re.search(r"(?:全部|都)(?:停|别|不用)|取消全部", text):
+        return [r["key"] for r in tasks]
+    positive = re.sub(r"不用|不必|不要|停止|取消|先不|别", "", text)
+    operations = set(action_kinds(positive))
+    # Compare actual target words after removing the shared request grammar.
+    def topics(value):
+        if name:
+            value = value.replace(name, "")
+        value = re.sub(
+            r"先|一下|不用|不必|不要|停止|取消|先不|别|了|请|帮我|帮忙|检查|查看|观察|查|看看|看|找",
+            "", value,
+        )
+        return {value[i:i + 2] for i in range(len(value) - 1)
+                if not re.search(r"[，。；,;\s]", value[i:i + 2])}
+    scores = []
+    for old in tasks:
+        overlap = operations & set(old.get("operations", []))
+        target_match = request.get("target_id") and request["target_id"] == old.get("target_id")
+        shared = topics(positive) & topics(old["text"])
+        # Single-character physical targets such as 门 remain meaningful.
+        short_target = any(n in positive and n in old["text"]
+                           for n in ("门", "灯", "包", "伤", "血"))
+        score = (4 if shared or short_target else 0) + (2 if target_match else 0) + bool(overlap)
+        if score:
+            scores.append((score, old["key"]))
+    if scores:
+        best = max(s for s, _ in scores)
+        matches = [key for s, key in scores if s == best]
+        return matches if len(matches) == 1 else []
+    return [tasks[0]["key"]] if len(tasks) == 1 and not operations else []
 
 
 def reconcile_requests(behavior, requests, *, seq, scene_id, reachable_ids, name=""):
@@ -294,6 +344,10 @@ def reconcile_requests(behavior, requests, *, seq, scene_id, reachable_ids, name
     """
     incoming = [{**r.model_dump(mode="json"), "key": f"{seq}:{r.source_start}",
                  "source_event_seq": seq, "scene_id": scene_id} for r in requests]
+    for new in incoming:
+        if new["kind"] == "cancel":
+            new["cancelled_keys"] = cancellation_keys(new, behavior.pending_requests, name)
+            new["needs_clarification"] = not bool(new["cancelled_keys"])
     active, retired = [], []
     for old in behavior.pending_requests:
         status = None
@@ -301,7 +355,7 @@ def reconcile_requests(behavior, requests, *, seq, scene_id, reachable_ids, name
             status = "superseded"
         for new in incoming:
             same_target = not new.get("target_id") or new.get("target_id") == old.get("target_id")
-            if new["kind"] == "cancel" and same_target:
+            if new["kind"] == "cancel" and old["key"] in new["cancelled_keys"]:
                 status = "cancelled"
             elif new.get("replaces_prior") or (
                 new["kind"] == old["kind"] == "question"

@@ -108,6 +108,7 @@ def relevant_incidental_memories(visible_events, query, scene_id, *, limit=6, bu
 
 
 STORY_TYPES = {
+    "action.result",
     "module.interaction",
     "combat.started",
     "combat.ended",

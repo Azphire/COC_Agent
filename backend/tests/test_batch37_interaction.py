@@ -235,8 +235,9 @@ def test_promised_treatment_after_salutation_requires_characters_own_attempt(pro
         explicit_action_request=True,
         requested_operations=["first_aid"],
     )
-    assert result.reason == "accepted_task_needs_attempt"
-    assert decision.mode == "speak" and not decision.action_text
+    assert result.accepted
+    assert decision.mode == "act" and decision.action_text.startswith("我")
+    assert decision.goal_status == "continue"  # a queued attempt, not a completed task
 
 
 def test_stop_bleeding_uses_existing_treatment_route_only_for_the_actual_actor():

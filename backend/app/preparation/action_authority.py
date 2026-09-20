@@ -9,7 +9,9 @@ import re
 from app.preparation.inventory import held_instance
 
 VERBS = {
-    "first_aid": r"急救|包扎|止血|处理(?:一下)?(?:[^，。；！？,;.!?]{1,10}的)?伤口|\bfirst aid\b",
+    "first_aid": (r"急救|包扎|止(?:一下|一止|住)?血|"
+                  r"处理(?:一下)?(?:[^，。；！？,;.!?]{1,10}的)?伤口|"
+                  r"(?:按|压)(?:住|紧)?[^，。；！？,;.!?]{0,8}伤口|\bfirst aid\b"),
     "medicine": r"医学治疗|\bmedical treatment\b",
     "throw": r"扔|抛|投(?:出|向|掷)|掷|甩(?:出|向)|砸向|\bthrow\b|\btoss\b|\bhurl\b",
     "give": (
@@ -18,12 +20,12 @@ VERBS = {
     ),
     "place": r"放(?:下|在|到|置)|搁|摆在|\b(?:place|drop|put)\b",
     "take": (
-        r"拿(?:起|走|取|好|回)|取(?:走|下|回)|拾|捡|收(?:起|好|进)|带走|装进"
+        r"拿(?:起|走|取|好|回|出(?:来)?)|取(?:走|下|回|出)|掏出|抽出|拾|捡|收(?:起|好|进)|带走|装进"
         r"|\b(?:take|pick|collect)\b"
     ),
     "consume": r"吃|喝|吞|用掉|耗用|消耗|\b(?:eat|drink|consume)\b",
     "search": (
-        r"寻找|找|搜|摸索|翻(?:找|查|开|看|过|转|翻)|揭下|检查|查看.{0,8}(?:包|袋|背面|反面|正反面)"
+        r"寻找|找|搜|查(?:查|一查)|摸索|翻(?:找|查|开|看|过|转|翻)|揭下|检查|查看.{0,8}(?:包|袋|背面|反面|正反面)"
         r"|(?:看看|观察)(?:一下)?(?:(?:我|你|自己)(?:的)?)?(?:口袋|衣袋|随身物|随身东西|背包)"
         r"|摸(?:索|摸)?(?:一下)?(?:自己|我的)?(?:的)?(?:口袋|衣袋|背包)"
         r"|\b(?:search|rummage|find|inspect)\b"
@@ -32,13 +34,16 @@ VERBS = {
     "observe": r"观察|查看|看(?:清|向|看)|照(?:向|着)|辨认|打量|注视|\b(?:look|observe|watch)\b",
     "light": (
         r"(?:打开|开启|点亮|关掉|关闭).{0,12}(?:灯|照明|手电|屏幕)"
+        r"|(?:灯|照明|手电(?:筒)?|屏幕)(?:的?(?:开关|功能))?(?:也|给|都)?(?:关掉|关闭|关上|打开|开启)"
+        r"|关灯|开灯"
+        r"|(?:调(?:整|节)|改变|降低|提高).{0,6}(?:灯光|照明|亮度)"
         r"|(?:用|使用).{0,16}(?:照明|照亮)|\b(?:light|illuminate)\b"
     ),
     "sound_start": r"(?:打开|开启|放|播|启动|响起).{0,12}(?:铃|音乐|声音|录音)|\b(?:ring|play)\b",
     "sound_stop": r"(?:关闭|关掉|停止|关上).{0,12}(?:铃|音乐|声音|录音)|静音|\bsilence\b",
     "open": (
         r"开(?:锁|门)|解锁|打开.{0,12}(?:门|面板)|插.{0,10}钥匙"
-        r"|插入.{0,16}锁孔|转动.{0,8}钥匙|\b(?:unlock|open)\b"
+        r"|(?:门|面板)(?:给|再|也)?打开|插入.{0,16}锁孔|转动.{0,8}钥匙|\b(?:unlock|open)\b"
     ),
     "close": r"关(?:门|上|闭)|拉上.{0,8}门|\bclose\b",
     "pass": r"通过|穿过|绕过|潜行|溜过|冲进|冲过|跳|悄悄.{0,8}走|\b(?:sneak|pass)\b",
@@ -52,7 +57,8 @@ VERBS = {
 }
 NON_ACTION = re.compile(
     r"是否|能否|可否|假如|如果|假设|建议|不如|要不要|(?:你|我们)(?:可以|应该)"
-    r"|不要|并未|没有|[?？]|\b(?:if|could you|would you|we could|we should|you should)\b",
+    r"|不要|并未|尚未|不曾|没(?!关系|问题)|[?？]"
+    r"|\b(?:if|could you|would you|we could|we should|you should)\b",
     re.I,
 )
 
@@ -67,6 +73,7 @@ def declared_action(text):
             r"(?:仔细|认真|先|再|然后|接着|继续|试着|尝试|实际)*"
             r"(?:(?:靠近|走近|凑近|过去|蹲下|弯腰)[^，。；,.!?;]{0,16}?)?"
             r"(?:(?:透过|隔着|借着|顺着)[^，。；,.!?;]{1,12}?)?"
+            r"(?:(?:从|在|沿|伸手|伸出手)[^，。；,.!?;]{0,16}?)?"
             r"(?:急救|包扎|止血|检查|查看|看看|摸|搜索|寻找|搜寻|翻看|翻翻|翻转|翻过|揭下|观察|拿起|取下|使用|潜行|"
             r"(?:把|将).{1,24}(?:翻过|翻转|揭下|拿起|扔|抛|交给|打开)|交给|交还|归还|递给)",
             c,
@@ -75,14 +82,43 @@ def declared_action(text):
     )
 
 
+def operative_fragments(text):
+    """Original spans of attempts, excluding subordinate purpose/result questions.
+
+    This boundary is shared by freezing and method selection, so quoting just a
+    verb inside an excluded purpose cannot regain authority.
+    """
+    fragments = []
+    conditional = False
+    for match in re.finditer(r"[^，。；！？,;.!?\n]+[，。；！？,;.!?\n]?", text or ""):
+        clause = match[0]
+        conditional = conditional or bool(re.match(
+            r"\s*(?:如果|假如|假设|建议|不如|(?:等)?(?:找|拿)到.{0,12}(?:之后|以后|后))", clause,
+        ))
+        if conditional:
+            conditional = not bool(re.search(r"[。；！？;.!?\n]$", clause))
+            continue
+        if NON_ACTION.search(clause) and not declared_action(clause):
+            continue
+        # Capability modifiers describe a wanted object; intention markers at
+        # the start of an independent attempt (我想/准备/试着拿出) stay actionable.
+        boundary = re.search(
+            r"(?:能|可)(?:够|以)?(?:拿来|用来|用于)|(?:拿来|用来|用于|以便|为了)|"
+            r"(?:是否|有没有|是不是|能否|可否|在不在|能不能)|"
+            r"(?:想|打算)(?=把|将).*(?:让|以便)|"
+            r"(?:找|拿)到(?:以后|之后|后)(?=再|就|把|将)", clause,
+        )
+        end = boundary.start() if boundary else len(clause)
+        actual = clause[:end]
+        if actual.strip():
+            fragments.append({"text": actual, "start": match.start(),
+                              "end": match.start() + end,
+                              "purpose": clause[end:] if boundary else ""})
+    return fragments
+
+
 def action_kinds(text):
-    if not text or re.search(r"假如|如果|假设|建议|\bif\b", text, re.I):
-        return []
-    clauses = [
-        c
-        for c in re.split(r"(?<=[，。；！？,;.!?\n])", text)
-        if c and (not NON_ACTION.search(c) or declared_action(c))
-    ]
+    clauses = [f["text"] for f in operative_fragments(text)]
     # The question describes what is being checked, not additional operations:
     # inspecting whether a door opened cannot acquire an opening capability.
     clauses = [
@@ -94,9 +130,23 @@ def action_kinds(text):
     # A completed-state modifier identifies an object; it is not a new attempt
     # to perform that operation (e.g. operating an already-open panel).
     clauses = [re.sub(r"(?:已经|早已|已|刚刚|刚)[^，。；,;.!\n]{0,16}?的", "", c) for c in clauses]
-    return [
-        kind for kind, pattern in VERBS.items() if any(re.search(pattern, c, re.I) for c in clauses)
-    ]
+    def operation_clauses(kind):
+        if kind not in {"open", "close", "use"}:
+            return clauses
+        # A specific equipment operation consumes its own verb span. Closing
+        # a lamp is one operation, not an additional unexecuted door closure.
+        specific = "|".join(VERBS[k] for k in ("light", "sound_start", "sound_stop"))
+        return [re.sub(specific, "", c, flags=re.I) for c in clauses]
+
+    return [kind for kind, pattern in VERBS.items()
+            if any(re.search(pattern, c, re.I) for c in operation_clauses(kind))]
+
+
+def check_operation_error(name, action):
+    """A treatment-gated discovery cannot turn another action into treatment."""
+    if name in {"first_aid", "medicine"} and name not in action_kinds(action):
+        return "本次实际动作没有医疗操作，不能借用伤情线索的治疗检定"
+    return None
 
 
 def speaker_action(text):
@@ -183,6 +233,7 @@ def information_question(text):
     return bool(
         re.search(
             r"你(?:们)?(?:知道|觉得|认为|看法|怎么看)|有什么(?:用|建议)|"
+            r"(?:办法|主意|方案).{0,8}(?:行不行|可不可行|合不合适)|"
             r"我(?:可以|能|该|要|怎么|如何)[^。！？?]{0,16}(?:帮|做|配合)"
             r"[^。！？?]{0,12}(?:什么|如何|怎么|[？?])|"
             r"是(?:做|干|用来).{0,8}(?:什么|啥)|是什么意思|该(?:动|选|用)哪|"
@@ -225,6 +276,9 @@ def requested_action_kinds(text):
     # Only an explicit polite imperative can lose its question punctuation.
     if polite:
         clauses = [c.rstrip("？?") for c in clauses]
+    clauses = [re.sub(r"^\s*(?:你|您)(?:先|再|现在|这就)?", "", c) for c in clauses]
+    clauses = [re.sub(r"^\s*(?:(?:请|麻烦|劳驾)(?:你|您)?|帮我|帮忙)+", "", c)
+               for c in clauses]
     return [kind for kind in action_kinds("，".join(clauses)) if kind != "converse"]
 
 
@@ -310,9 +364,18 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
     else:
         request = teammate_request(raw, members, actor, action=action)
     kinds = action_kinds(action) if action and action in raw and not request else []
-    if plan.parsed_intent.type == "observe":
-        kinds = [k for k in kinds if k in {"observe", "light"}]
-    explicit = [iid for iid in {*runtime.inventory, *runtime.dropped_items} if iid in action]
+    operative = "".join(f["text"] for f in operative_fragments(action))
+    from app.preparation.inventory import validate_resource_claims
+    from app.rooms.service import RoomError
+
+    resource_error = None
+    try:
+        validate_resource_claims(operative, {"known_items": [
+            {"names": aliases(e)} for e in entities.values() if e.get("type") == "item"
+        ]}, actual=True)
+    except RoomError as error:
+        resource_error = error.message
+    explicit = [iid for iid in {*runtime.inventory, *runtime.dropped_items} if iid in operative]
     held = {}
     for eid in entities:
         named_instances = [iid for iid in explicit if runtime.item_instances.get(iid, iid) == eid]
@@ -324,7 +387,7 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
         if instance:
             held[eid] = instance
     named = {
-        eid for eid, e in entities.items() if any(mentions_alias(action, a) for a in aliases(e))
+        eid for eid, e in entities.items() if any(mentions_alias(operative, a) for a in aliases(e))
     }
     named.update(runtime.item_instances.get(iid, iid) for iid in explicit)
     named.intersection_update(entities)
@@ -343,6 +406,27 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
             ]
             if len(dropped) == 1:
                 instances[eid] = dropped[0]
+    fragments, operation_items, previous_items = [], {}, set()
+    for fragment in operative_fragments(action):
+        operations = action_kinds(fragment["text"])
+        operands = {
+            eid for eid, entity in entities.items() if (entity.get("type") == "item" or eid in held)
+            and any(mentions_alias(fragment["text"], name) for name in aliases(entity))
+        }
+        if operations and not operands and re.search(
+            r"把它|将它|(?:把|将)(?:这|那)(?:个|件|些)(?:东西|物品)?|\b(?:it|them)\b",
+            fragment["text"], re.I,
+        ):
+            operands = previous_items or ({target} if target in held else set())
+        if operations:
+            for operation in operations:
+                operation_items.setdefault(operation, set()).update(operands)
+            previous_items = operands
+        else:
+            # Background possession/need cannot donate an operand to an action.
+            previous_items = set()
+        fragments.append({**fragment, "actor_member_id": actor, "target_id": target,
+                          "operations": operations, "item_ids": sorted(operands)})
     return {
         "actor_member_id": actor,
         "source_event_seq": seq,
@@ -353,6 +437,9 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
         "utterance": raw,
         "clauses": [c.strip() for c in re.split(r"[，。；！？,;.!?\n]", raw) if c.strip()],
         "kinds": kinds,
+        "resource_error": resource_error,
+        "actual_fragments": fragments if kinds else [],
+        "operation_item_ids": {op: sorted(ids) for op, ids in operation_items.items()},
         "item_instances": instances,
         "held_instances": held,
         "named_item_ids": [eid for eid in named if entities[eid].get("type") == "item"],
@@ -409,6 +496,8 @@ def selected_action_matches(authority, selected, rule):
     Both the frozen primary action and the selected clause must authorize the
     operation; an observation clause cannot borrow a different clause's throw.
     """
+    if authority.get("resource_error") or operation_item_error(authority, rule):
+        return False
     allowed = required_kinds(rule)
     terminal = authority.get("terminal_confirmation", {})
     if (
@@ -420,10 +509,32 @@ def selected_action_matches(authority, selected, rule):
     return bool(
         selected
         and selected in authority.get("action", "")
+        and any(
+            (not allowed or allowed.intersection(action_kinds(f["text"])))
+            and (selected in f["text"] or f["text"] in selected)
+            for f in operative_fragments(authority.get("action", ""))
+        )
         and (
             not allowed or allowed.intersection(authority.get("kinds", []), action_kinds(selected))
         )
     )
+
+
+def operation_item_ids(authority, operations):
+    if "operation_item_ids" not in authority:
+        return set(authority.get("named_item_ids", authority.get("item_instances", {})))
+    return set().union(*(set(authority["operation_item_ids"].get(op, [])) for op in operations))
+
+
+def operation_item_error(authority, rule):
+    # Operating carried equipment needs an actual reference to that equipment.
+    # Possession alone cannot turn an environmental light into the held phone.
+    # Other operations may legitimately require unmentioned prerequisite keys.
+    if "light" in required_kinds(rule) and rule.required_item_ids and not set(
+        rule.required_item_ids
+    ) <= operation_item_ids(authority, {"light"}):
+        return "原话没有指向该照明设备，不能用持有的其他物品替代操作目标"
+    return None
 
 
 def authority_error(
@@ -452,6 +563,10 @@ def authority_error(
         return "行动授权与本次事件不一致"
     if authority.get("request_member_id"):
         return "队友请求须由队友自己的行动事件执行"
+    if authority.get("resource_error"):
+        return authority["resource_error"]
+    if error := operation_item_error(authority, rule):
+        return error
     if (
         rule.use_effect
         and target
@@ -475,6 +590,10 @@ def authority_error(
         and rule.item_id not in authority["named_item_ids"]
     ):
         return "查找物品与本次原话指定的对象不一致"
+    if rule.acquire_item_ids and authority.get("named_item_ids") and not set(
+        rule.acquire_item_ids
+    ).intersection(authority["named_item_ids"]):
+        return "取得物品与本次原话指定的对象不一致"
     if (
         rule.inventory_operation == "give"
         and recipient
@@ -496,6 +615,8 @@ def authority_error(
     if rule.encounter_operation == "sound_once" and item_id:
         item_ids.add(item_id)
     for eid in item_ids:
+        if "operation_item_ids" in authority and eid not in operation_item_ids(authority, allowed):
+            return "该物品只在其他片段出现，未获本次操作授权"
         frozen = authority.get("item_instances", {}).get(eid)
         if (
             not frozen
@@ -513,8 +634,10 @@ def authority_error(
         ):
             return "拾回实例与本次指定的物品不一致"
     if rule.encounter_operation == "sound_once" and not item_id:
+        throw_text = "".join(f["text"] for f in authority.get("actual_fragments", [])
+                             if "throw" in f.get("operations", []))
         if not rule.allow_worn_sound_item or not re.search(
-            r"鞋|衣|帽|\b(?:shoe|coat|hat)\b", authority["action"], re.I
+            r"鞋|衣|帽|\b(?:shoe|coat|hat)\b", throw_text or authority["action"], re.I
         ):
             return "未确定本次实际投出的物品"
     for key in rule.required_facts if check_facts else []:

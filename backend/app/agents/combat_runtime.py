@@ -88,14 +88,21 @@ def human_decision_contract(context):
         if base and base != label and base in raw:
             groups.add(pid)
     named = exact or groups
+    from app.preparation.action_authority import action_kinds
     from app.preparation.dialogue import compound_treatment
 
-    operation = compound_treatment(raw)
+    operation = compound_treatment(raw) or next(
+        (op for op in ("medicine", "first_aid") if op in action_kinds(raw)), None,
+    )
     if operation and not named and re.search(r"他|她|对方", raw):
         previous = context.get("previous_dialogue_target")
         if previous in participants:
             named = {previous}
     treatments = {t["id"] for t in context.get("treatment_targets", [])}
+    if operation and not named and len(treatments) == 1 and re.search(
+        r"伤者|伤员|伤患|他|她|对方", raw,
+    ):
+        named = treatments
     fields = {}
     if operation and named & treatments:
         fields["operation"] = (Literal[operation], ...)
@@ -189,7 +196,15 @@ async def reveal_addressed_npc(
         ),
         "",
     )
-    for entity in await service.entities.rows(session, room.id):
+    from app.preparation.action_authority import action_kinds
+
+    rows = await service.entities.rows(session, room.id)
+    present = [e for e in rows if e.entity_type == "npc"
+               and e.snapshot.get("title") and e.snapshot["title"] in summary]
+    implicit_patient = (present[0].source_entity_id if len(present) == 1
+                        and set(action_kinds(raw_text)) & {"first_aid", "medicine"}
+                        and re.search(r"伤者|伤员|伤患|他|她|对方", raw_text) else None)
+    for entity in rows:
         title = entity.snapshot.get("title", "")
         if (
             entity.entity_type != "npc"
@@ -197,6 +212,7 @@ async def reveal_addressed_npc(
             or not title
             or not (
                 title in raw_text
+                or entity.source_entity_id == implicit_patient
                 or entity.source_entity_id == previous_npc
                 and re.search(r"他|她|对方", raw_text)
             )
@@ -218,6 +234,13 @@ async def drive_combat(runtime, state):
 
     async def prepare(session, room):
         cycle = await session.get(AgentCycle, state["cycle_id"])
+        from app.agents.conversation import cancelled_request
+
+        if not cycle.state.get("combat_action_id") and await cancelled_request(session, cycle):
+            cycle.status = "cancelled"
+            cycle.state = {**cycle.state, "status": "cancelled", "combat_autonomy_stopped": True}
+            service.cycle_event(session, room, cycle)
+            return cycle.state, {}
         data = load_state(room)
         module = await service.module(session, room.id)
         await combat_service.ensure_members(session, room, data, module.state["scene_id"])
