@@ -5,6 +5,7 @@ events drive player choices; host audits are exported separately for debugging.
 """
 
 import argparse
+import hashlib
 import json
 import secrets
 import threading
@@ -148,13 +149,14 @@ class Session:
     def prefix(self):
         return "/rooms/" + self.state["room_id"]
 
-    def card(self, name, occupation, groups, priority):
+    def card(self, name, occupation, groups, priority, *, era="modern", age=29, equipment=None,
+             occupation_attribute=None):
         cards = self.state.setdefault("cards", {})
         if name not in cards:
             card = self.req(
                 "POST",
                 "/characters/random",
-                {"ruleset_id": "coc7-character-creation", "name": name, "age": 29},
+                {"ruleset_id": "coc7-character-creation", "name": name, "age": age},
             )
             cards[name] = card["id"]
             self.save()
@@ -169,7 +171,9 @@ class Session:
             {
                 "version": card["version"],
                 "occupation": occupation,
-                "era": "modern",
+                "era": era,
+                **({"equipment": equipment} if equipment is not None else {}),
+                **({"occupation_attribute": occupation_attribute} if occupation_attribute else {}),
                 "occupation_group_choices": groups,
                 "selected_specializations": [
                     s
@@ -231,14 +235,26 @@ class Session:
         write(self.directory / (name + "-frozen.json"), card)
         return card
 
-    def setup(self):
+    def setup(
+        self,
+        *,
+        package_path=None,
+        room_name=None,
+        investigators=None,
+        era="modern",
+        background="普通乘客",
+        goals="照顾同伴，弄清眼前情况，平安回家。",
+        character_options=None,
+    ):
+        self.room_name = room_name or "第36批 常暗之厢 本地真实局"
+        player_name = investigators[0][0] if investigators else "林知秋"
         if not self.state.get("room_id"):
-            created = self.req("POST", "/rooms", {"name": "第36批 常暗之厢 本地真实局"})
+            created = self.req("POST", "/rooms", {"name": self.room_name})
             self.state["room_id"] = created["room"]["id"]
             joined = self.req(
                 "POST",
                 "/rooms/join",
-                {"invite_code": created["invite_code"], "display_name": "林知秋"},
+                {"invite_code": created["invite_code"], "display_name": player_name},
             )
             self.state["player_token"] = joined["member_token"]
             self.state["player_id"] = joined["room"]["self_member_id"]
@@ -272,8 +288,9 @@ class Session:
                 "话少务实的修车工，喜欢检查实物，嘴硬但不愿丢下同伴",
             ),
         ]
-        for name, occupation, groups, priority, personality in profiles:
-            card = self.card(name, occupation, groups, priority)
+        for name, occupation, groups, priority, personality in investigators or profiles:
+            card = self.card(name, occupation, groups, priority, era=era,
+                             **(character_options or {}).get(name, {}))
             room = self.req("GET", self.prefix)
             member = next((m for m in room["members"] if m["display_name"] == name), None)
             if not member:
@@ -284,7 +301,7 @@ class Session:
                 )["room"]
                 member = next(m for m in room["members"] if m["display_name"] == name)
             if not any(s.get("member_id") == member["id"] for s in room["character_slots"]):
-                if name == "林知秋":
+                if name == player_name:
                     export = self.req("GET", "/characters/" + card["id"] + "/export")
                     submitted = self.req(
                         "POST",
@@ -320,16 +337,16 @@ class Session:
                         self.prefix + "/character-assignments",
                         {"slot_id": slot["id"], "member_id": member["id"]},
                     )
-            if name != "林知秋" and name not in self.state.setdefault("bound", []):
+            if name != player_name and name not in self.state.setdefault("bound", []):
                 profile = self.req(
                     "POST",
                     "/agent-profiles",
                     {
                         "role": "investigator",
                         "name": name,
-                        "background": "普通乘客，职业为" + occupation,
+                        "background": background + "，职业为" + occupation,
                         "personality": personality,
-                        "goals": "照顾同伴，弄清眼前情况，平安回家。",
+                        "goals": goals,
                         "speaking_style": "简短自然的中文口语",
                         "action_tendency": (
                             "根据公开情况和自己的能力，尝试具体事情；结果交给KP裁决。"
@@ -346,8 +363,10 @@ class Session:
             self.req(
                 "POST",
                 self.prefix + "/ready",
-                {"ready": True} if name == "林知秋" else {"ready": True, "member_id": member["id"]},
-                player=name == "林知秋",
+                {"ready": True}
+                if name == player_name
+                else {"ready": True, "member_id": member["id"]},
+                player=name == player_name,
             )
         if not self.state.get("keeper"):
             room = self.req("GET", self.prefix)
@@ -365,9 +384,11 @@ class Session:
             self.save()
         if not self.state.get("preparation"):
             package = json.loads(
-                (ROOT / "data/prepared/changan/batch-21/package-approved.json").read_text(
-                    encoding="utf-8"
-                )
+                (
+                    Path(package_path)
+                    if package_path
+                    else ROOT / "data/prepared/changan/batch-21/package-approved.json"
+                ).read_text(encoding="utf-8")
             )
             imported = self.req("POST", "/module-preparations/import", package)
             self.req(
@@ -377,6 +398,24 @@ class Session:
             )
             self.state["preparation"] = imported["preparation_id"]
             self.save()
+        if package_path:
+            package_file = Path(package_path)
+            package = json.loads(package_file.read_text(encoding="utf-8"))
+            logs = self.req("GET", self.prefix + "/logs")
+            logs = logs.get("events", logs.get("logs", [])) if isinstance(logs, dict) else logs
+            binding = next(e["payload"] for e in reversed(logs) if e["type"] == "preparation.bound")
+            assert binding["preparation_id"] == self.state["preparation"]
+            assert binding["source_hash"] == package["knowledge"]["source"]["source_hash"]
+            assert binding["title"] == package["title"]
+            write(
+                self.directory / "binding-verification.json",
+                {
+                    **binding,
+                    "package_file_sha256": hashlib.sha256(package_file.read_bytes()).hexdigest(),
+                    "source_files": package["knowledge"]["source"]["files"],
+                    "verified_before_start": True,
+                },
+            )
         self.req("POST", self.prefix + "/start")
         print("Started", self.state["room_id"], flush=True)
         self.observe()

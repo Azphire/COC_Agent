@@ -21,6 +21,20 @@ def question_parts(question):
     return result
 
 
+def observation_request(text):
+    """Keep the actual inspection clause separate from carried equipment."""
+    from app.preparation.action_authority import operative_fragments
+
+    for fragment in reversed(operative_fragments(text)):
+        match = re.search(
+            r"(?:寻找|找找|找|搜索|搜寻|摸索|检查|查看|观察|看看)(?:一下)?(.+)",
+            fragment["text"],
+        )
+        if match:
+            return match[1].strip("，,。；;！？!? ")
+    return ""
+
+
 def response_brief(plan, context, results, *, withdrawal=None):
     """Project approved public candidates and receipts, never private KP prose."""
     focus = plan.focus
@@ -298,6 +312,11 @@ class NarrationValidator:
         negative = [f for f in results.get("current_result_facts", [])
                     if f.get("status") in {"failure", "not_executed", "technical_failure"}]
         if negative and output.public_narration:
+            from app.agents.results import answer_result_error
+
+            require(not answer_result_error(
+                output.public_narration, (brief or {}).get("attempt", ""), negative,
+            ), "本次操作未执行，须说明实际没有做成什么，而非只描述周围环境", 422)
             require(
                 bool(re.search(r"失败|未|没|无法|不能|尚|不成功|不奏效", output.public_narration)),
                 "本轮存在未成功的实际结果，反馈必须说明而不能省略："
@@ -476,7 +495,9 @@ def fallback_narration(
     unsettled = [f for f in results.get("current_result_facts", [])
                  if f["status"] in {"not_executed", "technical_failure", "failure"}]
     if medical or unsettled:
-        effects = list(dict.fromkeys([*medical, *(f["effect"] for f in unsettled)]))
+        from app.agents.results import describe_result
+
+        effects = list(dict.fromkeys([*medical, *(describe_result(f) for f in unsettled)]))
         return "\n".join(filter(None, [*interactions, *effects]))
     if interactions:
         return "\n".join(dict.fromkeys(interactions))
@@ -547,10 +568,11 @@ def fallback_narration(
         return "\n".join(brief["source_quotes"])
     if brief.get("attempt") and intent_type in {"observe", "investigate"}:
         subject = brief.get("observation_subject") or {}
-        known = subject.get("public_summary", "")
-        return "\n".join(filter(None, [known,
-            "本次查看尚未确认新的情况；目标的具体状况和阻碍仍需核实。",
-        ]))
+        scope = observation_request(brief["attempt"])
+        known = subject.get("public_summary", "") if subject.get("title", "") in scope else ""
+        feedback = ("这次还没查清“" + scope + "”，可以换个位置或方法继续查看。"
+                    if scope else "这次查看还没得到新的结果，可以换个位置或方法继续。")
+        return "\n".join(filter(None, [known, feedback]))
     if brief.get("responder", {}).get("kind") == "teammate" and not brief.get("attempt"):
         return "你向" + brief["responder"].get("name", "队友") + "说出了这番话。"
     topic = " ".join(str(brief.get(k, "")) for k in ("attempt", "question", "purpose"))

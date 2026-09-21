@@ -177,7 +177,7 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
         )
     expanded = []
     for request in requests:
-        pieces = list(re.finditer(r"[^。；;！？!?]+[。；;！？!?]?", request.text))
+        pieces = list(re.finditer(r"[^，,。；;！？!?]+[，,。；;！？!?]?", request.text))
         replacement = next((p for p in pieces[1:]
                             if not cancellation(p[0]) and requested_action_kinds(p[0])), None)
         if replacement and cancellation(request.text[:replacement.start()]):
@@ -294,9 +294,12 @@ def requests_for(plan, member_id):
 
 
 def cancellation(text):
+    # Stop scope is grammatical, not a list of task verbs. Matching the
+    # stopped task against existing keys happens separately below.
     return bool(re.search(
-        r"(?:不用|不必|别|不要|停止|取消|先不).{0,8}"
-        r"(?:找|查|看|检查|照顾|照看|处理|管|做)|算了|(?:全部|都)(?:停|别|不用)", text,
+        r"(?:^|[，,。；;])[^，,。；;！？!?“”\"]{0,24}?"
+        r"(?:不用|不必|不要|别|停止|取消|先不)(?!担心|害怕|紧张|客气)"
+        r"[^，,。；;！？!?]+|算了|(?:全部|都)(?:停|别|不用)", text,
     ))
 
 
@@ -308,6 +311,8 @@ def cancellation_keys(request, pending, name=""):
         return [r["key"] for r in tasks]
     positive = re.sub(r"不用|不必|不要|停止|取消|先不|别", "", text)
     operations = set(action_kinds(positive))
+    if operations & {"first_aid", "medicine"}:
+        operations.update({"first_aid", "medicine"})
     # Compare actual target words after removing the shared request grammar.
     def topics(value):
         if name:

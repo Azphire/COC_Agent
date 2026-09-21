@@ -65,6 +65,35 @@ def weapon_for(p, weapon_id):
     return weapon
 
 
+def treatment_restriction(state, target, operation):
+    """Current injury constraints shared by candidate planning and execution."""
+    if target.missing("treatment"):
+        return "治疗目标缺少HP、最大HP或CON"
+    if not (target.hp < target.hp_max or target.injury.stabilized):
+        return "目标不需要治疗"
+    if operation == "medicine":
+        if state.combat.active:
+            return "医学治疗至少一小时，请先结束战斗"
+        if target.injury.dying and not target.injury.stabilized:
+            return "濒死者须先急救稳定"
+        if target.injury.medicine_attempted:
+            return "此伤势已尝试医学治疗，不能反复掷骰"
+        if any(p.injury.dying and not p.injury.stabilized and not p.injury.dead
+               for p in state.combat.participants.values()):
+            return "先稳定所有濒死者，不能跳过一小时内的濒死检定"
+    else:
+        if target.injury.stabilized:
+            return "伤势已暂时稳定，接下来需要医学治疗"
+        if not target.injury.dying and target.injury.first_aid_attempted:
+            return "此伤势已尝试急救；后续需孤注裁定"
+        if not target.injury.dying and (
+            target.injury.last_damage_minute is None
+            or state.game_minute - target.injury.last_damage_minute > 60
+        ):
+            return "已超过急救的一小时窗口"
+    return None
+
+
 class CombatService:
     def __init__(self, agents):
         self.agents, self.rooms = agents, agents.rooms
@@ -538,41 +567,12 @@ class CombatService:
             )
             await self.module_basis(session, room, state, actor, action["bases"]["attack"])
         elif op in {"first_aid", "medicine"}:
-            require(not target.missing("treatment"), "治疗目标缺少HP、最大HP或CON", 422)
-            require(target.hp < target.hp_max or target.injury.stabilized, "目标不需要治疗", 422)
+            restriction = treatment_restriction(state, target, op)
+            require(not restriction, restriction or "", 422)
             if op == "medicine":
                 from app.rooms.resource_service import validate_time
 
                 validate_time(state, state.game_minute + 60, mode="clinical", treating=target.id)
-                require(not combat.active, "医学治疗至少一小时，请先结束战斗", 422)
-                require(
-                    not target.injury.dying or target.injury.stabilized, "濒死者须先急救稳定", 422
-                )
-                require(
-                    not target.injury.medicine_attempted, "此伤势已尝试医学治疗，不能反复掷骰", 422
-                )
-                require(
-                    not any(
-                        p.injury.dying and not p.injury.stabilized and not p.injury.dead
-                        for p in combat.participants.values()
-                    ),
-                    "先稳定所有濒死者，不能跳过一小时内的濒死检定",
-                    422,
-                )
-            else:
-                require(not target.injury.stabilized, "伤势已暂时稳定，接下来需要医学治疗", 422)
-                require(
-                    target.injury.dying or not target.injury.first_aid_attempted,
-                    "此伤势已尝试急救；后续需孤注裁定",
-                    422,
-                )
-                require(
-                    target.injury.dying
-                    or target.injury.last_damage_minute is not None
-                    and state.game_minute - target.injury.last_damage_minute <= 60,
-                    "已超过急救的一小时窗口",
-                    422,
-                )
             action["bases"]["treatment"] = self.roll_basis(
                 actor,
                 "first_aid" if op == "first_aid" else "medicine",

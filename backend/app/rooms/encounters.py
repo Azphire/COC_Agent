@@ -26,6 +26,29 @@ def interaction_revealed_consequence(runtime, facts, entity_id, source_seq):
     )
 
 
+def unconditional_reveal(effect):
+    """A prepared reveal trigger has already established this encounter."""
+    return (
+        effect.get("trigger") == "entity_revealed"
+        and effect.get("automation") == "automatic"
+        and not effect.get("condition")
+        and not effect.get("visibility_any_flags")
+        and effect.get("perception", "other") != "visual"
+    )
+
+
+def queued_automatic_reveal(effect, source, queue, member_id):
+    return unconditional_reveal(effect.model_dump()) and source.type == "entity.revealed" and any(
+        entry.get("status") == "approved"
+        and entry.get("origin") == "automatic"
+        and entry.get("source_event_seq") == source.seq
+        and entry.get("entity_id") == source.payload.get("entity_id", source.payload.get("id"))
+        and entry.get("effect_id") == effect.id
+        and member_id in entry.get("target_member_ids", [])
+        for entry in queue
+    )
+
+
 class EncounterService:
     def __init__(self, sanity):
         self.sanity, self.agents, self.rooms = sanity, sanity.agents, sanity.rooms
@@ -136,8 +159,12 @@ class EncounterService:
             .where(RoomEvent.room_id == room.id, RoomEvent.type == "entity.revealed")
             .order_by(RoomEvent.seq)
         ):
-            if event.payload.get("cycle_id") == cycle.id:
-                eid = event.payload.get("entity_id", event.payload.get("id"))
+            eid = event.payload.get("entity_id", event.payload.get("id"))
+            unresolved_automatic = any(
+                unconditional_reveal(e)
+                for e in facts.approved_entities.get(eid, {}).get("sanity_effects", [])
+            )
+            if event.payload.get("cycle_id") == cycle.id or unresolved_automatic:
                 # An executed local interaction can reveal its configured
                 # consequence in another source section (e.g. an ending).
                 # That actual receipt establishes the encounter's origin;
@@ -170,14 +197,37 @@ class EncounterService:
                 )
             ]
             for effect in effects:
+                # Recover an unsettled automatic reveal after a saved game or
+                # interrupted cycle. Conditional encounters still need a fresh
+                # observation; merely selecting a known target proves nothing.
+                if (
+                    trigger == "entity_revealed"
+                    and seq != cycle.state["triggering_event_seq"]
+                    and not unconditional_reveal(effect.model_dump())
+                ):
+                    source = await session.get(RoomEvent, (room.id, seq))
+                    if source and source.payload.get("cycle_id") != cycle.id:
+                        continue
                 if any(e["entity_id"] == eid and e["effect_id"] == effect.id for e in queue):
                     continue
                 if trigger == "action_target" and intent.type not in effect.action_types:
                     continue
-                prior = await self.previous(session, room, eid, effect.id, facts.actor_member_id)
+                revealed_automatic = trigger == "entity_revealed" and unconditional_reveal(
+                    effect.model_dump()
+                )
+                member_ids, slot_ids = [], []
+                if revealed_automatic and effect.audience == "party":
+                    for slot in await self.rooms.slots(session, room):
+                        if slot.member_id and not await self.previous(
+                            session, room, eid, effect.id, slot.member_id
+                        ):
+                            member_ids.append(slot.member_id)
+                            slot_ids.append(slot.id)
+                elif not await self.previous(session, room, eid, effect.id, facts.actor_member_id):
+                    member_ids, slot_ids = [facts.actor_member_id], [facts.actor_slot_id]
                 # A fresh action does not create a new encounter. Repeats require a
                 # separately confirmed host encounter, even under host_confirmed policy.
-                if prior:
+                if not member_ids:
                     continue
                 automatic = (
                     effect.automation == "automatic"
@@ -190,10 +240,12 @@ class EncounterService:
                         "entity_id": eid,
                         "effect_id": effect.id,
                         "source_event_seq": seq,
-                        "target_member_ids": [facts.actor_member_id],
-                        "slot_ids": [facts.actor_slot_id],
+                        "target_member_ids": member_ids,
+                        "slot_ids": slot_ids,
                         "trigger": trigger,
-                        "status": "kp_review"
+                        "status": "approved"
+                        if revealed_automatic
+                        else "kp_review"
                         if effect.kp_enabled
                         else "approved"
                         if automatic

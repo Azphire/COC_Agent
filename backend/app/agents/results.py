@@ -4,17 +4,41 @@ import re
 
 
 def result_facts(events):
-    facts, actors = [], {}
+    facts = []
+    actors = {e['payload'].get('cycle_id'): e.get('actor_member_id') for e in events
+              if e['type'] in {'action.submitted', 'agent.action_proposed'}}
+    originals = {e["seq"]: e for e in events}
     for event in events:
         p = event["payload"]
         cycle = p.get("cycle_id")
         if event["type"] in {"action.submitted", "agent.action_proposed"}:
             actors[cycle] = event.get("actor_member_id")
         if event["type"] == "action.result":
-            facts.extend({**f, "source_action_seq": f.get("source_event_seq"),
-                          "source_event_seq": event["seq"]}
-                         if f.get("status") in {"not_executed", "technical_failure"} else f
-                         for f in p.get("facts", []))
+            for saved in p.get("facts", []):
+                original = originals.get(saved.get("source_event_seq"), {})
+                source = original.get("payload", {})
+                if source.get("cycle_id") and source["cycle_id"] != cycle:
+                    source = {}
+                fact = {
+                    **saved,
+                    "cycle_id": saved.get("cycle_id") or cycle,
+                    "actor_id": saved.get("actor_id") or actors.get(cycle),
+                    "operated_items": saved.get("operated_items")
+                    or source.get("operated_items", []),
+                }
+                if fact.get("status") in {"not_executed", "technical_failure"}:
+                    fact["source_action_seq"] = fact.get(
+                        "source_action_seq", fact.get("source_event_seq")
+                    )
+                    fact["result_event_seq"] = event["seq"]
+                    fact["action_text"] = fact.get("action_text") or source.get("text", "")
+                    if (fact.get("target_name") and fact.get("action_text")
+                            and fact["target_name"] not in fact["action_text"]
+                            and not fact["operated_items"]):
+                        fact["reported_target_id"] = fact.get("target_id")
+                        fact["reported_target_name"] = fact["target_name"]
+                        fact["target_id"], fact["target_name"] = None, None
+                facts.append(fact)
             continue
         if event["type"] not in {
             "combat.resolved", "module.interaction", "check.resolved", "scene.updated",
@@ -48,16 +72,190 @@ def result_facts(events):
                 "effect": p.get("summary") or p.get("text") or p.get("display_text", ""),
                 "operated_items": p.get("operated_items", []),
                 "source_event_seq": event["seq"], "cycle_id": cycle,
+                **({"source_action_seq": p["source_event_seq"]}
+                   if p.get("source_event_seq") is not None else {}),
+                **{k: p[k] for k in ("action_target_id", "action_text") if k in p},
             })
-    return list({(f["source_event_seq"], f["operation"], f.get("target_id")): f
+    targets = {}
+    for fact in facts:
+        key = (fact["source_event_seq"], fact["operation"], fact.get("actor_id"),
+               item_identity(fact))
+        if fact.get("target_id"):
+            targets.setdefault(key, set()).add(fact["target_id"])
+    for fact in facts:
+        key = (fact["source_event_seq"], fact["operation"], fact.get("actor_id"),
+               item_identity(fact))
+        known = targets.get(key, set())
+        if not fact.get("target_id") and len(known) == 1:
+            fact["target_id"] = next(iter(known))
+    return list({(f["source_event_seq"], f["operation"], f.get("actor_id"),
+                  f.get("target_id"), item_identity(f)): f
                  for f in facts}.values())
+
+
+def item_identity(fact):
+    return tuple(sorted((i.get("instance_id") or i["id"])
+                        for i in fact.get("operated_items", [])))
+
+
+def quote_request(text):
+    return bool(re.search(r"复述|原话|原文|逐字|写着|写了|说过什么|说了什么", text))
+
+
+def question_operations(text):
+    from app.preparation.action_authority import VERBS
+
+    operations = {op for op, pattern in VERBS.items() if re.search(pattern, text, re.I)}
+    if "search" in operations:
+        # The object being sought is not an operation already performed on it:
+        # finding a switch/medical kit must not borrow lighting/treatment receipts.
+        return {"search"}
+    operations.update(op for op, pattern in EFFECTS.items() if re.search(pattern, text))
+    if MEDICAL_TOPIC.search(text) or "治疗" in text:
+        operations.update({"first_aid", "medicine"})
+    if re.search(r"灯|照明|亮度|开关", text):
+        operations.add("light")
+    if re.search(r"拿到|取得|取到|到手", text):
+        operations.add("take")
+    return operations - {"converse"}
+
+
+def search_question_subject(text):
+    """Extract the questioned search operand, independently of modeled entities."""
+    from app.preparation.action_authority import VERBS
+
+    if question_operations(text) != {"search"}:
+        return ""
+    if re.search(r"怎么|如何|经过|哪些|什么|原话|复述|历史|历次|每次", text):
+        return ""  # Historical accounts/quotations are not a yes/no operand check.
+    subject = re.sub(VERBS["search"], "", text, flags=re.I)
+    subject = re.sub(
+        r"刚才|之前|先前|这次|现在|目前|真的|已经|到底|究竟|有没有|是否|"
+        r"了没有|了吗|了么|了没|没有|成功|结果|什么|一下|那个|这个|我们|你们|"
+        r"我|你|还|到|了|吗|么|的|[，,。；;！？?\s]", "", subject,
+    )
+    return subject if len(subject) >= 2 else ""
+
+
+def matching_results(facts, text, *, actor_id=None):
+    """Match the questioned operand before recency; never borrow a nearby success."""
+    selected = list(facts)
+    operations = question_operations(text)
+    if operations:
+        selected = [f for f in selected if f["operation"] in operations]
+    if subject := search_question_subject(text):
+        selected = [f for f in selected if subject in " ".join(filter(None, [
+            f.get("target_name"), f.get("action_text"), f.get("effect"),
+            *[n for i in f.get("operated_items", []) for n in i.get("names", [])],
+        ]))]
+    named = [f for f in selected if any(n and n in text for n in [
+        f.get("target_name"), *[n for i in f.get("operated_items", []) for n in i.get("names", [])],
+    ])]
+    if named:
+        selected = named
+    elif any(f.get("action_text") for f in selected):
+        # Unmodeled requested objects keep their original words. A mistaken
+        # entity binding must not make the failed attempt disappear from recall.
+        from app.knowledge.text import tokens
+
+        words = set(tokens(text)) - set(tokens("我 刚才 现在 什么 怎么 成功 结果 一下"))
+        specific = [f for f in selected if words & set(tokens(f.get("action_text", "")))]
+        if specific:
+            selected = specific
+    elif not operations:
+        return []
+    if actor_id:
+        selected = [f for f in selected if f.get("actor_id") == actor_id]
+    # A history request can intentionally ask about an older state. Do not
+    # replace it with the current projection or the last receipt.
+    ordered = sorted(selected, key=lambda f: f.get("source_event_seq", 0))
+    if re.search(r"最初|第一次|起初|开场", text):
+        return ordered[:1]
+    if re.search(r"历史|先后|经过|每次|历次", text):
+        return ordered
+    if ordered and not named:
+        # Without a named operand, "did it work?" refers to the latest
+        # matching attempt, not every earlier device with the same operation.
+        latest = ordered[-1]
+        ordered = [f for f in ordered if (
+            f.get("cycle_id") == latest["cycle_id"] if latest.get("cycle_id")
+            else f.get("source_event_seq") == latest.get("source_event_seq"))]
+    latest = {}
+    for f in ordered:
+        latest[(f.get("actor_id"), f.get("target_id"), f["operation"], item_identity(f))] = f
+    return list(latest.values())
+
+
+def describe_result(fact):
+    labels = {"first_aid": "急救", "medicine": "治疗", "take": "取物", "light": "照明操作",
+              "throw": "投掷", "observe": "检查", "search": "搜索", "move": "移动",
+              "give": "交接", "open": "打开", "close": "关闭", "use": "使用"}
+    outcomes = {"success": "成功了", "failure": "没有成功", "not_executed": "没有执行成功",
+                "technical_failure": "还没有得到结果", "attempted": "尚未确认结果"}
+    target = fact.get("target_name") or ""
+    items = [next(iter(i.get("names", [])), "") for i in fact.get("operated_items", [])]
+    if any(items):
+        target = "、".join(filter(None, items))
+    prefix = f"对{target}的" if target else "这次"
+    if not target and fact.get("action_text"):
+        prefix = "刚才“" + fact["action_text"].strip("，,。；; ") + "”的"
+    answer = (
+        prefix
+        + labels.get(fact["operation"], "操作")
+        + outcomes.get(fact["status"], "尚无结果")
+        + "。"
+    )
+    if fact["status"] in {"success", "failure"} and fact.get("effect"):
+        answer += fact["effect"]
+    if fact["status"] == "not_executed" and fact["operation"] == "light":
+        answer += "目前还不能确认能控制这处照明，也没有因此改变灯光。可以先查看实际的开关或光源。"
+    return answer
+
+
+def answer_result_error(text, question, facts):
+    """Validate the answer against the questioned receipts, not other successes."""
+    selected = matching_results(facts, question)
+    if quote_request(question):
+        return None
+    if subject := search_question_subject(question):
+        relevant = [c for c in re.split(r"[。；;！？!?]", text) if subject in c]
+        if not relevant:
+            return "unrelated_result_target"
+        if not selected and not any(
+            re.search(r"没|未|尚|不确定|不能确认|不清楚|不知道", c)
+            and re.search(r"找到|找着|搜到|查到|确定|确认|位置|在哪|看见|见到|发现|结果", c)
+            for c in relevant
+        ):
+            return "unconfirmed_result:search"
+    if not selected:
+        return None
+    error = result_error(text, selected)
+    if error:
+        return error
+    if all(f["status"] == "not_executed" for f in selected) and not re.search(
+        r"没有(?:成功|执行|做成|操作|变化|改变|因此|拿到|取到|取得)|没能|还没|尚未|"
+        r"未(?:能|执行|成功|改变)|不能确认|没有变|没起作用|没生效|"
+        r"(?:和|跟).{0,8}(?:之前|刚才).{0,4}一样", text,
+    ):
+        return "missing_execution_status"
+    from app.knowledge.text import tokens
+
+    stop = set(tokens("我 你 我们 刚才 之前 现在 这次 已经 真正 到底 成功 结果 "
+                      "没有 是否 什么 怎么 一下 试着 拿到 取出 取物 操作"))
+    subjects = set(tokens(question)) & set(tokens(" ".join(
+        (f.get("target_name") or "") + " " + f.get("action_text", "")
+        + " " + " ".join(n for i in f.get("operated_items", []) for n in i.get("names", []))
+        for f in selected))) - stop
+    if subjects and not subjects & set(tokens(text)):
+        return "unrelated_result_target"
+    return None
 
 
 # Shared effect vocabulary, independent of speaker, voice or response mode.
 EFFECTS = {
     "first_aid": (r"止(?:住)?血|血止住|包扎(?:好|完)|伤口.{0,6}(?:处理好|稳定|不再流血)"
                   r"|出血.{0,6}(?:控制|停止|减缓|减轻|减少|缓解)"),
-    "take": r"拿到|取到|收好|取出|拿出|到手|握在.{0,6}手|放进.{0,6}口袋",
+    "take": r"拿到|取到|收好|取出|拿出|捡起|拾起|到手|握在.{0,6}手|放进.{0,6}口袋",
     "light": r"灯光.{0,6}(?:变暗|熄灭)|灯.{0,4}(?:关掉|关上|关闭|灭了)|关(?:掉|上|闭)了?.{0,6}灯",
     "throw": r"扔出|抛出|投出|引开|引走|撞击声",
     "observe": r"畅通|没有(?:明显的?)?(?:异常|障碍|危险)|没有被.{0,8}挡住|通道.{0,5}没问题",
@@ -78,6 +276,12 @@ def result_error(text, facts, *, actor_id=None, names=None, target_id=None, narr
     Ordinary feelings, plans and gestures are outside this check. Attempted
     operation names never prove success; unrelated successes cannot backfill it.
     """
+    lights = sorted((f for f in facts if f["operation"] == "light" and f["status"] == "success"),
+                    key=lambda f: f.get("source_event_seq", 0))
+    if lights and re.search(r"关|熄灭|变暗", lights[-1].get("effect", "")) and re.search(
+        r"(?:更|更容易|更加|能更).{0,8}(?:看清|清楚|观察)|视野.{0,6}(?:改善|清晰)", text,
+    ) and not re.search(r"适应|等|如果|未|没|不能|难以", text):
+        return "unconfirmed_result:visibility"
     medical_names = {f.get("target_name") for f in facts
                      if f.get("operation") in {"first_aid", "medicine"} and f.get("target_name")}
     medical_context = False
@@ -141,7 +345,8 @@ def result_error(text, facts, *, actor_id=None, names=None, target_id=None, narr
             ):
                 continue
             completed = bool(inherited) or re.search(
-                r"已经|已|成功|好了|完了|了(?!解|然)|到手|止住|变暗|熄灭|引开|引走", clause,
+                r"已经|已|成功|好了|完了|了(?!解|然)|到手|止住|变暗|熄灭|引开|引走|"
+                r"(?:看到|看见).{0,12}(?:捡起|拾起|拿到)", clause,
             )
             if not completed and not health_change and not scene_move and not (
                 operation == "observe" and (absence or re.search(pattern, clause))
@@ -185,27 +390,27 @@ def result_reply(facts, text, actor_id):
     This does not invent a strategy, attempt or outcome, and does not answer an
     unrelated question just because some previous operation has a receipt.
     """
-    operations = {op for op, pattern in EFFECTS.items() if re.search(pattern, text)}
-    if MEDICAL_TOPIC.search(text):
-        operations.update({"first_aid", "medicine"})
-    selected = [f for f in relevant_results(facts, actor_id=actor_id, text=text)
-                if f["operation"] in operations and f.get("effect")
-                and f.get("actor_id") == actor_id]
+    from app.memory.facts import readonly_recall
+
+    if not readonly_recall(text) and not (
+        question_operations(text) and re.search(r"吗|么|[?？]|怎样|怎么样|如何|是否|有没有", text)
+    ):
+        return "", []
+    selected = matching_results(
+        facts, text, actor_id=actor_id if re.search(r"你(?:刚才|之前|有没有)", text) else None
+    )
     if not selected:
         return "", []
-    labels = {"first_aid": "急救", "medicine": "治疗", "take": "取物", "light": "照明操作",
-              "throw": "投掷", "observe": "检查"}
-    outcomes = {"success": "成功了", "failure": "没有成功", "not_executed": "没有执行",
-                "technical_failure": "没能得到结果"}
-    selected = [f for f in selected if f["status"] in outcomes][-2:]
-    return "".join(f"刚才的{labels[f['operation']]}{outcomes[f['status']]}。"
-                   for f in selected), [f["source_event_seq"] for f in selected]
+    selected = selected[-2:]
+    return "".join(describe_result(f) for f in selected), [f["source_event_seq"] for f in selected]
 
 
 def relevant_results(facts, *, actor_id=None, target_id=None, operations=(), text="", limit=8):
     latest = {}
     for fact in facts:
-        latest[(fact.get("actor_id"), fact.get("target_id"), fact["operation"])] = fact
+        latest[
+            (fact.get("actor_id"), fact.get("target_id"), fact["operation"], item_identity(fact))
+        ] = fact
     return sorted(latest.values(), key=lambda f: (
         bool(text and f.get("target_name") and f["target_name"] in text)
         or bool(text and re.search(EFFECTS.get(f["operation"], r"(?!)"), text)),

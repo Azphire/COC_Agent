@@ -15,12 +15,16 @@ def recall_question(text):
     return bool(
         re.search(
             r"回顾|回想|复述|记得|记错|纠正|说错|不是.{0,30}而是|原文|原话|写(?:了|着|的).{0,16}(?:什么|啥)|"
+            r"(?:刚才|之前|先前|这次)[^。！？?]{1,40}了(?:吗|么|没有|没)(?:[？?]|$)|"
             r"(?:核对|确认|说明).{0,20}(?:目前|当前|现在)(?:的)?位置|"
             r"(?:刚才|之前|先前).{0,30}(?:完成|进入|通过|抵达|转场|交给|得到|拿到).{0,16}(?:了吗|了么|了没有|了没|[?？])|"
             r"(?:说过|讲过|告诉过|提到过).{0,40}(?:什么|哪|怎么)|"
             r"(?:现在|目前|当前).{0,10}(?:在哪|哪里|哪一|几号)|(?:是否|有没有).{0,6}已经(?:到达|通过)|"
             r"(?:现在|目前|当前).{0,16}(?:由谁|谁在|谁拿|谁持有|谁保管)|(?:在谁|由谁)(?:的)?(?:手里|手中|拿着|持有|保管)|"
             r"(?:实际|真实)(?:的)?(?:结果|状态).{0,12}(?:什么|如何|怎样|[?？])|"
+            r"(?:现在|目前|当前).{0,18}(?:怎样|怎么样|状态如何|做成了吗)|"
+            r"(?:灯|照明|伤口|伤势|包扎|治疗|工具箱|钥匙).{0,16}(?:真的|已经|究竟|到底).{0,16}(?:吗|没有|[?？])|"
+            r"(?:刚才|之前|这次).{0,35}(?:成功|做成|拿到|取到|扔出|关掉|暗下来|止住|完成).{0,8}(?:吗|没有|[?？])|"
             r"(?:现在|目前|当前).{0,12}(?:持有|拿着|带着|保管).{0,8}(?:什么|哪些|[?？])|"
             r"(?:照明|灯光|电源|开关).{0,8}(?:是否|有没有).{0,6}(?:开启|打开|关闭)|"
             r"(?:之前|此前|先前|刚才|当时|那时|当初|开场|最初|起初|起始|醒来时|刚醒来|一开始|最开始|早先|曾经).{0,80}(?:什么|啥|怎么|怎样|如何|哪|谁|是否|有没有|说|写|结果|办法|经过)|"
@@ -156,6 +160,22 @@ def fact_records(visible_events, entities=(), *, members=None):
                     base["action_event_seq"] = origin["seq"]
         elif kind == "npc.spoke":
             text, category = p.get("text", ""), "npc_statement"
+        elif kind == "action.result":
+            from app.agents.results import describe_result, result_facts
+
+            originals = [by_seq[f["source_event_seq"]] for f in p.get("facts", [])
+                         if f.get("source_event_seq") in by_seq]
+            for index, fact in enumerate(result_facts([
+                *cycle_actions.get(p.get("cycle_id"), []), *originals, e,
+            ])):
+                records.append({
+                    **base, "id": f"event:{e['seq']}:result:{index}", "kind": "result",
+                    "result_fact": fact, "text": describe_result(fact),
+                    "action_quote": fact.get("action_text", ""),
+                    "action_actor": member_names.get(fact.get("actor_id"), ""),
+                    "cycle_id": fact.get("cycle_id"),
+                })
+            continue
         elif kind in {"module.interaction", "combat.receipt", "combat.resolved", "check.resolved"}:
             text = p.get("text") or p.get("display_text") or p.get("summary", "")
             if kind == "check.resolved" and p.get("reason"):
@@ -212,6 +232,30 @@ def fact_records(visible_events, entities=(), *, members=None):
 
 def select_facts(events, entities, query, *, budget=1700, limit=6, members=None):
     records = fact_records(events, entities, members=members)
+    from app.agents.results import matching_results, quote_request, search_question_subject
+
+    if readonly_recall(query) and not quote_request(query) and (
+        subject := search_question_subject(query)
+    ):
+        records = [r for r in records if subject in r.get("text", "")
+                   or subject in r.get("action_quote", "")]
+
+    # Match action receipts before lexical ranking of long, unrelated prose.
+    receipt_records = [r for r in records if r.get("result_fact")]
+    named_actors = [mid for mid, name in (members or {}).items() if name and re.search(
+        re.escape(name) + r"(?:刚才|之前|先前|有没有|是否|已经|拿|取|扔|关|开|包扎)", query)]
+    matched = matching_results([r["result_fact"] for r in receipt_records], query,
+                               actor_id=named_actors[0] if len(named_actors) == 1 else None)
+    targeted = [r for r in receipt_records if r["result_fact"] in matched]
+    if targeted and readonly_recall(query) and not quote_request(query):
+        selected, used = [], 0
+        for record in sorted(targeted, key=lambda r: r["source_event_seq"], reverse=True):
+            size = len(json.dumps(record, ensure_ascii=False))
+            if used + size <= budget and len(selected) < limit:
+                selected.append(record)
+                used += size
+        if selected:
+            return sorted(selected, key=lambda r: r["source_event_seq"])
     speakers = {r.get("speaker") for r in records if r["kind"] == "npc_statement"}
     speakers.update(e.get("title") for e in entities if e.get("type") == "npc")
 
@@ -459,6 +503,24 @@ def render_facts(records, ids=()):
     return (
         "\n".join(dict.fromkeys(blocks)) or "没有检索到与这个问题对应的原始记录，不能确认具体内容。"
     )
+
+
+def answer_facts(records, question):
+    from app.agents.results import (
+        describe_result,
+        matching_results,
+        quote_request,
+        search_question_subject,
+    )
+
+    if quote_request(question):
+        return render_facts(records)
+    facts = matching_results([r["result_fact"] for r in records if r.get("result_fact")], question)
+    if facts:
+        return "".join(dict.fromkeys(describe_result(f) for f in facts))
+    if subject := search_question_subject(question):
+        return f"还没有确认找到{subject}。"
+    return render_facts(records)
 
 
 def bounded_facts(records, limit=6, text_budget=680):

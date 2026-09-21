@@ -242,6 +242,8 @@ class SanityService:
             )
         cycle = await self.agents.cycle(session, room.id, active=True)
         if run:
+            from app.rooms.encounters import queued_automatic_reveal
+
             require(
                 cycle
                 and cycle.id == run.cycle_id
@@ -252,6 +254,9 @@ class SanityService:
             require(
                 source.seq == cycle.state["triggering_event_seq"]
                 or source.payload.get("cycle_id") == cycle.id
+                or encounter and queued_automatic_reveal(
+                    effect, source, cycle.state.get("encounter_queue", []), member.id
+                )
                 or encounter
                 and any(
                     item.get("status") == "approved"

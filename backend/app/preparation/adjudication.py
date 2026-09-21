@@ -101,6 +101,8 @@ INSTRUCTION = (
     "declared_focus是本轮已解析的动作焦点，不要把照明等背景条件改成新的操作。"
     "当前行动依据由action_clause_ids对应的本轮原话生成；evidence_quotes补充已有事实，过去动作不能授权本次操作。"
     "options的authorized_action_clause_ids列出原话中授权此方法的动作段落，选择时应包含对应段落。"
+    "conversation_target_id非空表示正在向该NPC交谈；对应获授权问句可尝试converse社交方法，"
+    "仍须遵守原规则的检定和前置条件，不能借问句执行物品、医疗或其他身体操作。"
     "scene是服务器已确认的当前所在地，不要再次询问是否已经进入当前场景。"
     "潜行或靠近的尝试不要求玩家已经到达目标；check非空且required_facts为空时，"
     "不得额外要求距离或已完成靠近的证明，应按实际动作选择方法并等待真实检定。"
@@ -193,6 +195,7 @@ def decision_contract(context, candidates):
             authority["utterance"],
             [],
             state_verified=True,
+            conversation=bool(authority.get("conversation_target_id")),
         )
         rule = ModuleInteraction.model_validate(chosen["rule"])
         if not evidence or not selected_action_matches(authority, evidence[0], rule):
@@ -270,7 +273,8 @@ def repair_interaction_transition(plan, facts):
                 return
 
 
-def action_evidence(decision, clauses, raw_text, known_quotes, *, state_verified=False):
+def action_evidence(decision, clauses, raw_text, known_quotes, *, state_verified=False,
+                    conversation=False):
     """Resolve current-event clause IDs; model quotations only support extra facts."""
     positions = [i for i, c in enumerate(clauses) if c["id"] in decision.action_clause_ids]
     span = clauses[min(positions) : max(positions) + 1] if positions else []
@@ -284,7 +288,7 @@ def action_evidence(decision, clauses, raw_text, known_quotes, *, state_verified
         for q in decision.evidence_quotes
         if quote_text(q) and any(quote_text(q) in quote_text(text) for text in known_quotes)
     ]
-    if not action or action not in raw_text or not action_kinds(action):
+    if not action or action not in raw_text or not (conversation or action_kinds(action)):
         return None
     if len(supported) != len(decision.evidence_quotes) and not state_verified:
         return None
@@ -750,6 +754,7 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
             quotes[0],
             quotes,
             state_verified=state_verified_method(chosen["rule"]),
+            conversation=bool(context["action_authority"].get("conversation_target_id")),
         )
         if evidence:
             # Action capabilities and item identity are checked deterministically
@@ -775,6 +780,7 @@ async def adjudicate_prepared(runtime, state, plan_run_id):
                 quotes[0],
                 quotes,
                 state_verified=state_verified_method(chosen["rule"]),
+                conversation=bool(context["action_authority"].get("conversation_target_id")),
             )
             rule = ModuleInteraction.model_validate(chosen["rule"])
             data = load_state(room)

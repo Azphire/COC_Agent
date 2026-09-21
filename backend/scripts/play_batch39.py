@@ -12,7 +12,8 @@ from pathlib import Path
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[2]
-BASE = ROOT / "data/prepared/changan/batch-39"
+BASE = ROOT / os.environ.get("COC_PLAY_BASE", "data/prepared/changan/batch-39")
+PORT = int(os.environ.get("COC_PLAY_PORT", "8039"))
 # Protect the default application constructed at import as well as the active app.
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + (BASE / "bootstrap.db").as_posix()
 os.environ["CHECKPOINT_DB_PATH"] = str(BASE / "bootstrap-checkpoint.db")
@@ -21,13 +22,13 @@ os.environ["MODEL_SETTINGS_PATH"] = str(BASE / "bootstrap-model-settings.json")
 
 from scripts import audit_batch36, play_batch36, probe_batch36  # noqa: E402
 
-play_batch36.URL = "http://127.0.0.1:8039/api"
+play_batch36.URL = f"http://127.0.0.1:{PORT}/api"
 
 
 class Session(play_batch36.Session):
     def req(self, method, path, body=None, player=False):
         if method == "POST" and path == "/rooms":
-            body = {**body, "name": "第39批 常暗之厢 本地真实局"}
+            body = {**body, "name": getattr(self, "room_name", "第39批 常暗之厢 本地真实局")}
         return super().req(method, path, body, player)
 
     def poll(self):
@@ -77,7 +78,7 @@ def version(directory):
     path = directory / "code-version.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     for folder in ("scripts", "tests"):
-        for file in (ROOT / "backend" / folder).glob("*batch39*.py"):
+        for file in (ROOT / "backend" / folder).glob("*batch*.py"):
             data["files"][str(file.relative_to(ROOT))] = hashlib.sha256(
                 file.read_bytes()
             ).hexdigest()
@@ -106,7 +107,15 @@ def audit(directory):
 
     audit_quality(directory)
     path = directory / "session-full.md"
-    path.write_text(path.read_text(encoding="utf-8").replace("第36批", "第39批"), encoding="utf-8")
+    batch = "第40批" if "batch-40" in str(BASE) else "第39批"
+    transcript = path.read_text(encoding="utf-8").replace("第36批", batch)
+    binding_path = directory / "binding-verification.json"
+    if binding_path.exists():
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        title = binding.get("title")
+        if title:
+            transcript = transcript.replace("《常暗之厢》", f"《{title}》", 1)
+    path.write_text(transcript, encoding="utf-8")
     manifest = directory / "audit-manifest.json"
     data = json.loads(manifest.read_text(encoding="utf-8"))
     if not any(e["path"] == "interaction-metrics.json" for e in data):
@@ -164,7 +173,7 @@ def main():
         return
     directory.mkdir(parents=True, exist_ok=True)
     if args.command == "serve":
-        play_batch36.serve(directory, port=8039)
+        play_batch36.serve(directory, port=PORT)
         return
     if args.command == "version":
         version(directory)
@@ -176,7 +185,8 @@ def main():
     try:
         if args.command == "init":
             version(directory)
-            session.setup()
+            config = json.loads(Path(args.args[0]).read_text(encoding="utf-8")) if args.args else {}
+            session.setup(**config)
         elif args.command == "act":
             session.req(
                 "POST",

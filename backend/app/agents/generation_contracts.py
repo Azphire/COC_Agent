@@ -191,6 +191,10 @@ def generation_contract(schema, context):
             and re.search(r"检查|搜索|寻找|拿起|使用|交给", original)
             or declared_action(original)
             and action_kinds(original)
+            and (not teammate_request(
+                original, context.get("current_participants", {}).get("members", {}),
+                trigger.get("actor_member_id"),
+            ) or speaker_action(original))
         ):
 
             def keep_proposed_operation(value):
@@ -1231,6 +1235,10 @@ def restore_output(output, schema, context):
             raw, context.get("inventory_state", {}), trigger.get("actor_member_id")
         )
     if schema is KeeperPlan and (context.get("readonly_recall") or acknowledgement):
+        recipient = (value.get("focus") or {}).get("addressee_id")
+        people = context.get("current_participants", {}).get("members", {})
+        if not any(name and name in raw for name in people.values()):
+            recipient = None
         value["parsed_intent"].update(
             type="converse" if acknowledgement else "recall",
             target_id=None,
@@ -1243,10 +1251,11 @@ def restore_output(output, schema, context):
             proposed_transition_id=None,
             proposed_reveal_entity_ids=[],
             needs_clarification=False,
+            addressed_member_id=recipient,
         )
         value["focus"] = TurnFocus(
             question=context["triggering_action"]["payload"]["text"],
-            addressee_id=(value.get("focus") or {}).get("addressee_id"),
+            addressee_id=recipient,
             answer_basis="facts",
         ).model_dump()
     elif schema is KeeperPlan:
@@ -1287,7 +1296,15 @@ def restore_output(output, schema, context):
 
             raise ModelFormatError("未知公开依据", [{"field": "claim_ids", "code": "unknown_id"}])
         value["grounded_claims"] = [options[k] for k in dict.fromkeys(value["claim_ids"])]
-    if schema in {KeeperNarration, TeammateDecision} and context.get("readonly_recall"):
+    from app.agents.results import quote_request, search_question_subject
+
+    if schema in {KeeperNarration, TeammateDecision} and context.get("readonly_recall") and (
+        quote_request(context.get("triggering_action", {}).get("payload", {}).get("text", ""))
+        or not any(r.get("result_fact") for r in context.get("fact_evidence", []))
+        and not search_question_subject(
+            context.get("triggering_action", {}).get("payload", {}).get("text", "")
+        )
+    ):
         from app.memory.facts import render_facts
 
         evidence = context.get("fact_evidence", [])

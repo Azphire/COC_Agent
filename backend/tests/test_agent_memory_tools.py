@@ -180,6 +180,27 @@ def test_context_budget_includes_separators_and_repair_feedback(client, game):  
     client.portal.call(verify)
 
 
+def test_previous_npc_binding_cannot_disable_receipt_recall(client, game):  # noqa: F811
+    ok(submit(client, game, "刚才找到开关了吗？"))
+    assert wait_cycle(client, game)["status"] == "completed"
+    svc = client.app.state.agent_service
+
+    async def verify():
+        async with svc.rooms.database.sessions() as session:
+            room = await svc.rooms.room(session, game["room"]["id"])
+            binding = next(b for b in await svc.bindings(session, room.id)
+                           if b.member_id == room.host_member_id)
+            profile = await session.get(ProfileRecord, binding.profile_id)
+            cycle = await svc.cycle(session, room.id)
+            cycle.state = {**cycle.state, "dialogue_npc": {"id": "previous", "title": "旧交谈者"}}
+            context, _, _ = await build_context(
+                svc, session, room, binding, profile, cycle, phase="generate_keeper_narration",
+            )
+            assert context["readonly_recall"]
+
+    client.portal.call(verify)
+
+
 def test_tool_receipt_idempotency(client, game):  # noqa: F811
     ok(submit(client, game))
     assert wait_cycle(client, game)["status"] == "completed"

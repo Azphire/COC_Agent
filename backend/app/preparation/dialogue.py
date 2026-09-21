@@ -429,6 +429,17 @@ async def prepare_dialogue(runtime, state, run_id):
         if npc:
             entity = facts.approved_entities[npc["id"]]
             from app.agents.check_policy import entity_access
+            from app.memory.facts import readonly_recall
+
+            # A fresh request to this NPC may have a source-approved social
+            # gate. It is speech authority only; recalling an earlier answer
+            # must never create another roll or authorize a physical action.
+            if (plan.focus.question and not plan.focus.action
+                    and not readonly_recall(facts.raw_text)
+                    and any(r.get("kp_enabled") and "converse" in r.get("action_kinds", [])
+                            for r in entity.get("interactions", []))):
+                plan.focus.action = plan.focus.question
+                plan.focus.action_target_id = npc["id"]
 
             if (
                 prepared and npc["id"] not in facts.revealed_entity_ids

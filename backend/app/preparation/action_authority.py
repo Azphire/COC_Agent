@@ -12,7 +12,7 @@ VERBS = {
     "first_aid": (r"急救|包扎|止(?:一下|一止|住)?血|"
                   r"处理(?:一下)?(?:[^，。；！？,;.!?]{1,10}的)?伤口|"
                   r"(?:按|压)(?:住|紧)?[^，。；！？,;.!?]{0,8}伤口|\bfirst aid\b"),
-    "medicine": r"医学治疗|\bmedical treatment\b",
+    "medicine": r"(?:医学)?治疗|\bmedical treatment\b",
     "throw": r"扔|抛|投(?:出|向|掷)|掷|甩(?:出|向)|砸向|\bthrow\b|\btoss\b|\bhurl\b",
     "give": (
         r"交(?:还|回)?(?:给|到|出)|归还|还给|递(?:给|到|出)|转交|塞.{0,16}手里"
@@ -48,8 +48,17 @@ VERBS = {
     "close": r"关(?:门|上|闭)|拉上.{0,8}门|\bclose\b",
     "pass": r"通过|穿过|绕过|潜行|溜过|冲进|冲过|跳|悄悄.{0,8}走|\b(?:sneak|pass)\b",
     "carry": r"背(?:起|上|着|负)|抱起|扶起|\bcarry\b",
+    "support": (r"扶稳|靠稳|安置|扶住|(?:调整|变换|固定).{0,10}(?:姿势|体位)"
+                r"|(?:协助|帮助|帮).{0,8}稳定(?:身体|姿势)|(?:靠|倚).{0,8}(?:墙|座|椅|壁)"),
     "release": r"挣脱|挣开|摆脱|\bescape\b|\bbreak free\b",
-    "control": r"推(?!测|断|理|荐)|拉(?!杆)|加速|减速|停车|\b(?:push|pull|accelerate|stop)\b",
+    "control": (
+        r"(?:推|拉)(?:动|开|上|下|起|出|入|回|住|向|到|倒|紧|松|过|着|了|一)"
+        r"|(?:上|下|前|后|向外|向内|往外|往里)(?:推|拉)"
+        r"|(?:我(?:们)?(?:想|要|先|再|来)?|用力|使劲|试着|尝试|继续|轻轻|慢慢)"
+        r"(?:推|拉)(?!测|断|理|荐)"
+        r"|(?:把|将)[^，。；！？,;.!?]{1,16}(?:推|拉)(?=[，。；！？,;.!?]|$)"
+        r"|加速|减速|停车|\b(?:push|pull|accelerate|stop)\b"
+    ),
     "converse": r"问|告诉|说|询问|答|\b(?:ask|tell|say)\b",
     "use": r"使用|启用|激活|饮用|喝|吃|服用|\b(?:use|activate|drink|eat)\b",
     "settle": r"确认.{0,12}(?:结束|终幕|结算)|继续结算|结束调查",
@@ -57,7 +66,7 @@ VERBS = {
 }
 NON_ACTION = re.compile(
     r"是否|能否|可否|假如|如果|假设|建议|不如|要不要|(?:你|我们)(?:可以|应该)"
-    r"|不要|并未|尚未|不曾|没(?!关系|问题)|[?？]"
+    r"|不要|不用|不必|不敢|不愿|不想|先别|别再|停止|取消|并未|尚未|不曾|没(?!关系|问题)|[?？]"
     r"|\b(?:if|could you|would you|we could|we should|you should)\b",
     re.I,
 )
@@ -65,7 +74,11 @@ NON_ACTION = re.compile(
 
 def declared_action(text):
     """An actual inspection may contain an embedded question about its result."""
-    if re.search(r"假如|如果|假设|建议|不如|要不要|不要|并未|\bif\b", text, re.I):
+    if re.search(
+        r"假如|如果|假设|建议|不如|要不要|不要|不用|不必|先别|别再|停止|取消|并未|\bif\b",
+        text,
+        re.I,
+    ):
         return False
     return any(
         re.match(
@@ -184,14 +197,28 @@ def addressed_request_text(raw, name, members=None):
     return re.split(r"[，,]\s*我(?:们)?(?!是请|想请|希望你)", match[1], maxsplit=1)[0]
 
 
+def address_names(members):
+    """Accept an unambiguous given name as a salutation, never a shared prefix."""
+    candidates = {
+        mid: {name, re.split(r"[·•\s]", name)[0]} for mid, name in members.items()
+    }
+    patterns = {}
+    for mid, names in candidates.items():
+        unique = [n for n in sorted(names, key=len, reverse=True)
+                  if n and (n == members[mid] or len(n) >= 2)
+                  and sum(n in ns for ns in candidates.values()) == 1]
+        patterns[mid] = "(?:" + "|".join(map(re.escape, unique)) + ")" if unique else r"(?!)"
+    return patterns
+
+
 def addressed_spans(raw, members):
     """Explicit address boundaries, not a classifier of an utterance's meaning."""
     found = []
     quotes = [m.span() for m in re.finditer(r'“[^”]*”|‘[^’]*’|「[^」]*」|"[^"]*"', raw)]
-    for mid, name in members.items():
+    for mid, name_pattern in address_names(members).items():
         for match in re.finditer(
             r"(?:^|(?<=[，,。！？；;\n]))\s*(?:(?:我)?(?:请|让|叫|问|向|对))?"
-            + re.escape(name)
+            + name_pattern
             + r"(?:先生|女士)?"
             + r"(?=[，,:：、]|(?:帮|照看|照顾|检查|查看|观察|负责|去|来|说|问))",
             raw,
@@ -202,7 +229,7 @@ def addressed_spans(raw, members):
         # second salutation: "I crouch beside the guard and ask ...".
         for match in re.finditer(
             r"(?:^|(?<=[，,。！？；;\n]))\s*我(?:蹲在|站在|坐在|走到|来到|转向|看着|靠近)"
-            + re.escape(name)
+            + name_pattern
             + r"(?:旁边|身旁|面前)?(?:，?)(?:并|然后)?(?:询问|问|说|请教)[：:，,]?",
             raw,
         ):
@@ -219,7 +246,9 @@ def addressed_spans(raw, members):
         )
         if own:
             clause = re.split(r"[，,。！？；;]", raw[name_end + own.start():end])[0]
-            if re.search(r"(?:可以|能|该|要|怎么|如何).*(?:帮|做|配合)|做些?什么", clause):
+            if (NON_ACTION.search(clause) and not declared_action(clause)) or re.search(
+                r"(?:可以|能|该|要|怎么|如何).*(?:帮|做|配合)|做些?什么", clause
+            ):
                 own = None  # "我可以帮你做些什么？" remains addressed speech.
         if own:
             end = name_end + own.start()
@@ -316,11 +345,11 @@ def teammate_request(raw, members, actor, *, action=None):
     """A direct request is speech until the addressee submits their own event."""
     if action and action in raw and speaker_action(action):
         return None  # This selected action belongs to the speaker, even with a separate request.
-    for mid, name in members.items():
+    for mid, name_pattern in address_names(members).items():
         if mid == actor:
             continue
         addressed = re.search(
-            r"(?:^|[。！？；])\s*" + re.escape(name) + r"[，,:：]([^。！？；]*)", raw
+            r"(?:^|[。！？；])\s*" + name_pattern + r"[，,:：]([^。！？；]*)", raw
         )
         if addressed and re.search(r"[?？]|(?:请教|询问|想问)", raw[addressed.start() :]):
             # A salutation can precede background and several sentences before
@@ -330,14 +359,14 @@ def teammate_request(raw, members, actor, *, action=None):
             return mid
         if re.search(
             r"(?:^|[。！？；])\s*我(?:对|向)"
-            + re.escape(name)
+            + name_pattern
             + r"(?:说道?|表示)[：:]\s*(?:请|麻烦你|劳驾|你|把)",
             raw,
         ):
             return mid
         if re.search(
             r"(?:^|[。！？；])\s*"
-            + re.escape(name)
+            + name_pattern
             + r"[，,:：]\s*(?:(?:现在|这就|马上|接着|随后|先|再)\s*)*"
             + r"(?:请|你|帮|把|打开|关|拿|用|过来|来|麻烦你|劳驾|我(?:是|想)?请你|我希望你|"
             r"能不能|可不可以|能否|可否|可以|能)",
@@ -345,7 +374,7 @@ def teammate_request(raw, members, actor, *, action=None):
         ):
             return mid
         if re.search(
-            r"(?:请|让|叫)" + re.escape(name) + r".{0,8}(?:打开|关|拿|用|帮|检查|查看|搜索|观察)",
+            r"(?:请|让|叫)" + name_pattern + r".{0,8}(?:打开|关|拿|用|帮|检查|查看|搜索|观察)",
             raw,
         ):
             return mid
@@ -364,6 +393,16 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
     else:
         request = teammate_request(raw, members, actor, action=action)
     kinds = action_kinds(action) if action and action in raw and not request else []
+    from app.memory.facts import readonly_recall
+
+    conversation = bool(
+        action and action in raw and not request and plan.focus
+        and action == plan.focus.question and plan.focus.addressee_id == target
+        and entities.get(target, {}).get("type") == "npc"
+        and not readonly_recall(raw)
+    )
+    if conversation:
+        kinds = ["converse"]
     operative = "".join(f["text"] for f in operative_fragments(action))
     from app.preparation.inventory import validate_resource_claims
     from app.rooms.service import RoomError
@@ -413,6 +452,18 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
             eid for eid, entity in entities.items() if (entity.get("type") == "item" or eid in held)
             and any(mentions_alias(fragment["text"], name) for name in aliases(entity))
         }
+        if target in operands and target in held:
+            # "camera's light" is a component of the named held device, not
+            # a second standalone item that happens to share that word.
+            parents = aliases(entities[target])
+            for eid in list(operands - {target}):
+                mentions = [m for name in aliases(entities[eid]) if name
+                            for m in re.finditer(re.escape(name), fragment["text"])]
+                if mentions and all(any(
+                    re.search(re.escape(parent) + r"(?:上)?的$", fragment["text"][:m.start()])
+                    for parent in parents if parent
+                ) for m in mentions):
+                    operands.remove(eid)
         if operations and not operands and re.search(
             r"把它|将它|(?:把|将)(?:这|那)(?:个|件|些)(?:东西|物品)?|\b(?:it|them)\b",
             fragment["text"], re.I,
@@ -437,6 +488,7 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
         "utterance": raw,
         "clauses": [c.strip() for c in re.split(r"[，。；！？,;.!?\n]", raw) if c.strip()],
         "kinds": kinds,
+        "conversation_target_id": target if conversation else None,
         "resource_error": resource_error,
         "actual_fragments": fragments if kinds else [],
         "operation_item_ids": {op: sorted(ids) for op, ids in operation_items.items()},
@@ -499,6 +551,10 @@ def selected_action_matches(authority, selected, rule):
     if authority.get("resource_error") or operation_item_error(authority, rule):
         return False
     allowed = required_kinds(rule)
+    if (authority.get("conversation_target_id") and "converse" in allowed
+            and not rule.outcome and not rule.inventory_operation and not rule.use_effect
+            and not rule.encounter_operation and not rule.elapsed_minutes):
+        return bool(selected and selected in authority.get("action", ""))
     terminal = authority.get("terminal_confirmation", {})
     if (
         rule.outcome

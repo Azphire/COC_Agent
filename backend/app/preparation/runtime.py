@@ -489,6 +489,7 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
     from app.preparation.encounters import apply_encounter
     from app.preparation.inventory import apply_inventory
 
+    inventory_before = dict(state.module_runtime.inventory)
     await apply_inventory(agents, session, room, state, rule, args, actor, node, seq, matched)
     if passed:
         apply_encounter(state, rule, args, actor, node, seq)
@@ -644,7 +645,19 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
     operated_items = []
     for eid in sorted(operated_ids):
         item = await agents.entities.entity(session, room.id, eid)
-        operated_items.append({"id": eid, "names": [item.snapshot["title"],
+        candidates = {iid for inventory in (inventory_before, state.module_runtime.inventory)
+                      for iid, holder in inventory.items() if holder == actor
+                      and state.module_runtime.item_instances.get(iid, iid) == eid}
+        explicit = args.item_instance_id or (use_result or {}).get("item_instance_id")
+        instance = (
+            explicit
+            if explicit in candidates
+            else next(iter(candidates))
+            if len(candidates) == 1
+            else None
+        )
+        operated_items.append({"id": eid, "instance_id": instance,
+                               "names": [item.snapshot["title"],
                                                    *item.snapshot.get("aliases", [])]})
     if rule.encounter_operation == "sound_once" and not operated_items:
         import re
@@ -656,6 +669,15 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
         if worn:
             operated_items.append({"id": "worn:" + worn[0], "names": [worn[0]]})
     receipt["operated_items"] = operated_items
+    authority = (receipt.get("kp_ruling") or {}).get("action_authority", {})
+    executed = set(required_kinds(rule))
+    if authority:
+        executed &= set(authority.get("kinds", []))
+        receipt["action_target_id"] = authority.get("target_id")
+        receipt["action_text"] = receipt["kp_ruling"].get("selected_action_quote", "")
+    receipt["operations"] = (
+        ["search"] if rule.inventory_operation in {"initial", "recover"} else sorted(executed)
+    )
     if rule.encounter_operation == "sound_once" and operated_items:
         receipt["text"] = "实际投出的物品：" + "、".join(
             item["names"][0] for item in operated_items
@@ -675,8 +697,8 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             "target_id": args.entity_id,
             "target_name": entity.snapshot.get("title", ""),
             "operated_items": operated_items,
-            "operations": (["search"] if rule.inventory_operation in {"initial", "recover"}
-                           else sorted(required_kinds(rule))),
+            "operations": receipt["operations"],
+            **{k: receipt[k] for k in ("action_target_id", "action_text") if k in receipt},
             "passed": passed and (rule.check_passed if rule.check_name else True),
             "source_event_seq": seq,
             "cycle_id": cycle.id if cycle else None,

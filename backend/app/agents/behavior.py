@@ -85,6 +85,7 @@ class TeammateBehaviorPolicy:
         named_people=None,
         public_accounts=(),
         result_facts=(),
+        treatment_options=(),
     ):
         if information_request and decision.mode == "pass":
             return BehaviorRejection(accepted=False, reason="question_requires_answer_not_action")
@@ -96,8 +97,13 @@ class TeammateBehaviorPolicy:
         if decision.related_player_action_seq != action_seq:
             return BehaviorRejection(accepted=False, reason="unrelated_player_action")
         speech, action = decision.speech_text or "", decision.action_text or ""
-        from app.agents.results import result_error
+        from app.agents.results import answer_result_error, result_error
+        from app.memory.facts import readonly_recall
         items = (inventory_state or {}).get("known_items", [])
+        if readonly_recall(player_text) and speech:
+            error = answer_result_error(speech, player_text, result_facts)
+            if error:
+                return BehaviorRejection(accepted=False, reason=error)
 
         # A public scene may already name the injured person without revealing
         # their full NPC profile. Identity/presence is enough to attempt aid;
@@ -210,6 +216,11 @@ class TeammateBehaviorPolicy:
             promised = set(action_kinds(speech))
             if "search" in promised:
                 promised.add("observe")
+            if (explicit_action_request and requested_operations
+                    and not promised & set(requested_operations)
+                    and re.search(r"我(?:会|来|先|这就|马上)", speech)
+                    and not re.search(r"不|没|未|如果|等.+再|建议", speech)):
+                return BehaviorRejection(accepted=False, reason="accepted_task_needs_attempt")
             if (
                 re.search(r"(?:^|[，,。；;])\s*(?:好[的吧]?[,，。]?\s*)?我", speech)
                 and (
@@ -225,11 +236,13 @@ class TeammateBehaviorPolicy:
                 from app.preparation.action_authority import speaker_action
 
                 immediate = speaker_action(speech)
-                if immediate and not information_request and re.match(
+                if immediate and not information_request and (re.match(
                     r"我(?:现在|马上|立刻|这就|先|来|就|准备)?(?:过去|上前)?"
                     r"(?:给|为|替|帮|用|开始|进行|做|急救|包扎|按|压|检查|查看|看看|搜索|拿|取|掏|交)",
                     immediate,
-                ):
+                ) or explicit_action_request
+                        and not re.match(r"我(?:们)?(?:会|以后|将来)", immediate)
+                        and set(action_kinds(immediate)) & set(requested_operations or [])):
                     # The character already chose this immediate attempt; a
                     # wrong response-mode label must not swallow it. It goes
                     # through the normal queued cycle, never straight to success.
@@ -422,15 +435,14 @@ class TeammateBehaviorPolicy:
                 validate_resource_claims(output_text(decision), inventory_state)
             except RoomError:
                 return BehaviorRejection(accepted=False, reason="item_not_held")
-        if inventory_state is not None and not (
-            decision.mode == "speak" and readonly_recall(player_text)
-        ):
+        if inventory_state is not None:
+            from app.preparation.dialogue import current_item_statements
             from app.preparation.inventory import bind_item_prose
             from app.rooms.service import RoomError
 
             try:
                 decision.item_instance_ids = bind_item_prose(
-                    output_text(decision), inventory_state, actor_id
+                    current_item_statements(output_text(decision)), inventory_state, actor_id
                 )
             except RoomError:
                 return BehaviorRejection(accepted=False, reason="item_not_held")
@@ -468,6 +480,21 @@ class TeammateBehaviorPolicy:
         if information_request and decision.mode != "speak":
             return BehaviorRejection(accepted=False, reason="question_requires_answer_not_action")
         text = output_text(decision)
+        if decision.mode in {"act", "assist"}:
+            from app.preparation.action_authority import action_kinds
+
+            operations = set(action_kinds(decision.action_text or ""))
+            for option in treatment_options:
+                if option["operation"] not in operations or not option.get("restriction"):
+                    continue
+                if (
+                    decision.target_id == option["target_id"]
+                    or option.get("target_name")
+                    and option["target_name"] in (decision.action_text or "")
+                    or not decision.target_id
+                    and len({o["target_id"] for o in treatment_options}) == 1
+                ):
+                    return BehaviorRejection(accepted=False, reason="treatment_not_available")
         if normalized(text) in {"继续调查", "四周很安静", "四周安静下来"}:
             return BehaviorRejection(accepted=False, reason="empty_template", repetition_score=1)
         recent = recent_outputs[-3:]

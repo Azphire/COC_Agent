@@ -17,6 +17,23 @@ from app.agents.model import FakeModelAdapter
 from app.preparation.turn_focus import repair_attribution
 
 
+def test_prepared_entities_without_optional_checks_can_start_a_turn(
+    client, running_navigation, monkeypatch,  # noqa: F811
+):
+    from test_module_navigation_runtime import act
+
+    service = client.app.state.agent_service
+    original = service.entities.host
+
+    async def without_optional_checks(*args, **kwargs):
+        return [{k: v for k, v in e.items() if k != "suggested_checks"}
+                for e in await original(*args, **kwargs)]
+
+    monkeypatch.setattr(service.entities, "host", without_optional_checks)
+    service.model.adapter = FakeModelAdapter(responder=responder)
+    assert act(client, running_navigation, "我看看四周。")['status'] == 'completed'
+
+
 @pytest.mark.parametrize("text,kind", [
     ("咱们别走散了。", "question"), ("先找人吧。", "question"),
     ("咱们先去找人吧。", "delegate"),

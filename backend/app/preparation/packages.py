@@ -382,7 +382,11 @@ class PackageService:
                                 "source_hash": source.source_hash,
                                 "source_title": source.title,
                                 "physical_page": page,
-                                "page_kind": "word",
+                                "page_kind": "pdf" if source.mime_type == "application/pdf"
+                                or source.files and all(
+                                    f.get("type", "").lstrip(".") == "pdf" for f in source.files
+                                )
+                                else "word" if "word" in source.mime_type else "text",
                             }
                             for page in fields.source_pages
                         ],

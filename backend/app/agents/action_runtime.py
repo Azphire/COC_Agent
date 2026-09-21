@@ -92,7 +92,7 @@ NARRATION_INSTRUCTION = (
     "历史事实保留范围限定，不能写成人物此刻在场。普通语气、停顿、非关键小动作可自由写。"
     "不输出内部ID、工具术语、规则未发生的结果；needs_host_ruling通常false。"
     "inventory_state为空库存时，不得叙述持有、交出或使用手机、手电等道具。"
-    "readonly_recall为true时，fact_ids可排列fact_evidence原始片段，原文由服务端呈现。"
+    "readonly_recall只限制副作用。复述原话时fact_ids保留原文；问结果或现状时依据result_fact直接自然回答，不能堆旧记录。"
     "用自然叙述解释真实结果：成功要回答本次任务具体得知或做成什么；失败写未能确认的内容或已结算后果。"
     "本轮必须在public_narration或npc_speech写实际回应；claim_ids只提供依据，不能代替回应或复播旧描写。"
     "已公开文字可以直接读，不再叫骰。visit_kind=revisit时按现状描述回到此地，不复述醒来的开场。"
@@ -111,6 +111,8 @@ NARRATION_INSTRUCTION = (
     "伤害原因、关键物件位置与内部物品、路线和设备效果必须有对应来源；缺少依据就具体说明不知道什么。"
     "旧即兴只保持语气和小动作，不用来推导这些关键关系。允许有依据的有限判断，但必须表明是推测。"
     "观察不要求修改状态；根据目标公开外观、可读说明和本次结果具体回应，未确认新内容时说明哪部分仍不清楚。"
+    "反馈逐项围绕attempt的实际目标；携带道具和光照只是观察条件，不能用它们的状态代替目标的调查结果。"
+    "资料未记载某设施不等于它在世界中不存在；关键设施、线索、通路及其效果须有实际合法发现或操作回执。"
     "ordinary_observation为true时，必须回答具体看到了什么：普通杂物可补充材质、外观、摆放，"
     "并记入incidental_details供后续指代；不能仅写你试图看、蹲下检查或光线照着物品。"
     "blocked_operations时描述眼前可感知的障碍与可尝试方向，不宣称通过或要求批准正常行动。"
@@ -131,7 +133,7 @@ TEAMMATE_INSTRUCTION = (
     "item_holders是实际持有者，public_state.completed_interactions是已完成的公开结果。"
     "inventory_state明确当前持有物与起始检定结果，空held就是未持有，不是资料遗漏。"
     "只有实际持有的实例可提出具体使用或交出；没有道具可寻找，不能先说自己正使用。"
-    "readonly_recall为true时只回答问题，fact_ids排列原始事实片段，不自行检查背包或申请新骰。"
+    "readonly_recall为true时只回答当前问题，不自行检查背包或申请新骰；只有要求原话才复述，结果追问须自然解释对应回执。"
     "self_identity明确你本人，不要向自己提问或称呼自己。recent_action_results是你最近尝试的实际结果。"
     "short_term_goal是你的角色意图，可根据性格与能力提出，不必逐字抄资料；不能把推测写成事实。"
     "根据结果用goal_status完成、调整或放弃旧目标，避免长期只说守着或看看能帮什么。"
@@ -147,7 +149,7 @@ TEAMMATE_INSTRUCTION = (
     "治疗、给药、取物、发现只写尝试，等KP结算；不能提前说已经包扎好、药起效或找到了东西。"
     "result_facts是带来源的实际结果，failure失败、not_executed未执行、technical_failure技术失败；"
     "operations只是尝试范围。按执行者、目标和操作分别判断，不用另一项成功背书。"
-    "失败后结合自己的能力、已有资源和风险选择不同办法或合理沉默；不能重试刷骰。"
+    "treatment_options是当前伤势实际可执行条件，restriction非空的治疗不能再次排队；变化后以新条件为准。失败后结合能力、性格、资源和风险具体安置、协助、观察、换办法或提醒撤离，也可沉默。"
 )
 
 
@@ -433,7 +435,9 @@ def planning_prompt(context):
                     or t.get("id") not in result.get("current_participants", {}).get("members", {})
                 ]
         result["approved_exits"] = [
-            {k: v for k, v in route.items() if v not in (None, "", [], {})}
+            {k: (v[:60] if k == "target_description" else v) for k, v in route.items()
+             if v not in (None, "", [], {}) and k != "target_scene_node_id"
+             and not (k == "is_previous_scene" and v is False)}
             for route in result.get("approved_exits", [])
         ]
         result["module_interactions"] = [
@@ -450,6 +454,10 @@ def planning_prompt(context):
             {k: v for k, v in entry.items() if k != "kind" or v != "fact"}
             for entry in result.get("response_fact_candidates", [])
         ]
+        described = {e["id"] for e in result["response_fact_candidates"] if e.get("title")}
+        result["current_targets"] = [
+            e for e in result.get("current_targets", []) if e["id"] not in described
+        ]  # The same entity identity/title/scope is already in the fact candidates.
     if result.get("triggering_action", {}).get("type") == "agent.action_proposed":
         # Teammate attempts are local; they cannot choose a party transition.
         result.pop("approved_exits", None)
@@ -677,11 +685,53 @@ def generation_prompt(context, schema):
         for holder in inventory["holders"]:
             if holder.get("holder_name") == names.get(holder.get("holder_id")):
                 holder.pop("holder_name", None)
+            if holder.get("remaining_uses") is None:
+                holder.pop("remaining_uses", None)
+        held_titles = {
+            h["item_id"]: h.get("title") for h in inventory["holders"] if h.get("item_id")
+        }
+        inventory["known_items"] = [
+            {**item, "names": list(dict.fromkeys(item.get("names", [])))}
+            for item in inventory.get("known_items", [])
+            if not item.get("names") or set(item["names"]) != {held_titles.get(item["id"])}
+        ]  # Preserve additional aliases; plain held titles already have item/instance IDs.
+        if schema is TeammateDecision:
+            result["public_entities"] = [
+                e for e in result.get("public_entities", [])
+                if not (e.get("type") == "item" and e.get("id") in held_titles
+                        and e.get("public_summary") == held_titles[e["id"]])
+            ]  # Extra item descriptions/conditions remain; plain titles are in holders.
     brief = result.get("response_brief", {})
     if brief.get("completed_results") == result.get("public_tool_results"):
         brief.pop("completed_results", None)
     if brief.get("result_facts") == result.get("public_tool_results", {}).get("result_facts"):
         brief.pop("result_facts", None)
+    if schema is KeeperNarration:
+        # The durable receipts are complete. The narrator needs each receipt
+        # once, with its source and current-cycle marker, not three copies of
+        # the same item instance and effect in nested result envelopes.
+        receipts = result.get("public_tool_results", {})
+        current = receipts.pop("current_result_facts", [])
+        if context.get("narration_current_receipts_only"):
+            if context.get("readonly_recall"):
+                from app.agents.results import matching_results
+
+                receipts["result_facts"] = matching_results(
+                    receipts.get("result_facts", []),
+                    context.get("triggering_action", {}).get("payload", {}).get("text", ""),
+                )
+            else:
+                receipts["result_facts"] = current
+        for fact in receipts.get("result_facts", []):
+            fact["current"] = fact in current
+        sources = {f.get("source_event_seq") for f in receipts.get("result_facts", [])}
+        receipts["events"] = [
+            {"seq": e["seq"], "type": e["type"], "payload": {}}
+            if e.get("seq") in sources and e["type"] == "module.interaction" else e
+            for e in receipts.get("events", [])
+        ]
+        if brief.get("result_facts") == current:
+            brief.pop("result_facts", None)
     if schema is KeeperNarration and not context.get("readonly_recall"):
         # The same IDs and statements already occur in brief.allowed_facts.
         # Keep the complete claim/provenance objects on the run for validation.
@@ -750,7 +800,7 @@ def generation_prompt(context, schema):
         result["current_task"]["settled_feedback"] = [
             e["payload"].get("public_summary") or e["payload"].get("text")
             for e in result.get("public_tool_results", {}).get("events", [])
-            if e["type"] in {"entity.revealed", "module.interaction"}
+            if e["type"] == "entity.revealed"
         ]
     return result
 
@@ -1092,6 +1142,25 @@ class ActionRuntimeMixin:
                 from app.preparation.inventory import inventory_context
 
                 public_inventory = await inventory_context(self.service, session, room, "")
+                from app.rooms.combat_service import load_state, treatment_restriction
+
+                treatment_state = load_state(room)
+                visible_patients = public_ids | {
+                    p["id"]
+                    for p in public_inventory.get("other_actors", [])
+                    if p.get("fact_scope") == "current_scene"
+                }
+                treatment_options = [
+                    {
+                        "target_id": p.npc_id or p.member_id or p.id,
+                        "target_name": p.label,
+                        "operation": op,
+                        "restriction": treatment_restriction(treatment_state, p, op),
+                    }
+                    for p in treatment_state.combat.participants.values()
+                    if {p.id, p.npc_id, p.member_id} & visible_patients
+                    for op in ("first_aid", "medicine")
+                ]
                 safe_goal_material = " ".join(
                     [
                         profile.document.get("goals", ""),
@@ -1109,6 +1178,7 @@ class ActionRuntimeMixin:
                 else "",
                 "player_own_attempt": parent_plan.focus.action if parent_plan.focus else "",
                 "behavior_state": behavior.model_dump(mode="json"),
+                "treatment_options": treatment_options,
                 "recent_outputs": recent,
                 "other_teammate_outputs": others,
                 "self_identity": {
@@ -1246,6 +1316,7 @@ class ActionRuntimeMixin:
                         named_people=named_people,
                         public_accounts=additions["public_accounts"],
                         result_facts=additions["result_facts"],
+                        treatment_options=treatment_options,
                     )
                     rejections.append(rejected)
                     if rejected.accepted:
@@ -1259,6 +1330,12 @@ class ActionRuntimeMixin:
                             "technical_failure没有得到结果；不存在成功回执就不能说已经成功或有所改善。"
                             "直接回答当前问题，保留其余有效判断和建议。若mode为act/assist，"
                             "action_text只写当前尝试，其结果留给后续KP结算。"
+                        )
+                    elif rejected.reason == "treatment_not_available":
+                        additions["behavior_repair"] = (
+                            "treatment_options来自当前伤势的实际规则校验，不能重复排队被禁止的治疗。"
+                            "按你的职业、性格、资源与现场风险，选择具体的安置、协助、观察、换办法、"
+                            "提醒撤离或暂时不行动；不能声称伤势改善，也不必每次发言。"
                         )
                     elif rejected.reason == "question_requires_answer_not_action":
                         additions["behavior_repair"] = (
@@ -1317,8 +1394,9 @@ class ActionRuntimeMixin:
                             + "。选择协助必须实际尝试请求的操作；不愿执行则用speak明确回应，"
                             "不能只复述物品现状或另提无关用途。"
                             "明确对你提出的请求不能用pass跳过；可以明确拒绝，但要回应。"
-                            "若你决定接受检查或治疗，用act/assist并填写action_text具体当前尝试，"
-                            "不能只用speak承诺我先检查。尚未执行，不能写成功结果。"
+                            "若你接受请求中的新动作，用act/assist并填写action_text，说明你对谁、"
+                            "用身体或手边资源具体做什么；取消的旧任务不得恢复。"
+                            "不能只用speak承诺会协助或保持稳定。尚未执行，不能写成功结果。"
                         )
                     additions["recent_output_summary"] = [
                         *recent,
@@ -1639,11 +1717,7 @@ class ActionRuntimeMixin:
             from app.memory.facts import readonly_recall
 
             own_request = "\n".join(r["text"] for r in context["addressed_requests"])
-            import re
-
-            context["readonly_recall"] = readonly_recall(own_request) and bool(
-                re.search(r"原话|逐字|复述|回顾|记录", own_request)
-            )
+            context["readonly_recall"] = readonly_recall(own_request)
 
         async def prepare(session, room):
             run = await session.get(AgentRun, run_id)
@@ -1925,7 +1999,6 @@ class ActionRuntimeMixin:
                                    "dialogue_npc": None, "dialogue_fact_ids": [],
                                    "dialogue_available_facts": []}
                 if cycle.state.get("dialogue_npc"):
-                    context["readonly_recall"] = False
                     npc = cycle.state["dialogue_npc"]
                     context["public_entities"] = [
                         e for e in context.get("public_entities", []) if e["id"] != npc["id"]
@@ -2268,6 +2341,11 @@ class ActionRuntimeMixin:
                     while brief.get(key) and context_size() > budget:
                         brief[key] = brief[key][1:]
                 run.context = {**run.context, "response_brief": brief}
+                # Older receipts remain in the validator/ledger. When space is
+                # tight, project only the current action (or the questioned
+                # historical receipt); never trim the actual current result.
+                if context_size() > budget:
+                    run.context = {**run.context, "narration_current_receipts_only": True}
             if schema is KeeperPlan and context_size() > budget:
                 # Search/method/exit identifiers are added after scene selection.
                 # Allocate prose again against this final measured envelope.
@@ -3121,6 +3199,16 @@ class ActionRuntimeMixin:
                 "combat.resolved",
             }
         ]
+        # Build receipts from the permission-filtered original events, before
+        # projecting prose/check material for the model's context budget.
+        from app.agents.results import result_facts
+
+        current = result_facts([e for e in events if e.get("visibility") == "public"
+                                and not (e["type"] == "action.result"
+                                         and e["payload"].get("cycle_id") == cycle.id)])
+        current = [f for f in current if f.get("cycle_id") == cycle.id]
+        for fact in current:
+            fact["actor_id"] = fact.get("actor_id") or cycle.state["triggering_member_id"]
         selected = [
             {
                 "seq": e["seq"],
@@ -3169,7 +3257,8 @@ class ActionRuntimeMixin:
                 event["payload"]["actor_id"] = cycle.state["triggering_member_id"]
             event["payload"].update({k: payload[k] for k in (
                 "actor_id", "target_id", "target_name", "operation", "operations", "summary",
-                "rolls", "treatment", "passed", "source_event_seq",
+                "rolls", "treatment", "passed", "source_event_seq", "cycle_id", "operated_items",
+                "action_target_id", "action_text",
             ) if k in payload})
             if event["type"] == "clue.revealed":
                 payload = event["payload"]
@@ -3206,7 +3295,6 @@ class ActionRuntimeMixin:
         from app.agents.results import relevant_results, result_facts
         from app.preparation.action_authority import action_kinds
 
-        current = result_facts(selected)
         for fact in current:
             if fact["operation"] == "move":
                 fact["target_id"] = fact.get("target_id") or target
@@ -3216,29 +3304,81 @@ class ActionRuntimeMixin:
         if plan.parsed_intent.type == "move":
             operations = [*operations, "move"]
         for operation in operations:
-            if operation in {"converse", "observe", "search", "rest"} or any(
-                f["operation"] == operation for f in current
-            ):
+            if operation in {"converse", "observe", "search", "rest", "support"}:
                 continue
-            current.append({
-                "actor_id": cycle.state["triggering_member_id"], "target_id": target,
-                "target_name": plan.action_authority.get("route", {}).get("target_public_title")
-                if operation == "move" else next(
-                    (e.get("title") for e in public_entities if e["id"] == target), None,
-                ),
-                "operation": operation,
-                "status": "technical_failure" if any(r.get("ok") is False
-                                                       for r in latest_results.values())
-                else "not_executed",
-                "effect": next((r.get("reason", "") for r in relevant_rejected), "")
-                or plan.action_authority.get("rejection_message") or "本次操作没有实际结算。",
-                "source_event_seq": cycle.state["triggering_event_seq"], "cycle_id": cycle.id,
-            })
+            authority = plan.action_authority
+            operands = authority.get("operation_item_ids", {}).get(operation, [])
+            settled = [f for f in current if f["operation"] == operation
+                       and f.get("actor_id") == cycle.state["triggering_member_id"]]
+            if operands:
+                operands = [eid for eid in operands if not any(
+                    eid in {f.get("target_id"), *(i["id"] for i in f.get("operated_items", []))}
+                    for f in settled)]
+                if not operands:
+                    continue
+            elif any(f.get("target_id") in {None, target} or (
+                f.get("action_target_id") == target
+                and f.get("source_action_seq") == cycle.state["triggering_event_seq"]
+            ) for f in settled):
+                continue
+            elif operation == "pass" and authority.get("route") and settled and any(
+                f["operation"] == "move" and f["status"] == "success"
+                and f.get("target_id") == authority["route"].get("target_scene_node_id")
+                for f in current
+            ):
+                # Legacy route methods named their scene container. The actual
+                # destination receipt proves this route completed; no item or
+                # different destination can borrow that settlement.
+                continue
+            fragments = [f for f in authority.get("actual_fragments", [])
+                         if operation in f.get("operations", [])]
+            action_text = "".join(f["text"] for f in fragments) or authority.get("action", "")
+            actual_target = operands[0] if len(operands) == 1 else target
+            target_entity = next((e for e in public_entities if e["id"] == actual_target), {})
+            if not target_entity:
+                actual_target = None
+            # The model's selected entity can be unrelated to the requested
+            # object. In that case preserve the original attempt, not its label.
+            target_name = target_entity.get("title")
+            if target_name and action_text and not any(
+                n in action_text for n in [target_name, *target_entity.get("aliases", [])] if n
+            ) and operation in {"take", "throw", "light", "give", "use"}:
+                actual_target, target_name = None, None
+            current.append(
+                {
+                    "actor_id": cycle.state["triggering_member_id"],
+                    "target_id": actual_target,
+                    "target_name": plan.action_authority.get("route", {}).get("target_public_title")
+                    if operation == "move"
+                    else target_name,
+                    "action_text": action_text,
+                    "operated_items": [
+                        {
+                            "id": eid,
+                            "instance_id": authority.get("item_instances", {}).get(eid),
+                            "names": [e["title"]],
+                        }
+                        for eid in operands
+                        for e in public_entities
+                        if e["id"] == eid
+                    ],
+                    "operation": operation,
+                    "status": "technical_failure"
+                    if any(r.get("ok") is False for r in latest_results.values())
+                    else "not_executed",
+                    "effect": next((r.get("reason", "") for r in relevant_rejected), "")
+                    or plan.action_authority.get("rejection_message")
+                    or "本次操作没有实际结算。",
+                    "source_event_seq": cycle.state["triggering_event_seq"],
+                    "cycle_id": cycle.id,
+                }
+            )
         return {
             "events": selected,
             "current_result_facts": current,
             "result_facts": relevant_results(
-                [*result_facts(events), *current], target_id=target, operations=operations,
+                [*result_facts([e for e in events if e.get("visibility") == "public"]), *current],
+                target_id=target, operations=operations,
             ),
             # Rejected proposals never ran, so they are absent from failed_tools.
             # Their absence must not license the narrator to supply a discovery.
@@ -3332,6 +3472,27 @@ class ActionRuntimeMixin:
             )
         brief = run.context.get("response_brief", {})
         current_text = run.context.get("triggering_action", {}).get("payload", {}).get("text", "")
+        if run.context.get("readonly_recall"):
+            from app.agents.results import (
+                answer_result_error,
+                matching_results,
+                quote_request,
+                search_question_subject,
+            )
+
+            queried = matching_results(
+                [
+                    r["result_fact"]
+                    for r in run.context.get("fact_evidence", [])
+                    if r.get("result_fact")
+                ],
+                current_text,
+            )
+            if (
+                queried or search_question_subject(current_text)
+            ) and not quote_request(current_text):
+                require(not answer_result_error(text, current_text, queried),
+                        "请直接回答当前问题对应的行动结果，不能用无关旧记录代替或改写成败", 422)
         if not run.context.get("readonly_recall"):
             for dialogue in brief.get("recent_dialogue", []):
                 if dialogue.get("type") != "action.submitted":
@@ -3350,7 +3511,14 @@ class ActionRuntimeMixin:
         )
 
         inventory = await inventory_context(self.service, session, room, text)
-        validate_resource_claims(text, inventory)
+        from app.preparation.dialogue import current_item_statements
+
+        current_prose = current_item_statements(text)
+        validate_resource_claims(current_prose, inventory)
+        validate_item_locations(current_prose, inventory)
+        if run.context.get("readonly_recall"):
+            bind_item_prose(current_prose, inventory,
+                            run.context.get("triggering_action", {}).get("actor_member_id"))
         if not run.context.get("readonly_recall"):
             validate_item_locations(output.public_narration, inventory)
             bind_item_prose(
@@ -3749,9 +3917,12 @@ class ActionRuntimeMixin:
 
             async def fallback_text():
                 if run.context.get("readonly_recall"):
-                    from app.memory.facts import render_facts
+                    from app.memory.facts import answer_facts
 
-                    return render_facts(run.context.get("fact_evidence", []))
+                    return answer_facts(
+                        run.context.get("fact_evidence", []),
+                        run.context.get("triggering_action", {}).get("payload", {}).get("text", ""),
+                    )
                 if doc.plan.parsed_intent.type == "recall":
                     from app.knowledge.service import KnowledgeContextBuilder
                     from app.module_ir.facts import SCOPE_PREFIXES

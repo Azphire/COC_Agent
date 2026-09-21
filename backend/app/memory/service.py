@@ -273,7 +273,9 @@ async def build_context(
         "phase": phase,
         **(additions or {}),
     }
-    context["readonly_recall"] = readonly_recall(question) and not cycle.state.get("dialogue_npc")
+    # A remembered interlocutor does not turn a result follow-up into a new
+    # conversation or displace its actual receipts with the NPC's initial profile.
+    context["readonly_recall"] = readonly_recall(question)
     if context["readonly_recall"]:
         context["characters"] = [
             {
@@ -395,7 +397,7 @@ async def build_context(
                 conditions = {k: v for k, v in entity["reveal_conditions"].items() if v}
                 if conditions:
                     item["reveal_conditions"] = conditions
-                if entity["suggested_checks"]:
+                if entity.get("suggested_checks"):
                     item["suggested_checks"] = entity["suggested_checks"]
             # Reserve approved encounter identifiers before selecting scene evidence.
             # Action validation subsequently narrows these to the current scene.
@@ -723,6 +725,15 @@ async def build_context(
         audit["omitted_block_count"] = audit.get("omitted_block_count", 0) + 1
         audit["budget_used"] = len(json.dumps(module_context, ensure_ascii=False))
         context = {**context, "module": module_context, "module_context_audit": audit}
+    # Argument repair already reserves its failed arguments and validation
+    # feedback. Optional historical excerpts must not prevent that repair.
+    while (
+        phase == "repair_action_arguments"
+        and not context.get("readonly_recall")
+        and context.get("fact_evidence")
+        and prompt_context_size(context) > budget
+    ):
+        context["fact_evidence"] = context["fact_evidence"][:-1]
     if prompt_context_size(context) > budget:
         import logging
 
