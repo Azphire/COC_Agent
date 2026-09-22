@@ -1206,7 +1206,14 @@ class AgentService:
         await self.knowledge.load(session, room, snapshot)
         saved = await session.get(AgentSaveState, snapshot.id)
         current = await self.cycle(session, room.id, active=True)
-        require(not current or current.status != "running", "正在执行的回合不能读档")
+        task = self.runtime.tasks.get(str(room.id))
+        paused_narration = (
+            room.status == "paused" and current
+            and current.state.get("current_node") == "generate_keeper_narration"
+            and (task is None or task.done())
+        )
+        require(not current or current.status != "running" or paused_narration,
+                "正在执行的回合不能读档")
         saved_cycle_id = (
             saved.document["cycle"]["id"] if saved and saved.document["cycle"] else None
         )

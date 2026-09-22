@@ -14,6 +14,7 @@ main {
 .timeline { padding-left: 24px; max-height: 650px; overflow-y: auto; }
 .timeline li { padding: 12px 0; border-bottom: 1px solid #dce4e1; }
 .timeline pre { min-height: 0; }
+.keeper-stream-status { display: block; color: #52685e; font-size: .875rem; margin-top: 6px; }
 .preserve-lines { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 nav, .action-row, .choice-row {

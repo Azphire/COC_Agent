@@ -50,6 +50,10 @@ def result_facts(events):
                  "summary": "已到达" + p.get("scene_title", "当前场景") + "。"}
         operation = p.get("operation")
         operations = p.get("operations", []) or ([operation] if operation else [])
+        if event["type"] == "check.resolved" and not operations:
+            # A die settlement is evidence of that check, not proof that every
+            # requested item operation or scene transition also happened.
+            operations = ["check"]
         if not operations and event["type"] == "module.interaction":
             from app.preparation.action_authority import action_kinds
 
@@ -75,6 +79,9 @@ def result_facts(events):
                 **({"source_action_seq": p["source_event_seq"]}
                    if p.get("source_event_seq") is not None else {}),
                 **{k: p[k] for k in ("action_target_id", "action_text") if k in p},
+                **({"check_id": p.get("id", p.get("check_id")),
+                    "check_name": p.get("display_name") or p.get("name", "")}
+                   if event["type"] == "check.resolved" else {}),
             })
     targets = {}
     for fact in facts:
@@ -96,6 +103,62 @@ def result_facts(events):
 def item_identity(fact):
     return tuple(sorted((i.get("instance_id") or i["id"])
                         for i in fact.get("operated_items", [])))
+
+
+def ordinary_check_receipts(events, *, cycle_id, actor_id, check_id, authority):
+    """Bind a local stealth attempt to its own settled ordinary check.
+
+    Route transitions, item effects and other operations still need their own
+    receipts. Never infer all requested effects from a successful check.
+    """
+    if not check_id or authority.get("route") or authority.get("operation_item_ids", {}).get(
+        "pass"
+    ):
+        return []
+    fragments = [f for f in authority.get("actual_fragments", [])
+                 if f.get("operations") == ["pass"]
+                 and re.search(r"潜行|\bsneak\b", f.get("text", ""), re.I)]
+    if not fragments:
+        return []
+    for event in events:
+        p = event["payload"]
+        if (event["type"] != "check.resolved" or p.get("cycle_id") != cycle_id
+                or p.get("id", p.get("check_id")) != check_id
+                or p.get("target_member_id") != actor_id
+                or p.get("opposed") or p.get("combined")
+                or p.get("kind") != "skill"
+                or p.get("name", "").lower() not in {"stealth", "潜行"}):
+            continue
+        passed = (p.get("result") or {}).get("passed")
+        if passed is not True and passed is not False:
+            return []
+        return [{
+            "actor_id": actor_id, "target_id": None, "target_name": None,
+            "operation": "pass", "status": "success" if passed else "failure",
+            "action_text": "".join(f["text"] for f in fragments),
+            "effect": "本次潜行检定已通过。" if passed else "本次潜行检定未通过。",
+            "operated_items": [], "source_event_seq": event["seq"], "cycle_id": cycle_id,
+            "check_id": check_id, "check_name": p.get("display_name") or "潜行",
+        }]
+    return []
+
+
+def check_result_error(text, checks, *, reference=None):
+    """Check outcome language is separate from the outcome of other operations."""
+    for clause in re.split(r"[。；;！？!?\n，,]", text):
+        if "检定" not in clause or re.search(r"如果|假如|是否|能否|等待|尚未结算", clause):
+            continue
+        named = [c for c in checks if any(n and n in clause for n in (
+            c.get("display_name"), c.get("name"),
+        ))]
+        selected = named or [c for c in checks if c.get("id", c.get("check_id")) == reference]
+        selected = selected or checks
+        outcomes = {(c.get("result") or {}).get("passed") for c in selected}
+        negative = re.search(r"失败|未通过|没(?:有)?(?:成功|通过)|未成功|不成功", clause)
+        positive = re.search(r"成功|通过", clause) and not negative
+        if (outcomes == {True} and negative) or (outcomes == {False} and positive):
+            return "contradictory_check_result"
+    return None
 
 
 def quote_request(text):
@@ -187,9 +250,16 @@ def matching_results(facts, text, *, actor_id=None):
 
 
 def describe_result(fact):
+    if fact["operation"] == "check":
+        if fact.get("effect"):
+            return fact["effect"]
+        name = fact.get("check_name") or "本次"
+        return name + "检定" + {
+            "success": "已通过。", "failure": "未通过。",
+        }.get(fact["status"], "尚未确认结果。")
     labels = {"first_aid": "急救", "medicine": "治疗", "take": "取物", "light": "照明操作",
               "throw": "投掷", "observe": "检查", "search": "搜索", "move": "移动",
-              "give": "交接", "open": "打开", "close": "关闭", "use": "使用"}
+              "give": "交接", "open": "打开", "close": "关闭", "use": "使用", "pass": "通行"}
     outcomes = {"success": "成功了", "failure": "没有成功", "not_executed": "没有执行成功",
                 "technical_failure": "还没有得到结果", "attempted": "尚未确认结果"}
     target = fact.get("target_name") or ""
@@ -295,6 +365,31 @@ def result_error(text, facts, *, actor_id=None, names=None, target_id=None, narr
             continue
         clause = re.sub(r"没(?!有|法|能|关系|问题)", "没有", clause)
         from app.preparation.action_authority import VERBS, action_kinds
+
+        if re.search(r"失败|没有(?:执行)?成功|未成功|没能完成|未能完成", clause) and not re.search(
+            r"如果|假如|是否|[？?]|不代表|不等于", clause,
+        ):
+            # A settled success cannot be negated merely because prose generation
+            # failed. Match the actual operation/operand, not another check's
+            # success or another object's receipt in the same turn.
+            for operation, pattern in VERBS.items():
+                if not re.search(pattern, clause, re.I):
+                    continue
+                candidates = [f for f in facts if f["operation"] == operation]
+                named = [f for f in candidates if f.get("target_name")
+                         and f["target_name"] in clause]
+                if named:
+                    candidates = named
+                if actor_id:
+                    candidates = [f for f in candidates if f.get("actor_id") == actor_id]
+                if target_id:
+                    candidates = [f for f in candidates if f.get("target_id") in {None, target_id}]
+                latest = {}
+                for fact in sorted(candidates, key=lambda f: f.get("source_event_seq", 0)):
+                    key = (fact.get("actor_id"), fact.get("target_id"), item_identity(fact))
+                    latest[key] = fact
+                if latest and all(f["status"] == "success" for f in latest.values()):
+                    return "contradictory_result:" + operation
 
         # An attribution can omit its object: "I didn't close the light; X did."
         # Carry only this sentence's operation, then validate the named actor

@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.models.base import (
+    ContentCallback,
     Message,
     ModelError,
     ModelFormatError,
@@ -100,13 +101,14 @@ class OpenAICompatibleClient:
         *,
         temperature: float = 0.0,
         max_tokens: int = 256,
+        on_delta: ContentCallback | None = None,
     ) -> ModelResponse | AsyncIterator[str]:
         if stream and (tools or response_schema is not None):
             raise ModelError("Streaming supports text only; use non-streaming for tools or JSON")
         request: dict[str, Any] = {
             "model": self.model,
             "messages": [dict(message) for message in messages],
-            "stream": stream,
+            "stream": stream or on_delta is not None,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
@@ -148,7 +150,9 @@ class OpenAICompatibleClient:
             failure.error_category = type(error).__name__
             failure.request_id = safe_identifier(getattr(error, "request_id", None))
             raise failure from None
-        if stream:
+        if on_delta is not None:
+            completion = await self._structured_stream(completion, on_delta)
+        elif stream:
             return self._text_stream(completion)
         try:
             return self._parse_response(completion, response_schema)
@@ -214,6 +218,76 @@ class OpenAICompatibleClient:
             ) from None
         except (ValueError, TypeError):
             raise ModelFormatError("模型 JSON 或工具参数格式无效", token_usage=usage) from None
+
+    @staticmethod
+    async def _structured_stream(chunks, on_delta):
+        """Collect the same response while forwarding only the content channel."""
+        content, tool_calls = [], {}
+        finish_reason = usage = model = completion_id = refusal = None
+        total_chars = 0
+        try:
+            async with chunks:
+                async for chunk in chunks:
+                    model, completion_id = chunk.model, chunk.id
+                    if chunk.usage is not None:
+                        usage = chunk.usage.model_dump()
+                    if not chunk.choices:
+                        await on_delta("")
+                        continue
+                    choice = next((c for c in chunk.choices if c.index == 0), None)
+                    if choice is None:
+                        continue
+                    delta = choice.delta
+                    text = delta.content or ""
+                    total_chars += len(text)
+                    if total_chars > 262144:
+                        raise ModelFormatError("模型流超过缓冲上限")
+                    content.append(text)
+                    if delta.refusal:
+                        refusal = "refused"
+                    for item in delta.tool_calls or []:
+                        call = tool_calls.setdefault(item.index, {
+                            "id": "", "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        })
+                        if item.id:
+                            call["id"] += item.id
+                        if item.type and item.type != "function":
+                            raise ModelFormatError("模型返回了不支持的工具类型")
+                        if item.function:
+                            call["function"]["name"] += item.function.name or ""
+                            call["function"]["arguments"] += item.function.arguments or ""
+                    # SDK extensions such as reasoning_content are never forwarded.
+                    await on_delta(text)
+                    if choice.finish_reason is not None:
+                        finish_reason = choice.finish_reason
+        except ModelError:
+            raise
+        except OpenAIError as error:
+            failure = ModelError(request_error(error))
+            failure.error_category = type(error).__name__
+            failure.request_id = safe_identifier(getattr(error, "request_id", None))
+            raise failure from None
+        except Exception as error:
+            raise ModelError(f"Model stream failed ({type(error).__name__})") from None
+        if finish_reason is None:
+            raise ModelError("模型流在结束状态前中断")
+        completion = ChatCompletion.model_validate({
+            "id": completion_id or "stream", "model": model or "unknown",
+            "created": 0, "object": "chat.completion", "usage": usage,
+            "choices": [{
+                "index": 0, "finish_reason": finish_reason,
+                "message": {
+                    "role": "assistant", "content": "".join(content),
+                    "refusal": refusal,
+                    "tool_calls": [tool_calls[index] for index in sorted(tool_calls)] or None,
+                },
+            }],
+        })
+        response = getattr(chunks, "response", None)
+        if response is not None:
+            completion._request_id = safe_identifier(response.headers.get("x-request-id"))
+        return completion
 
     @staticmethod
     async def _text_stream(chunks: AsyncStream[ChatCompletionChunk]) -> AsyncIterator[str]:

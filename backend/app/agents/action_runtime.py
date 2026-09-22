@@ -2450,6 +2450,8 @@ class ActionRuntimeMixin:
                 run = await session.get(AgentRun, run_id)
                 cycle = await session.get(AgentCycle, state["cycle_id"])
                 try:
+                    if stream:
+                        stream.check_private(restored.public_narration)
                     await self.validate_narration_output(session, room, cycle, run, restored)
                 except RoomError as error:
                     raise ModelFormatError(
@@ -2457,6 +2459,20 @@ class ActionRuntimeMixin:
                     ) from None
 
         prompt_context = generation_prompt(context, schema)
+        contract = generation_contract(schema, context)
+        stream = None
+        if schema is KeeperNarration and self.rooms.hub:
+            from app.agents.narration_stream import NarrationStream
+
+            stream = await NarrationStream.create(self, state, run_id, contract)
+            self.narration_streams[run_id] = stream
+
+        async def record_call(document):
+            if stream:
+                document = {**document, "first_validated_segment_at": stream.first_display_at,
+                            "stream_buffered_reason": stream.buffered_reason}
+            await self.call_recorder(state["room_id"], run_id)(document)
+
         result, latency = await self.service.model.generate(
             [
                 {
@@ -2478,11 +2494,12 @@ class ActionRuntimeMixin:
                     ),
                 },
             ],
-            response_schema=generation_contract(schema, context),
+            response_schema=contract,
             validate_output=validate_narration if schema in {KeeperNarration, KeeperPlan} else None,
             max_attempts=1 if schema is TeammateDecision or node == "repair_keeper_plan" else 2,
             on_call=consume,
-            on_result=self.call_recorder(state["room_id"], run_id),
+            on_result=record_call,
+            **({"on_stream": stream} if stream else {}),
             output_limit=max(
                 self.service.settings.model_output_limit, 1600 if schema is KeeperPlan else 900
             ),
@@ -3296,9 +3313,13 @@ class ActionRuntimeMixin:
                 and set(plan.proposed_reveal_entity_ids) <= public_ids
             )
         ]
-        from app.agents.results import relevant_results, result_facts
+        from app.agents.results import ordinary_check_receipts, relevant_results, result_facts
         from app.preparation.action_authority import action_kinds
 
+        current.extend(ordinary_check_receipts(
+            selected, cycle_id=cycle.id, actor_id=cycle.state["triggering_member_id"],
+            check_id=cycle.state.get("ordinary_check_id"), authority=plan.action_authority,
+        ))
         for fact in current:
             if fact["operation"] == "move":
                 fact["target_id"] = fact.get("target_id") or target
@@ -3367,9 +3388,10 @@ class ActionRuntimeMixin:
                         if e["id"] == eid
                     ],
                     "operation": operation,
-                    "status": "technical_failure"
-                    if any(r.get("ok") is False for r in latest_results.values())
-                    else "not_executed",
+                    # Missing operation receipts prove non-execution only.
+                    # An unrelated read/tool error cannot classify every
+                    # requested operation as a technical failure.
+                    "status": "not_executed",
                     "effect": next((r.get("reason", "") for r in relevant_rejected), "")
                     or plan.action_authority.get("rejection_message")
                     or "本次操作没有实际结算。",
@@ -3437,14 +3459,19 @@ class ActionRuntimeMixin:
             retained[index] = accepted
         return retained
 
-    async def validate_narration_output(self, session, room, cycle, run, output, *, partial=False):
+    async def validate_narration_output(
+        self, session, room, cycle, run, output, *, partial=False, prefix_snapshot=None
+    ):
         import re
 
         from app.agents.narration import NarrationValidator
         from app.agents.tools import ensure_public_text
         from app.module_ir.facts import SCOPE_PREFIXES
 
-        public = {e["id"]: e for e in await self.service.entities.public(session, room.id)}
+        prefix = prefix_snapshot is not None
+        public = deepcopy(prefix_snapshot["public"]) if prefix else {
+            e["id"]: e for e in await self.service.entities.public(session, room.id)
+        }
         if cycle.state.get("dialogue_npc"):
             public[cycle.state["dialogue_npc"]["id"]] = cycle.state["dialogue_npc"]
         # These are server-selected local, automatic, approved NPC disclosures,
@@ -3462,6 +3489,21 @@ class ActionRuntimeMixin:
                 *output.incidental_details,
             ]
         )
+        stream = getattr(self, "narration_streams", {}).get(run.id)
+        if stream and not prefix:
+            # Full validation and fallback component retention use the same
+            # private-material boundary as streaming, including room HO text.
+            # NPC testimony still follows its existing, separately authorized
+            # disclosure path; it is never used to license the KP stream.
+            speech = output.npc_speech.text if output.npc_speech else ""
+            stream.check_private("\n".join([
+                output.public_narration,
+                *[detail for detail in output.incidental_details if detail not in speech],
+            ]))
+            from app.agents.narration_stream import compact
+
+            require(not any(secret in compact(text) for secret in stream.snapshot.get(
+                "handout_private", [])), "输出包含私人HO内容", 403)
         public_material = "\n".join(e["public_summary"] for e in public.values())
         if not run.context.get("readonly_recall"):
             from app.module_ir.facts import nonlocal_source_claims
@@ -3514,7 +3556,9 @@ class ActionRuntimeMixin:
             validate_resource_claims,
         )
 
-        inventory = await inventory_context(self.service, session, room, text)
+        inventory = prefix_snapshot["inventory"] if prefix else await inventory_context(
+            self.service, session, room, text
+        )
         from app.preparation.dialogue import current_item_statements
 
         current_prose = current_item_statements(text)
@@ -3557,7 +3601,7 @@ class ActionRuntimeMixin:
                         422,
                     )
         responder = brief.get("responder", {})
-        if responder.get("kind") == "npc" and not partial:
+        if responder.get("kind") == "npc" and not partial and not prefix:
             require(
                 output.npc_speech and output.npc_speech.text.strip(),
                 "已确定NPC对象，必须实际答话",
@@ -3595,23 +3639,27 @@ class ActionRuntimeMixin:
                 "NPC台词只写第一人称答话，动作另放旁白",
                 422,
             )
-        rows = await self.service.entities.rows(session, room.id)
+        rows = prefix_snapshot["rows"] if prefix else await self.service.entities.rows(
+            session, room.id
+        )
         if run.context.get("intent_type") != "recall":
             from app.preparation.current_state import validate_access_prose
             from app.preparation.observation import validate_lighting_prose
             from app.rooms.combat_service import load_state
 
-            nav = await self.service.navigation.state(session, room.id)
+            nav = prefix_snapshot["nav"] if prefix else await self.service.navigation.state(
+                session, room.id
+            )
             validate_access_prose(
                 output.public_narration,
                 run.context.get("triggering_action", {}).get("payload", {}).get("text", ""),
                 [{**r.snapshot, "id": r.source_entity_id} for r in rows],
-                load_state(room).module_runtime,
+                prefix_snapshot["runtime"] if prefix else load_state(room).module_runtime,
             )
             validate_lighting_prose(
                 text,
                 [{**r.snapshot, "id": r.source_entity_id, "type": r.entity_type} for r in rows],
-                load_state(room).module_runtime,
+                prefix_snapshot["runtime"] if prefix else load_state(room).module_runtime,
                 nav.current_scene_node_id if nav else None,
             )
         for row in rows:
@@ -3648,10 +3696,10 @@ class ActionRuntimeMixin:
                 )
             for eid in claim.entity_ids:
                 entity = public.get(eid, {})
-                prefix = SCOPE_PREFIXES.get(entity.get("fact_scope"))
-                if prefix:
+                scope_prefix = SCOPE_PREFIXES.get(entity.get("fact_scope"))
+                if scope_prefix:
                     require(
-                        claim.statement.startswith(prefix)
+                        claim.statement.startswith(scope_prefix)
                         and any(
                             eid in c.get("entity_ids", []) and claim.statement == c["statement"]
                             for c in candidates
@@ -3675,16 +3723,24 @@ class ActionRuntimeMixin:
         if not run.context.get("prepared_module"):
             public_ids |= {e["id"] for e in run.context["module"].get("npcs", [])}
             public_ids |= {e["id"] for e in run.context["module"].get("clues", [])}
-        audit = NarrationValidator().validate(
+        validator = NarrationValidator()
+        audit = (validator.validate_prefix if prefix else validator.validate)(
             output,
             documents=documents,
             public_ids=public_ids,
             scene_id=scene["id"],
-            results=await self.public_results(session, room, cycle),
+            results=prefix_snapshot["results"] if prefix else await self.public_results(
+                session, room, cycle
+            ),
             brief=brief,
             inventory_state=run.context.get("inventory_state"),
         )
-        ensure_public_text(await self.service.module(session, room.id), text)
+        from app.agents.narration_stream import restored_recall_private_text
+
+        ensure_public_text(
+            prefix_snapshot["module"] if prefix else await self.service.module(session, room.id),
+            restored_recall_private_text(run.context, text, output.fact_ids),
+        )
         if output.npc_speech:
             npc = next(
                 (
@@ -3755,6 +3811,8 @@ class ActionRuntimeMixin:
                 return latest
 
             async def fallback(session, room):
+                cycle = await session.get(AgentCycle, state["cycle_id"])
+                require(room.status == "running" and cycle.status == "running", "回合已停止")
                 run = await session.scalar(
                     select(AgentRun)
                     .where(
@@ -3869,6 +3927,7 @@ class ActionRuntimeMixin:
             if run.status == "completed":
                 return
             cycle = await session.get(AgentCycle, state["cycle_id"])
+            require(room.status == "running" and cycle.status == "running", "回合已停止")
             record = await session.get(ActionPlanRecord, cycle.id)
             doc = AdjudicationRecord.model_validate(record.document)
             output = KeeperNarration.model_validate(run.structured_output)
@@ -4022,7 +4081,12 @@ class ActionRuntimeMixin:
                     content = await fallback_text()
                     output.needs_host_ruling = doc.validation.status == "host_review_required"
                     documents, citations = [], []
-                ensure_public_text(await self.service.module(session, room.id), content)
+                from app.agents.narration_stream import restored_recall_private_text
+
+                ensure_public_text(
+                    await self.service.module(session, room.id),
+                    restored_recall_private_text(run.context, content, output.fact_ids),
+                )
             except RoomError as error:
                 fallback_reason = error.message
                 partial = run.context.get("validated_partial", {})
@@ -4105,6 +4169,8 @@ class ActionRuntimeMixin:
                     {
                         "text": content,
                         "cycle_id": cycle.id,
+                        **(self.narration_streams[run_id].metadata()
+                           if run_id in self.narration_streams else {}),
                         "actor_name": (await session.get(ProfileRecord, run.profile_id)).document[
                             "name"
                         ],
@@ -4151,4 +4217,10 @@ class ActionRuntimeMixin:
             run.status, run.finished_at = "completed", utc_now()
 
         await self.service.mutate(state["room_id"], publish)
+        stream = self.narration_streams.pop(run_id, None)
+        if stream:
+            await self.rooms.hub.stream_interrupt(
+                state["room_id"], cycle_id=state["cycle_id"], stream_id=stream.stream_id,
+                reason="complete_without_narration",
+            )
         return await self.current(state)

@@ -567,7 +567,10 @@ class RoomService:
         }:
             cycle = await self.agent_service.cycle(session, room.id, active=True)
             require(
-                not cycle or (cycle.status != "running" and action == "pause"),
+                not cycle or action == "pause" and (
+                    cycle.status != "running"
+                    or cycle.state.get("current_node") == "generate_keeper_narration"
+                ),
                 "请先等待或取消活动 Agent 回合",
             )
         actor = identity.member_id

@@ -1,6 +1,6 @@
 import { SanityPanel } from '../components/SanityPanel'
 import RuntimeCards from '../components/RuntimeCards'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import RoomTimelineEvent from '../components/RoomTimelineEvent'
 import { api, ApiError, authHeaders, hostToken, requestId, socketUrl } from '../api/session'
 import { credentialKey, roomStatus, storedRooms } from '../api/rooms'
@@ -11,6 +11,8 @@ import HostUnlock from '../components/HostUnlock'
 import AgentGamePanel from '../components/AgentGamePanel'
 import CharacterSubmissionPanel from '../components/CharacterSubmissionPanel'
 import RoomHandoutsPanel from '../components/RoomHandoutsPanel'
+import { acceptNarrationEvent, emptyNarrationStream, reduceNarrationStream } from '../api/narrationStream'
+import type { NarrationStreamState, StreamMessage } from '../api/narrationStream'
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : '请求失败，请重试' }
 
@@ -60,6 +62,10 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
   const credentialType = localStorage.getItem(credentialKey(roomId)) ? 'member' : 'host'
   const [room, setRoom] = useState<Room | null>(null)
   const [events, setEvents] = useState<RoomEvent[]>([])
+  const [narration, setNarration] = useState(emptyNarrationStream)
+  const narrationRef = useRef<NarrationStreamState>(narration)
+  const timelineRef = useRef<HTMLOListElement>(null)
+  const followTimeline = useRef(true)
   const [online, setOnline] = useState<string[]>([])
   const [connection, setConnection] = useState('连接中')
   const [error, setError] = useState('')
@@ -86,8 +92,19 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
     setRoom(previous => !previous || next.revision >= previous.revision ? next : previous)
   }
   function acceptEvent(event: RoomEvent) {
+    narrationRef.current = acceptNarrationEvent(narrationRef.current, event)
+    setNarration(narrationRef.current)
     setEvents(previous => previous.some(item => item.seq === event.seq) ? previous : [...previous, event].sort((a, b) => a.seq - b.seq))
   }
+  function acceptStream(message: StreamMessage) {
+    narrationRef.current = reduceNarrationStream(narrationRef.current, message)
+    setNarration(narrationRef.current)
+    return narrationRef.current.needsSync
+  }
+  useLayoutEffect(() => {
+    const timeline = timelineRef.current
+    if (timeline && followTimeline.current) timeline.scrollTop = timeline.scrollHeight
+  }, [events, narration])
   useEffect(() => {
     let active = true
     let socket: WebSocket | null = null
@@ -116,6 +133,7 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
         if (message.type === 'auth.ok') { attempts = 0; setConnection('已连接'); setError('') }
         if (message.type === 'room.snapshot') acceptRoom(message.data)
         if (message.type === 'room.event') acceptEvent(message.data)
+        if (message.type.startsWith('keeper.stream.') && acceptStream(message)) socket?.close()
         if (message.type === 'room.synced') lastSeq.current = message.data.seq
         if (message.type === 'presence.changed') setOnline(message.data.online_member_ids)
         if (message.type === 'error') setError(message.data.message)
@@ -124,9 +142,11 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
         window.clearInterval(heartbeat)
         if (!active) return
         setOnline([])
+        acceptStream({ type: 'connection.lost' })
         if (event.code === 4401) {
           setConnection('凭据失效'); setError('凭据无效或成员已离开，请返回房间入口重新加入或解锁。')
           setRoom(null); setEvents([])
+          narrationRef.current = emptyNarrationStream(); setNarration(narrationRef.current)
           if (credentialType === 'member') localStorage.removeItem(credentialKey(roomId))
           return
         }
@@ -243,7 +263,12 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
         <form onSubmit={e => { e.preventDefault(); void send('messages') }}><label>消息<textarea id="chat-message" value={text} onChange={e => setText(e.target.value)} maxLength={4000} required /></label><button disabled={busy || !text.trim()}>发送消息</button></form>
         <form onSubmit={e => { e.preventDefault(); void send('rolls') }}><div className="field-grid"><label>骰子表达式<input id="dice-expression" value={expression} maxLength={32} onChange={e => setExpression(e.target.value)} required /></label><label>原因<input id="dice-reason" value={reason} maxLength={2000} onChange={e => setReason(e.target.value)} /></label></div><button disabled={busy}>服务端掷骰</button></form>
       </>}
-      <ol className="timeline" data-testid="timeline">{events.filter(event => event.visibility !== 'host_only' && !event.type.startsWith('agent.cycle') && !event.type.startsWith('review.')).map(event => <RoomTimelineEvent key={event.seq} event={event} room={room} />)}</ol>
+      <ol className="timeline" data-testid="timeline" ref={timelineRef} onScroll={event => {
+        const timeline = event.currentTarget
+        followTimeline.current = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 48
+      }}>{events.filter(event => event.visibility !== 'host_only' && !event.type.startsWith('agent.cycle') && !event.type.startsWith('review.')).map(event => <RoomTimelineEvent key={event.type === 'keeper.narration' && event.payload.cycle_id ? `keeper-${event.payload.cycle_id}` : event.seq} event={event} room={room} />)}
+        {narration.draft && <RoomTimelineEvent key={`keeper-${narration.draft.cycle_id}`} draft={narration.draft} room={room} />}
+      </ol>
       {isHost && <details data-testid="host-event-debug"><summary>主机私密事件 · HOST_DEBUG</summary><ol>{events.filter(event => event.visibility === 'host_only' || event.type.startsWith('agent.cycle') || event.type.startsWith('review.')).map(event => <RoomTimelineEvent key={event.seq} event={event} room={room} debug />)}</ol></details>}
       <div className="action-row"><button onClick={() => void exportLog('jsonl')}>导出 JSONL</button><button onClick={() => void exportLog('markdown')}>导出 Markdown</button></div>
       </section>

@@ -70,6 +70,16 @@ def generation_schema(value):
             # Require an explicit object or null for critical action decisions.
             # Pydantic defaults keep old persisted plans readable.
             result["required"] = list(dict.fromkeys([*result.get("required", []), *explicit]))
+        properties = result.get("properties", {})
+        body = next((name for name in ("observed_detail", "public_narration")
+                     if name in properties), None)
+        if body:
+            # Providers often follow schema order. Produce the public body
+            # before its incidental-detail copies, reducing the first-sentence
+            # wait without changing any field, requirement or validation.
+            result["properties"] = {body: properties[body], **properties}
+            if body in result.get("required", []):
+                result["required"] = [body, *[k for k in result["required"] if k != body]]
         return result
     if isinstance(value, list):
         return [generation_schema(v) for v in value]
@@ -97,13 +107,14 @@ class OllamaAgentAdapter:
         *,
         temperature=0.0,
         max_tokens=256,
+        on_delta=None,
     ):
         if stream:
-            raise ModelError("Agent transport uses complete validated outputs")
+            raise ModelError("Agent 流式生成请使用 on_delta 回调")
         request = {
             "model": self.settings.model_name,
             "messages": list(messages),
-            "stream": False,
+            "stream": on_delta is not None,
             "think": self.settings.model_think,
             "keep_alive": self.settings.model_keep_alive,
             "options": {
@@ -120,10 +131,17 @@ class OllamaAgentAdapter:
             )
         if tools:
             request["tools"] = list(tools)
+        if on_delta is not None:
+            data = await self._stream_response(request, on_delta)
+        else:
+            data = await self._request_response(request)
+        return self._parse_response(data, response_schema)
+
+    async def _request_response(self, request):
         try:
             response = await self.client.post("/api/chat", json=request)
             response.raise_for_status()
-            data = response.json()
+            return response.json()
         except httpx.HTTPStatusError as error:
             message = error.response.text.lower()
             if "out of memory" in message or "cuda error" in message:
@@ -133,6 +151,64 @@ class OllamaAgentAdapter:
             raise ModelError("本地模型请求失败，请检查 Ollama 状态") from None
         except (httpx.HTTPError, ValueError):
             raise ModelError("本地模型请求失败，请检查 Ollama 状态") from None
+
+    async def _stream_response(self, request, on_delta):
+        """Consume one NDJSON response; cancellation exits and closes its HTTP stream."""
+        content, calls = [], []
+        total_chars = 0
+        terminal = None
+        try:
+            async with self.client.stream("POST", "/api/chat", json=request) as response:
+                if response.is_error:
+                    await response.aread()
+                    response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    data = json.loads(line)
+                    if not isinstance(data, dict):
+                        raise ModelFormatError("模型流格式无效")
+                    if data.get("error"):
+                        # The server may put errors in NDJSON after HTTP 200.
+                        detail = str(data["error"]).lower()
+                        if "out of memory" in detail or "cuda error" in detail:
+                            raise ModelError("本地模型显存不足（OOM），请停止真实模型验收")
+                        raise ModelError("本地模型流式请求失败")
+                    message = data.get("message", {})
+                    if not isinstance(message, dict):
+                        raise ModelFormatError("模型流格式无效")
+                    text = message.get("content", "")
+                    if not isinstance(text, str):
+                        raise ModelFormatError("模型流格式无效")
+                    total_chars += len(text)
+                    if total_chars > 262144:
+                        raise ModelFormatError("模型流超过缓冲上限")
+                    content.append(text)
+                    calls.extend(message.get("tool_calls") or [])
+                    # An empty callback marks the first wire chunk, including thinking-only
+                    # chunks, without copying their private payload into any return value.
+                    await on_delta(text)
+                    if data.get("done") is True:
+                        terminal = data
+                        break
+        except httpx.HTTPStatusError as error:
+            detail = error.response.text.lower()
+            if "out of memory" in detail or "cuda error" in detail:
+                raise ModelError("本地模型显存不足（OOM），请停止真实模型验收") from None
+            if "grammar" in detail:
+                raise ModelError("本地模型不支持此次结构化生成语法") from None
+            raise ModelError("本地模型请求失败，请检查 Ollama 状态") from None
+        except (httpx.HTTPError, ValueError):
+            raise ModelError("本地模型流式请求失败，请检查 Ollama 状态") from None
+        if terminal is None:
+            raise ModelError("本地模型流在结束标记前中断")
+        return {
+            **terminal,
+            "message": {"content": "".join(content), "tool_calls": calls},
+        }
+
+    @staticmethod
+    def _parse_response(data, response_schema):
         usage = {"input": data.get("prompt_eval_count"), "output": data.get("eval_count")}
         usage = usage if any(v is not None for v in usage.values()) else None
         try:

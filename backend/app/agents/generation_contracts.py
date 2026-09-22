@@ -47,6 +47,17 @@ def bound(base, values, **fields):
     )
 
 
+def narration_body_field(contract):
+    """Only the dynamic contract can designate a public prose string."""
+    for name in ("observed_detail", "public_narration"):
+        field = contract.model_fields.get(name)
+        if field and field.annotation is str and not (field.json_schema_extra or {}).get(
+            "x-server-bound"
+        ):
+            return name
+    return None
+
+
 def generation_contract(schema, context):
     if schema is KeeperPlan:
         ids = context["action_identifiers"]
@@ -531,6 +542,16 @@ def generation_contract(schema, context):
                     json_schema_extra={"x-explicit-output": True},
                 ),
             )
+        if "PUBLIC_CLAIM_OPTIONS" in context:
+            claim_ids = tuple(c["claim_id"] for c in context["PUBLIC_CLAIM_OPTIONS"])
+            fields["claim_ids"] = (
+                list[Literal[claim_ids]] if claim_ids else list[str],
+                Field(
+                    default_factory=list, max_length=5 if claim_ids else 0,
+                    description="仅选本轮 allowed_facts.id；无对应依据则空列表。",
+                    json_schema_extra={"x-explicit-output": True},
+                ),
+            )
         fields["public_narration"] = (
             str,
             Field(
@@ -546,6 +567,8 @@ def generation_contract(schema, context):
                 Field(
                     default="", min_length=8, max_length=1000,
                     description="本轮实际可感知的目标内容或明确未能确认的部分。"
+                    "按玩家关注的多个公开对象逐项描述，遵守明确的分句要求，使用完整句子。"
+                    "内容仅依据已公开来源和实际回执。"
                     "直接描述物件/伤口/环境的外观细节，不描述你试图观察的动作。"
                     "普通杂物可即兴外观，不产生可获得资源、核心线索或治疗效果。",
                     json_schema_extra={"x-explicit-output": True},

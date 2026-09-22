@@ -3,8 +3,11 @@ import type { Citation } from '../api/knowledge'
 import { nodeLabels, resultLabels } from '../api/agents'
 import type { Check } from '../api/agents'
 import CompoundCheckPanel from './CompoundCheckPanel'
+import { narrationDraftLabel } from '../api/narrationStream'
+import type { NarrationDraft } from '../api/narrationStream'
 
-export default function RoomTimelineEvent({ event, room, debug = false }: { event: RoomEvent; room: Room; debug?: boolean }) {
+export default function RoomTimelineEvent({ event: suppliedEvent, draft, room, debug = false }: { event?: RoomEvent; draft?: NarrationDraft; room: Room; debug?: boolean }) {
+  const event: RoomEvent = suppliedEvent || { seq: -1, type: 'keeper.narration', actor_member_id: null, visibility: 'public', payload: { text: draft?.text || '', cycle_id: draft?.cycle_id }, occurred_at: '', client_request_id: null }
   const p = event.payload
   const binding = room.game?.bindings.find(b => b.member_id === event.actor_member_id)
   const member = room.members.find(m => m.id === event.actor_member_id)
@@ -17,8 +20,9 @@ export default function RoomTimelineEvent({ event, room, debug = false }: { even
   const textTypes = ['rules.question', 'rules.answered', 'chat.message', 'action.submitted', 'keeper.narration', 'npc.spoke', 'agent.spoke', 'agent.action_proposed', 'module.completed', 'module.interaction', 'resource.item_used', 'agent.needs_host_ruling']
   const result = p.result as { total: number; level: string; passed: boolean } | undefined
   const labels: Record<string, string> = { running: '进行中', waiting_for_roll: '等待检定', completed: '完成', failed: '失败', cancelled: '已取消' }
-  return <li data-event-seq={event.seq} data-actor-type={role} data-controller={isKP || teammate ? 'agent' : system ? 'system' : member?.controller_type || 'system'}>
-    <small>{debug && `#${event.seq} `}[{new Date(event.occurred_at).toLocaleTimeString()}] [{role}{!system && actor !== '系统' ? `：${actor}` : ''}] {debug && cycle && `[${cycle}]`} {event.visibility !== 'public' && '私密'}</small>
+  return <li data-event-seq={draft ? undefined : event.seq} data-cycle-id={String(p.cycle_id || '') || undefined} data-stream-id={draft?.stream_id} data-stream-index={draft?.index} data-stream-attempt={draft?.attempt} data-stream-status={draft?.status} data-testid={draft ? 'keeper-stream' : undefined} data-actor-type={role} data-controller={isKP || teammate ? 'agent' : system ? 'system' : member?.controller_type || 'system'} aria-busy={draft?.status === 'responding' || draft?.status === 'waiting'}>
+    <small>{debug && `#${event.seq} `}{!draft && `[${new Date(event.occurred_at).toLocaleTimeString()}] `}[{role}{!system && actor !== '系统' ? `：${actor}` : ''}] {debug && cycle && `[${cycle}]`} {event.visibility !== 'public' && '私密'}</small>
+    {draft && <span role="status" className="keeper-stream-status">{narrationDraftLabel(draft)}</span>}
     {textTypes.includes(event.type) ? <p className="preserve-lines">{event.type === 'agent.spoke' ? '发言：' : event.type === 'agent.action_proposed' ? '行动：' : ''}{String(p.text)}</p>
       : event.type === 'action.clarification_requested' ? <p>需要澄清：{String(p.question)}</p>
       : event.type === 'check.requested' ? <p>{(p.sanity as { origin?: string } | undefined)?.origin === 'automatic' ? '遭遇自动触发' : (p.sanity as { origin?: string } | undefined)?.origin === 'kp_ruling' ? 'KP 情境裁定' : p.sanity ? '主机确认' : 'KP 请求'}“{String(p.display_name || p.name)}”检定 · {room.members.find(m => m.id === p.target_member_id)?.display_name}</p>

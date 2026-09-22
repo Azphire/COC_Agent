@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, SerializeAsAny
@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, SerializeAsAny
 type Message = Mapping[str, Any]
 type Tool = Mapping[str, Any]
 type ResponseSchema = type[BaseModel] | Mapping[str, Any]
+type ContentCallback = Callable[[str], Awaitable[None]]
 
 
 class ModelError(Exception):
@@ -47,6 +48,7 @@ class ModelClient(Protocol):
         *,
         temperature: float = 0.0,
         max_tokens: int = 256,
+        on_delta: ContentCallback | None = None,
     ) -> ModelResponse | AsyncIterator[str]: ...
 
     async def close(self) -> None: ...

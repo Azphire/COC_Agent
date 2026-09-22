@@ -64,6 +64,7 @@ class AgentRuntime(ActionRuntimeMixin):
         self.tasks = {}
         self.wakeups = set()
         self.preserved_cancellations = set()
+        self.narration_streams = {}
         self.graph = None
         self.closing = False
 
@@ -164,6 +165,7 @@ class AgentRuntime(ActionRuntimeMixin):
         task.add_done_callback(finished)
 
     def cancel_task(self, room_id, *, preserve_cycle=False):
+        self.invalidate_narration_streams(room_id)
         task = self.tasks.get(str(room_id))
         if task and not task.done():
             if preserve_cycle:
@@ -173,8 +175,19 @@ class AgentRuntime(ActionRuntimeMixin):
             return task
         return None
 
+    def invalidate_narration_streams(self, room_id, reason="cancelled"):
+        if self.rooms.hub:
+            self.rooms.hub.invalidate_stream(str(room_id), reason=reason)
+        for run_id, stream in list(self.narration_streams.items()):
+            if stream.state["room_id"] == str(room_id):
+                stream.eligible = False
+                stream.valid = False
+                self.narration_streams.pop(run_id, None)
+
     async def close(self):
         self.closing = True
+        for room_id in list(self.tasks):
+            self.invalidate_narration_streams(room_id, "shutdown")
         tasks = list(self.tasks.values())
         for task in tasks:
             task.cancel()
@@ -353,6 +366,7 @@ class AgentRuntime(ActionRuntimeMixin):
             if queued or latest and latest.id != cycle_id:
                 self.schedule(room_id)
         except asyncio.CancelledError:
+            self.invalidate_narration_streams(room_id)
             if (
                 cycle_id
                 and not self.closing
@@ -360,6 +374,7 @@ class AgentRuntime(ActionRuntimeMixin):
             ):
                 await self.fail(room_id, cycle_id, "cancelled", "模型请求已取消")
         except Exception as error:
+            self.invalidate_narration_streams(room_id, "failed")
             if cycle_id:
                 # Never persist repr(error), provider response bodies or validation inputs.
                 safe = (

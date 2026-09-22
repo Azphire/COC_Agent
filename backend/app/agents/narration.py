@@ -259,8 +259,17 @@ def action_lead(intent, results):
 
 
 class NarrationValidator:
+    def validate_prefix(self, output, **kwargs):
+        """Validate an accepted prefix plus a complete candidate sentence.
+
+        Only whole-response coverage is deferred. Visibility, source assertions,
+        result contradictions and resource/location restrictions remain active.
+        """
+        return self.validate(output, prefix=True, **kwargs)
+
     def validate(
-        self, output, *, documents, public_ids, scene_id, results, brief=None, inventory_state=None
+        self, output, *, documents, public_ids, scene_id, results, brief=None,
+        inventory_state=None, prefix=False,
     ):
         text = "\n".join(
             [
@@ -311,7 +320,7 @@ class NarrationValidator:
         require(not error, "叙事声称了未获实际结算支持的效果：" + (error or ""), 422)
         negative = [f for f in results.get("current_result_facts", [])
                     if f.get("status") in {"failure", "not_executed", "technical_failure"}]
-        if negative and output.public_narration:
+        if negative and output.public_narration and not prefix:
             from app.agents.results import answer_result_error
 
             require(not answer_result_error(
@@ -389,7 +398,7 @@ class NarrationValidator:
                             422,
                         )
         uncertain = re.search(r"未|没|无法|不能|不清|不确定|难以|仍需|尚需", text)
-        if not any(discovered) and (
+        if not prefix and not any(discovered) and (
             (brief or {}).get("unconfirmed_target") or results.get("blocked_discovery")
         ):
             require(bool(uncertain), "未确认的调查不能叙述为已经发现内容", 422)
@@ -420,13 +429,16 @@ class NarrationValidator:
                         422,
                     )
         if checks:
-            passed = checks.get(output.check_result_reference, next(iter(checks.values())))[
-                "result"
-            ]["passed"]
-            contradictory = r"检定失败|未通过|没有成功" if passed else r"检定成功|检定通过|成功地"
-            require(not re.search(contradictory, text), "叙事与真实检定结果冲突", 422)
+            from app.agents.results import check_result_error
+
+            passed = (checks.get(
+                output.check_result_reference, next(iter(checks.values()))
+            ).get("result") or {}).get("passed")
+            require(not check_result_error(
+                text, list(checks.values()), reference=output.check_result_reference,
+            ), "叙事与真实检定结果冲突", 422)
             require(
-                passed or any(discovered) or bool(uncertain),
+                prefix or passed is not False or any(discovered) or bool(uncertain),
                 "检定失败后需要说明实际后果或未能确认的内容",
                 422,
             )
@@ -443,7 +455,7 @@ class NarrationValidator:
                 return sum(g in visible_text for g in grams) >= min(3, len(grams))
 
             require(
-                not passed
+                prefix or passed is not True
                 or not any(discovered)
                 or any(includes_feedback(s) for s in discovered if s),
                 "成功后的具体反馈没有出现在发言中，请自然解释本轮实际发现："
@@ -492,19 +504,6 @@ def fallback_narration(
     ]
     medical = [e["payload"].get("summary", "") for e in results["events"]
                if e["type"] == "combat.resolved"]
-    unsettled = [f for f in results.get("current_result_facts", [])
-                 if f["status"] in {"not_executed", "technical_failure", "failure"}]
-    if medical or unsettled:
-        from app.agents.results import describe_result
-
-        effects = list(dict.fromkeys([*medical, *(describe_result(f) for f in unsettled)]))
-        return "\n".join(filter(None, [*interactions, *effects]))
-    if interactions:
-        return "\n".join(dict.fromkeys(interactions))
-    if (brief or {}).get("resource_gate") == "unconfirmed_item" and not any(
-        e["type"] == "check.resolved" for e in results["events"]
-    ):
-        return "你检查了随身物品，但还没有完成确认物品所需的检定。"
     checks = [e["payload"] for e in results["events"] if e["type"] == "check.resolved"]
     transitions = [e["payload"] for e in results["events"] if e["type"] == "scene.updated"]
     reveals = [
@@ -512,32 +511,51 @@ def fallback_narration(
         for e in results["events"]
         if e["type"] in {"entity.revealed", "clue.revealed"}
     ]
+    check_feedback = []
+    for check in checks:
+        display = check.get("display_text") or (check.get("result") or {}).get("display_text")
+        if not display:
+            try:
+                display = check_display(check)["display_text"]
+            except (KeyError, TypeError):
+                # Legacy or incomplete receipts must not acquire a failure from
+                # a missing `passed` field, nor invent replacement dice.
+                passed = (check.get("result") or {}).get("passed")
+                display = "本次检定" + (
+                    "已通过。" if passed is True else "未通过。" if passed is False
+                    else "尚未确认结果。"
+                )
+        check_feedback.append(display)
+    unsettled = [f for f in results.get("current_result_facts", [])
+                 if f["operation"] != "check"
+                 and f["status"] in {"not_executed", "technical_failure", "failure"}]
+    receipts = [f for f in results.get("current_result_facts", [])
+                if f["operation"] != "check"]
+    if medical or unsettled or interactions or receipts:
+        from app.agents.results import describe_result
+
+        # Include each independent settlement. A prose failure changes none of
+        # these receipts, and a check success cannot erase a failed item effect.
+        described_seqs = {
+            e["seq"] for e in results["events"]
+            if e["type"] == "check.resolved"
+            or e["type"] == "module.interaction" and e["payload"].get("text")
+            or e["type"] == "combat.resolved" and e["payload"].get("summary")
+        }
+        effects = [describe_result(f) for f in receipts
+                   if f.get("source_event_seq") not in described_seqs]
+        return "\n".join(dict.fromkeys(filter(None, [
+            *check_feedback, *interactions, *medical, *effects, *reveals,
+        ])))
+    if (brief or {}).get("resource_gate") == "unconfirmed_item" and not any(
+        e["type"] == "check.resolved" for e in results["events"]
+    ):
+        return "你检查了随身物品，但还没有完成确认物品所需的检定。"
     if checks:
-        check = checks[-1]
-        if check.get("opposed"):
-            return "\n".join([check["display_text"], *reveals])
-        outcome = (
-            "检定成功，行动达到了本次检定的目标。"
-            if check["result"]["passed"]
-            else "检定失败，这次尝试未能达到目标。"
-        )
         task_feedback = list(dict.fromkeys([*reveals, *(brief or {}).get("source_quotes", [])]))
         if not task_feedback:
-            task_feedback = [
-                "你完成了这次尝试，但尚未确认额外的线索内容。"
-                if check["result"]["passed"]
-                else "你没能确认这次要查明的内容；可以换一个有新依据的方法。"
-            ]
-        return "\n".join(
-            filter(
-                None,
-                [
-                    outcome,
-                    check.get("display_text") or check_display(check)["display_text"],
-                    *task_feedback,
-                ],
-            )
-        )
+            task_feedback = ["目前尚未确认额外的线索内容。"]
+        return "\n".join(filter(None, [*check_feedback, *task_feedback]))
     if transitions:
         latest = transitions[-1]
         if latest.get("visit_kind") == "revisit":

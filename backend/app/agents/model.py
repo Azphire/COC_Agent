@@ -39,6 +39,7 @@ class AgentModelClient:
         output_limit=None,
         validate_output=None,
         max_attempts=2,
+        on_stream=None,
     ):
         guard = (
             self.configuration.operation("模型生成（含排队及格式修复）")
@@ -58,6 +59,7 @@ class AgentModelClient:
                     output_limit,
                     validate_output,
                     max_attempts,
+                    on_stream,
                 )
             except ModelError as error:
                 if self.configuration:
@@ -75,6 +77,7 @@ class AgentModelClient:
         output_limit,
         validate_output,
         max_attempts,
+        on_stream,
     ):
         started = time.monotonic()
         if self.adapter is None:
@@ -91,6 +94,9 @@ class AgentModelClient:
                 if on_call:
                     await on_call()
                 call_started = time.monotonic()
+                request_started_at = time.time()
+                first_chunk_at = first_chunk_started = None
+                model_finished_at = None
                 call_prompt = list(prompt)
                 usage = None
                 issues = []
@@ -98,7 +104,23 @@ class AgentModelClient:
                 model_finished = None
                 generated_output = None
                 raw_output = None
+
+                async def stream_event(kind, **values):
+                    if on_stream:
+                        await on_stream({
+                            "type": kind, "attempt": attempt + 1, "at": time.time(), **values,
+                        })
+
+                async def content_delta(text):
+                    nonlocal first_chunk_at, first_chunk_started
+                    if first_chunk_at is None:
+                        first_chunk_at = time.time()
+                        first_chunk_started = time.monotonic()
+                    if text:
+                        await stream_event("delta", text=text)
+
                 try:
+                    await stream_event("start")
                     async with asyncio.timeout(self.settings.model_timeout_seconds):
                         result = await self.adapter.generate(
                             prompt,
@@ -106,8 +128,10 @@ class AgentModelClient:
                             tools=tools,
                             temperature=self.settings.model_temperature,
                             max_tokens=output_limit or self.settings.model_output_limit,
+                            **({"on_delta": content_delta} if on_stream else {}),
                         )
                     model_finished = time.monotonic()
+                    model_finished_at = time.time()
                     if not isinstance(result, ModelResponse):
                         raise ModelFormatError("模型输出格式无效")
                     usage = result.token_usage
@@ -151,6 +175,7 @@ class AgentModelClient:
                     if self.configuration:
                         self.configuration.error = None
                         self.configuration.verification = "available"
+                    await stream_event("finish")
                     return result, int((time.monotonic() - started) * 1000)
                 except (ValidationError, ValueError, ModelFormatError) as error:
                     error_category = type(error).__name__
@@ -163,6 +188,9 @@ class AgentModelClient:
                         schema_issues(error, response_schema)
                         if isinstance(error, ValidationError)
                         else getattr(error, "issues", [])
+                    )
+                    await stream_event(
+                        "error", category=error_category, retrying=attempt + 1 < max_attempts,
                     )
                     if attempt + 1 >= max_attempts:
                         raise ModelFormatError("模型结构化输出在一次修复后仍无效") from None
@@ -184,10 +212,16 @@ class AgentModelClient:
                     request_id = request_id or getattr(error, "request_id", None)
                     response_model = response_model or getattr(error, "response_model", None)
                     usage = usage or getattr(error, "token_usage", None)
+                    await stream_event("error", category=error_category, retrying=False)
                     raise
                 except TimeoutError:
                     error_category = "TimeoutError"
+                    await stream_event("error", category=error_category, retrying=False)
                     raise ModelError("模型请求超时") from None
+                except asyncio.CancelledError:
+                    error_category = "CancelledError"
+                    await stream_event("error", category=error_category, retrying=False)
+                    raise
                 finally:
                     call = {
                         "provider": self.settings.model_provider,
@@ -198,6 +232,11 @@ class AgentModelClient:
                         "model_elapsed_ms": int(
                             ((model_finished or time.monotonic()) - call_started) * 1000
                         ),
+                        "request_started_at": request_started_at,
+                        "first_chunk_at": first_chunk_at,
+                        "first_chunk_ms": int((first_chunk_started - call_started) * 1000)
+                        if first_chunk_started is not None else None,
+                        "model_finished_at": model_finished_at,
                         "validation_ms": int((time.monotonic() - model_finished) * 1000)
                         if model_finished
                         else 0,
