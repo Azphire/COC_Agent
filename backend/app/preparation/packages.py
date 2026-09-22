@@ -58,6 +58,29 @@ def evidence_registry():
     )
 
 
+def entity_source_references(source, ir, fields):
+    """Preserve the file/page identity in mixed PDF, Word and attachment sources."""
+    selected = set(fields.source_block_ids)
+    references = {}
+    for block in ir.blocks:
+        if block.block_id not in selected:
+            continue
+        position = block.source_position
+        extension = Path(position.file_reference).suffix.lower()
+        page_kind = "pdf" if extension == ".pdf" else "word" if extension == ".doc" else "text"
+        key = (position.file_reference, position.physical_page, page_kind)
+        references[key] = {
+            "source_id": source.source_id,
+            "source_hash": source.source_hash,
+            "source_title": source.title,
+            "file_name": Path(position.file_reference).name,
+            "file_reference": position.file_reference,
+            "physical_page": position.physical_page,
+            "page_kind": page_kind,
+        }
+    return list(references.values())
+
+
 def validate_package_source(source, data_dir):
     """Use the established path boundary and give hosts a useful file-level reason."""
     root = safe_path(Path(data_dir), source.relative_reference)
@@ -376,20 +399,7 @@ class PackageService:
                         generated_by="host",
                         host_edited=False,
                         validation_errors=[],
-                        source_references=[
-                            {
-                                "source_id": source.source_id,
-                                "source_hash": source.source_hash,
-                                "source_title": source.title,
-                                "physical_page": page,
-                                "page_kind": "pdf" if source.mime_type == "application/pdf"
-                                or source.files and all(
-                                    f.get("type", "").lstrip(".") == "pdf" for f in source.files
-                                )
-                                else "word" if "word" in source.mime_type else "text",
-                            }
-                            for page in fields.source_pages
-                        ],
+                        source_references=entity_source_references(source, ir, fields),
                     )
                     row = ModuleEntity(
                         id=mapping[entry["key"]],
@@ -591,6 +601,13 @@ def _audit(package, data_dir):
                 r = rule.model_dump()
                 if ready(r):
                     items.update(rule.acquire_item_ids)
+                    # The runtime also acquires items through explicit inventory
+                    # operations; these are valid producers for transition gates.
+                    if (
+                        rule.inventory_operation in {"pickup", "initial", "recover"}
+                        and rule.item_id
+                    ):
+                        items.add(rule.item_id)
                     facts.update(rule.reveal_entity_ids)
                     possible_flags.update(rule.set_flags.items())
                     if rule.outcome:
