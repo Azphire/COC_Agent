@@ -10,6 +10,7 @@ import type { Character } from '../api/characters'
 import HostUnlock from '../components/HostUnlock'
 import AgentGamePanel from '../components/AgentGamePanel'
 import CharacterSubmissionPanel from '../components/CharacterSubmissionPanel'
+import RoomHandoutsPanel from '../components/RoomHandoutsPanel'
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : '请求失败，请重试' }
 
@@ -235,6 +236,7 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
         </article>)}
       </section>
       </details>
+      <RoomHandoutsPanel room={room} token={token} acceptRoom={acceptRoom} />
       <section><h2>对话时间线</h2>{writable && !room.game?.enabled && <>
         <div className="field-grid"><label>可见性<select id="event-visibility" value={visibility} onChange={e => setVisibility(e.target.value)}><option value="public">公开</option><option value="actor_and_host">仅自己与主机</option>{isHost && <option value="host_only">仅主机</option>}</select></label>
         {isHost && <label>操作身份<select value={actor} onChange={e => setActor(e.target.value)}><option value="">主机</option>{room.members.filter(m => m.active && m.role === 'player' && m.controller_type === 'human' && m.access_type === 'host_managed').map(m => <option key={m.id} value={m.id}>{m.display_name}</option>)}</select></label>}</div>

@@ -1,4 +1,5 @@
 import { authHeaders } from './session'
+import type { PreparedHandout } from './preparation'
 
 export type ValidationIssue = { field: string; code: string; message: string }
 export type CharacteristicValue = { value: number }
@@ -30,6 +31,8 @@ export type ExperienceEffects = {
   immunity_reasons?: string[]; background_kind?: string; background_detail?: string
 }
 export type SpellCandidate = { id: string; name: string; source: string; acquisition: 'experience_mythos' }
+export type ModuleHandoutSelection = { preparation_id: string; handout_id: string; attribute_allocations: Record<string, number> }
+export type ModuleHandoutEffect = { target: 'attribute' | 'skill'; key: string; base_value: number; adjustment: number; final_value: number; source_pages: number[] }
 export type RuleSet = {
   id: string; version: string; display_name: string; edition: string; enabled: boolean
   verification_status: string; notice: string
@@ -44,6 +47,8 @@ export type RuleSet = {
   age_rules: { bands: { minimum: number; maximum: number; deduction_pool: number; deduction_attributes: string[] }[] } | null
 }
 export type Character = {
+  module_handout?: (ModuleHandoutSelection & { definition: PreparedHandout }) | null
+  module_handout_approval?: string | null; module_handout_effects?: ModuleHandoutEffect[]
   id: string; original_id: string | null; ruleset_id: string; ruleset_version: string
   status: 'draft' | 'finalized'; creation_mode: 'random' | 'point_buy'
   name: string; player_name: string | null; age: number | null; occupation: string | null
@@ -74,7 +79,7 @@ export type Character = {
   created_at: string; updated_at: string; version: number
 }
 export type BasicFields = Pick<Character, 'name' | 'player_name' | 'age'>
-export type EditableFields = BasicFields & Pick<Character, 'occupation' | 'selected_occupation_skills' | 'attributes' | 'occupation_skills' | 'interest_skills' | 'age_deductions' | 'occupation_attribute' | 'occupation_group_choices' | 'selected_specializations' | 'custom_specializations' | 'era' | 'background' | 'asset_details' | 'equipment' | 'occupation_skill_replacement' | 'initial_mythos_proposal' | 'experience' | 'experience_skills'> & { approve_specializations?: string[]; approve_occupation_exceptions?: string[]; approve_experience?: string[] }
+export type EditableFields = BasicFields & Pick<Character, 'occupation' | 'selected_occupation_skills' | 'attributes' | 'occupation_skills' | 'interest_skills' | 'age_deductions' | 'occupation_attribute' | 'occupation_group_choices' | 'selected_specializations' | 'custom_specializations' | 'era' | 'background' | 'asset_details' | 'equipment' | 'occupation_skill_replacement' | 'initial_mythos_proposal' | 'experience' | 'experience_skills'> & { approve_specializations?: string[]; approve_occupation_exceptions?: string[]; approve_experience?: string[]; module_handout?: ModuleHandoutSelection | null; approve_module_handout?: boolean }
 export type CharacterExport = {
   schema_version: number; exported_at: string; character: Character
   ruleset: { id: string; version: string; verification_status: string }

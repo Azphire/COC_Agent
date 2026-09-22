@@ -121,6 +121,11 @@ async def assign(room_id: UUID, body: s.AssignCharacter, svc: Service, token: To
     return await svc.command(room_id, token, "assign", body)
 
 
+@router.post("/{room_id}/handout-assignments")
+async def assign_handout(room_id: UUID, body: s.AssignHandout, svc: Service, token: Token):
+    return await svc.command(room_id, token, "handout.assign", body)
+
+
 @router.delete("/{room_id}/character-assignments/{slot_id}")
 async def unassign(room_id: UUID, slot_id: UUID, svc: Service, token: Token):
     return await svc.command(room_id, token, "unassign", target=slot_id)

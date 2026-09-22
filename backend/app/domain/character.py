@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from app.domain.character_details import AssetDetail, Background, EquipmentEntry, Finances
+from app.domain.handouts import CharacterHandout, HandoutEffect
 from app.domain.mythos import InitialMythosSource, KnownSpell, MythosExperience
 from app.domain.specializations import CustomSpecialization
 
@@ -114,6 +115,9 @@ class CharacterData(DomainModel):
     experience_rolls: dict[str, RollRecord] = Field(default_factory=dict, max_length=5)
     experience_approvals: dict[str, str] = Field(default_factory=dict, max_length=1)
     experience_effects: dict = Field(default_factory=dict)
+    module_handout: CharacterHandout | None = None
+    module_handout_approval: str | None = Field(default=None, max_length=64)
+    module_handout_effects: list[HandoutEffect] = Field(default_factory=list)
     era: Literal["1920s", "modern"] = "1920s"
     background: Background = Field(default_factory=Background)
     asset_details: list[AssetDetail] = Field(default_factory=list, max_length=100)

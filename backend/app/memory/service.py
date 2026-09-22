@@ -273,6 +273,26 @@ async def build_context(
         "phase": phase,
         **(additions or {}),
     }
+    if not narrator:
+        from app.rooms.handouts import private_handouts
+
+        # Keep the full acting character's private prose, without spending the
+        # fixed prompt budget on every player's HO or repeated provenance IDs.
+        # The source ledger stays complete. KP can inspect another character
+        # through the existing permission-checked inspect_character tool.
+        recipient = (
+            (trigger or {}).get("actor_member_id") or cycle.state.get("triggering_member_id")
+        ) if keeper else binding.member_id
+        assigned = private_handouts(room, recipient)
+        if assigned:
+            context["private_handouts"] = assigned
+        if keeper:
+            index = [
+                {k: h[k] for k in ("handout_id", "member_id", "title")}
+                for h in private_handouts(room, binding.member_id, keeper=True)
+            ]
+            if index:
+                context["private_handout_index"] = index
     # A remembered interlocutor does not turn a result follow-up into a new
     # conversation or displace its actual receipts with the NPC's initial profile.
     context["readonly_recall"] = readonly_recall(question)

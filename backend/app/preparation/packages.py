@@ -280,6 +280,14 @@ def audit(package, data_dir):
             422,
         )
     summary["numeric_review"] = numeric_review(package)
+    from app.preparation.handouts import validate_handouts
+
+    handouts = validate_handouts(package.get("handouts", []), source.source_hash, ir)
+    summary["handouts"] = {
+        "count": len(handouts),
+        "source_reviewed": True,
+        "delivery": "recipient_and_host",
+    }
     summary["runtime_acceptance"] = evidence_registry()["packages"].get(
         content_digest(package),
         {
@@ -308,6 +316,9 @@ class PackageService:
                 "structure": structure.document if structure else None,
                 "initial": prep.document["initial_scene_entity_id"],
                 "required": prep.document["required_entity_ids"],
+                **(
+                    {"handouts": prep.document["handouts"]} if prep.document.get("handouts") else {}
+                ),
             }
         )
 
@@ -382,6 +393,7 @@ class PackageService:
                         "numeric_supplement": package.get("numeric_supplement"),
                         "coverage_summary": summary,
                         "reviewed_by": package["reviewer"],
+                        "handouts": package.get("handouts", []),
                     },
                 )
                 # Dictionary keys are entity keys too for required operations.

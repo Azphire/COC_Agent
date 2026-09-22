@@ -50,6 +50,10 @@ def visible(event: RoomEvent, identity: Identity) -> bool:
         identity.is_host
         or event.visibility == "public"
         or (event.visibility == "actor_and_host" and event.actor_member_id == identity.member_id)
+        or (
+            event.visibility == "recipient_and_host"
+            and event.payload.get("recipient_member_id") == identity.member_id
+        )
     )
 
 
@@ -64,6 +68,10 @@ def event_view(event: RoomEvent) -> dict:
         "type": event.type,
         "actor_member_id": event.actor_member_id,
         "visibility": event.visibility,
+        **(
+            {"recipient_member_id": event.payload.get("recipient_member_id")}
+            if event.visibility == "recipient_and_host" else {}
+        ),
         "payload": event.payload,
         "occurred_at": iso_utc(event.occurred_at),
         "client_request_id": event.client_request_id,
@@ -167,6 +175,8 @@ class RoomService:
         )
 
     async def view(self, session, room, identity):
+        from app.rooms.handouts import character_view
+
         members, slots = await self.members(session, room), await self.slots(session, room)
         full_slots = {
             slot.id for slot in slots if identity.is_host or slot.member_id == identity.member_id
@@ -179,6 +189,11 @@ class RoomService:
             state["combat"] = {}
             state["module_runtime"] = {}
             state["time_receipts"] = {}
+            state["handout_catalog"] = None
+            state["handout_assignments"] = [
+                h for h in state["handout_assignments"]
+                if h["member_id"] == identity.member_id
+            ]
         return {
             "id": room.id,
             "name": room.name,
@@ -192,6 +207,10 @@ class RoomService:
             "self_member_id": identity.member_id,
             "is_host": identity.is_host,
             "session_state": state,
+            "handouts": {
+                "available": (state.get("handout_catalog") or {}).get("handouts", []),
+                "assignments": state["handout_assignments"],
+            },
             "combat": await self.agent_service.combat.view(session, room, identity)
             if self.agent_service
             else None,
@@ -219,7 +238,9 @@ class RoomService:
                     **(
                         {
                             "source_character_id": s.source_character_id,
-                            "character_snapshot": s.character_snapshot,
+                            "character_snapshot": character_view(
+                                room, s, identity.member_id, keeper=identity.is_host,
+                            ),
                         }
                         if s.id in full_slots
                         else {}
@@ -245,6 +266,10 @@ class RoomService:
                     (RoomEvent.visibility == "actor_and_host")
                     & (RoomEvent.actor_member_id == identity.member_id)
                 )
+                | (
+                    (RoomEvent.visibility == "recipient_and_host")
+                    & (RoomEvent.payload["recipient_member_id"].as_string() == identity.member_id)
+                )
             )
         query = query.order_by(RoomEvent.seq)
         if limit is not None:
@@ -261,7 +286,14 @@ class RoomService:
         visibility="public",
         request_id=None,
         request_hash=None,
+        recipient_member_id=None,
     ):
+        require(
+            (visibility == "recipient_and_host") == (recipient_member_id is not None),
+            "定向事件必须显式指定接收成员", 422,
+        )
+        if recipient_member_id is not None:
+            payload = {**payload, "recipient_member_id": str(recipient_member_id)}
         room.revision += 1
         room.updated_at = utc_now()
         event = RoomEvent(
@@ -512,6 +544,10 @@ class RoomService:
         return slot
 
     async def apply(self, session, room, identity, action, body, target):
+        if action == "handout.assign":
+            from app.rooms.handouts import assign_handout
+
+            return await assign_handout(self, session, room, identity, body)
         if action.startswith("submission."):
             return await self.submissions.command(session, room, identity, action, body, target)
         if self.agent_service and action.startswith("combat."):
@@ -673,6 +709,17 @@ class RoomService:
             if action == "assign":
                 member = player(str(body.member_id) if body.member_id else actor)
                 require(identity.is_host or member.id == actor, "不能替其他成员选择角色", 403)
+                require(
+                    identity.is_host or not slot.character_snapshot.get("module_handout"),
+                    "含私人 HO 的角色须由主机定向分配", 403,
+                )
+                from app.rooms.handouts import assigned_recipient
+
+                recipient = await assigned_recipient(session, room.id, slot.id)
+                require(
+                    recipient is None or recipient == member.id,
+                    "此角色已分发私人 HO，不能转配给其他成员", 409,
+                )
                 require(slot.member_id is None, "角色已被占用")
                 require(all(s.member_id != member.id for s in slots), "玩家已有角色，请先取消分配")
                 slot.member_id, member.ready = member.id, False
@@ -724,6 +771,11 @@ class RoomService:
             require(room.status in ("running", "paused"), "游戏开始后才能修改会话状态")
             require(body.expected_revision == room.revision, "房间已更新，请重新加载状态后编辑")
             previous_state = SessionStateV1.model_validate(room.session_state)
+            require(
+                body.state.handout_catalog == previous_state.handout_catalog
+                and body.state.handout_assignments == previous_state.handout_assignments,
+                "HO 目录和分配请使用专用接口", 422,
+            )
             require(body.state.combat == previous_state.combat, "战斗状态请使用战斗结算接口", 422)
             require(
                 body.state.module_runtime == previous_state.module_runtime,

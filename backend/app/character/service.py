@@ -59,6 +59,37 @@ class CharacterService:
         return character
 
     @staticmethod
+    def validate_handout_source(character: Character) -> None:
+        """Imports cannot turn a claimed source/hash or old approval into authority."""
+        if character.module_handout is None:
+            return
+        from app.preparation.handouts import validate_handouts
+
+        definition = character.module_handout.definition
+        try:
+            validate_handouts([definition.model_dump(mode="json")], definition.source_hash)
+        except ValueError as error:
+            raise CharacterError(422, str(error)) from error
+
+    async def resolve_handout(self, selection):
+        from app.domain.handouts import CharacterHandout
+        from app.persistence.preparation_models import ModulePreparation
+        from app.preparation.handouts import validate_handouts
+
+        async with self.repository.database.sessions() as session:
+            prep = await session.get(ModulePreparation, selection.preparation_id)
+            if prep is None or prep.status != "approved":
+                raise CharacterError(422, "HO 必须来自本机已核准的准备包")
+            try:
+                handouts = validate_handouts(prep.document.get("handouts", []), prep.source_hash)
+            except ValueError as error:
+                raise CharacterError(422, str(error)) from error
+            definition = next((item for item in handouts if item.id == selection.handout_id), None)
+            if definition is None:
+                raise CharacterError(422, "准备包中不存在该已核准 HO")
+            return CharacterHandout(**selection.model_dump(), definition=definition)
+
+    @staticmethod
     def check_known(character: Character, ruleset: RuleSet) -> None:
         issues = []
 
@@ -176,8 +207,15 @@ class CharacterService:
                 "approve_specializations",
                 "approve_occupation_exceptions",
                 "approve_experience",
+                "approve_module_handout",
+                "module_handout",
             },
         )
+        if "module_handout" in request.model_fields_set:
+            changes["module_handout"] = (
+                (await self.resolve_handout(request.module_handout)).model_dump()
+                if request.module_handout is not None else None
+            )
         if ruleset.age_rules and "age" in changes and changes["age"] != character.age:
             raise CharacterError(422, "年龄已锁定，不能通过修改年龄重新获得幸运或教育检定")
         if "attributes" in changes and character.creation_mode == "random":
@@ -216,6 +254,14 @@ class CharacterService:
                 approve_occupation_exceptions(
                     candidate, ruleset, request.approve_occupation_exceptions
                 )
+            except ValueError as error:
+                raise CharacterError(422, str(error)) from error
+        if request.approve_module_handout:
+            from app.rules.handouts import approve_module_handout
+
+            self.validate_handout_source(candidate)
+            try:
+                approve_module_handout(candidate, ruleset)
             except ValueError as error:
                 raise CharacterError(422, str(error)) from error
         recalculate(candidate, ruleset)
@@ -270,6 +316,13 @@ class CharacterService:
             }))
         if request.approve_experience:
             events.append(("experience_approved", {"effects": candidate.experience_effects}))
+        if "module_handout" in changes or request.approve_module_handout:
+            events.append(("module_handout_updated", {
+                "handout_id": candidate.module_handout.handout_id
+                if candidate.module_handout else None,
+                "approved": candidate.module_handout_approval is not None,
+                "effects": [effect.model_dump() for effect in candidate.module_handout_effects],
+            }))
         if request.approve_specializations:
             events.append(("specializations_approved", {"skills": request.approve_specializations}))
         if request.approve_occupation_exceptions:
@@ -300,6 +353,7 @@ class CharacterService:
         self.check_editable(character, version)
         ruleset = self.ruleset(character.ruleset_id, character.ruleset_version)
         self.check_known(character, ruleset)
+        self.validate_handout_source(character)
         recalculate(character, ruleset)
         if not character.validation.valid:
             raise CharacterError(422, "角色校验未通过，草稿已保留", character.validation.issues)
@@ -350,6 +404,7 @@ class CharacterService:
         ruleset = self.ruleset(document.ruleset.id, document.ruleset.version)
         if document.ruleset.verification_status != ruleset.verification_status:
             raise CharacterError(422, "导入文件的规则集核对状态不匹配")
+        self.validate_handout_source(original)
         character = CharacterDraft.model_validate(
             {
                 **original.model_dump(),
@@ -359,6 +414,7 @@ class CharacterService:
                 "specialization_approvals": {},
                 "occupation_exception_approvals": {},
                 "experience_approvals": {},
+                "module_handout_approval": None,
                 "experience_rolls": {
                     key: {**record.model_dump(), "source": "imported"}
                     for key, record in original.experience_rolls.items()

@@ -542,8 +542,8 @@ def test_initial_mythos_plus_runtime_gain_once(client, lobby, preparation, reque
                 session,
                 room,
                 SimpleNamespace(cycle_id=cycle.id),
-                None,
-                None,
+                SimpleNamespace(member_id=room.host_member_id),
+                SimpleNamespace(role="keeper"),
                 "inspect_character",
                 SimpleNamespace(member_id=game["player"]),
             )

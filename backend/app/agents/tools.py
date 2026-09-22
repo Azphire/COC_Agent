@@ -431,8 +431,10 @@ class AgentTools:
             skill_values = runtime_skill_values(
                 room, slot, available_skills(slot.character_snapshot)
             )
+            from app.rooms.handouts import character_view
+
             return {
-                **slot.character_snapshot,
+                **character_view(room, slot, binding.member_id, keeper=profile.role == "keeper"),
                 "skill_values": skill_values,
                 "skill_half_values": {k: v // 2 for k, v in skill_values.items()},
                 "skill_fifth_values": {k: v // 5 for k, v in skill_values.items()},

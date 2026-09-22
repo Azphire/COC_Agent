@@ -29,6 +29,7 @@ export default function RoomTimelineEvent({ event, room, debug = false }: { even
       : event.type === 'review.waiting' || event.type === 'review.status' ? <p>{String(p.text)}</p>
       : event.type === 'agent.cycle_changed' ? <p>cycle {labels[String(p.status)] || String(p.status)} · {nodeLabels[String(p.current_node)] || String(p.current_node)}{p.status === 'completed' && `，模型调用 ${p.call_count ?? '—'} 次`}{p.safe_error ? ` · ${p.safe_error}` : ''}</p>
       : event.type === 'scene.updated' ? <p>场景：{String(p.scene_title)} · {String(p.scene_summary)}</p>
+      : event.type === 'handout.assigned' ? <p>私密 HO：{String((p.assignment as { title?: string } | undefined)?.title ?? '已分配资料')} · 已定向分配给 {room.members.find(item => item.id === event.recipient_member_id)?.display_name ?? '本人'}。正文见“HO 私密资料”。</p>
       : event.type === 'dice.rolled' ? <p>{String(p.reason)} · {String(p.expression)} → [{(p.dice as number[]).join(', ')}] {Number(p.modifier) >= 0 ? '+' : ''}{String(p.modifier)} = <strong>{String(p.total)}</strong></p>
       : <details><summary>{event.type}</summary><pre>{JSON.stringify(p, null, 2)}</pre></details>}
     {p.check_notice ? <p>{String(p.check_notice)}</p> : null}

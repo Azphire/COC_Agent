@@ -137,12 +137,12 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
       <p>勾选后保存，服务端记录当前名称与年代的核准；导入其他主机或提交房间时需重新核准。</p>
     </fieldset>}
     <p role="status">当前分配余额：职业 <strong>{balances.occupation}</strong> / {occupationPool}，兴趣 <strong>{balances.interest}</strong> / {interestPool}。
-      <small>公式使用已保存的年龄调整后属性；修改属性后请保存重算。后端已保存余额：职业 {character.remaining_points.occupation}，兴趣 {character.remaining_points.interest}。</small></p>
+      <small>公式使用已保存的最终属性（含年龄与 HO 调整）；修改后请保存重算。后端已保存余额：职业 {character.remaining_points.occupation}，兴趣 {character.remaining_points.interest}。</small></p>
     <div className="field-grid"><label>搜索技能<input type="search" value={search} onChange={e => setSearch(e.target.value)} /></label>
       <label>技能分类<select value={category} onChange={e => setCategory(e.target.value)}><option value="">全部分类</option>
         {[...new Set(skills.map(s => s.category))].map(c => <option key={c}>{c}</option>)}
       </select></label></div>
-    <div className="table-scroll"><table><thead><tr><th>技能 / 基础值</th><th>职业投入</th><th>兴趣投入</th><th>合计 / 上限</th></tr></thead>
+    <div className="table-scroll"><table><thead><tr><th>技能 / 基础值</th><th>职业投入</th><th>兴趣投入</th><th>投入合计 / 常规上限</th><th>保存后最终值</th></tr></thead>
       <tbody>{skills.filter(s => (!category || s.category === category) && (s.display_name + s.key).toLowerCase().includes(search.toLowerCase())
         && (!s.specialization_group || allowed.has(s.key) || value.selected_specializations.includes(s.key) || value.occupation_skills[s.key]?.points || value.interest_skills[s.key]?.points)).map(s => {
         const base = character.skill_base_values[s.key] ?? s.base_value
@@ -156,7 +156,8 @@ export default function SkillAllocator({ ruleset, character, value, onChange }: 
               onChange={e => onChange({ ...value, [field]: { ...value[field], [s.key]: { points: Number(e.target.value) } } })} />
             {field === 'occupation_skills' && !allowed.has(s.key) && !!value[field][s.key]?.points && <button type="button" onClick={() => onChange({ ...value, occupation_skills: { ...value.occupation_skills, [s.key]: { points: 0 } } })}>退回 {value[field][s.key].points} 职业点</button>}
             {character.validation.issues.filter(i => i.field === `${field}.${s.key}`).map((i, n) => <small className="field-error" key={n}>{i.message}</small>)}
-          </td>)}<td>{total} / {s.maximum}<small>困难 {Math.floor(total / 2)} · 极难 {Math.floor(total / 5)}</small></td></tr>
+          </td>)}<td>{total} / {s.maximum}<small>不含 HO 加值；来源与上限见下方方案。</small></td>
+          <td>{character.skill_values[s.key] ?? '—'}<small>困难 {character.skill_half_values[s.key] ?? '—'} · 极难 {character.skill_fifth_values[s.key] ?? '—'}</small></td></tr>
       })}</tbody></table></div>
   </section>
 }

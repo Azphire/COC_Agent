@@ -9,6 +9,7 @@ import JsonTransfer from '../components/character/JsonTransfer'
 import CharacterDetails from '../components/character/CharacterDetails'
 import { characterSkills } from '../components/character/specializations'
 import ExperiencePackages from '../components/character/ExperiencePackages'
+import ModuleHandoutEditor from '../components/character/ModuleHandoutEditor'
 
 const empty: EditableFields = {
   name: '', player_name: null, age: 25, occupation: null, selected_occupation_skills: [],
@@ -87,7 +88,9 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
       .some(k => JSON.stringify(value[k]) !== JSON.stringify(form[k]))
     const experienceChanged = (['experience', 'experience_skills', 'attributes', 'age_deductions', 'occupation', 'era', 'occupation_group_choices', 'occupation_skills', 'interest_skills', 'selected_specializations', 'custom_specializations', 'initial_mythos_proposal', 'occupation_skill_replacement'] as const)
       .some(k => JSON.stringify(value[k]) !== JSON.stringify(form[k]))
-    setForm({ ...value, ...(changed ? { approve_occupation_exceptions: undefined } : {}), ...(experienceChanged ? { approve_experience: undefined } : {}) })
+    const handoutChanged = experienceChanged || JSON.stringify(value.module_handout) !== JSON.stringify(form.module_handout)
+      || JSON.stringify(value.background) !== JSON.stringify(form.background)
+    setForm({ ...value, ...(changed ? { approve_occupation_exceptions: undefined } : {}), ...(experienceChanged ? { approve_experience: undefined } : {}), ...(handoutChanged ? { approve_module_handout: false } : {}) })
     setDirty(true); setNotice(''); setApiIssues([])
   }
   function accept(character: Character, message: string) {
@@ -127,6 +130,11 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
         approve_occupation_exceptions: form.approve_occupation_exceptions,
         experience: form.experience, experience_skills: form.experience_skills,
         approve_experience: form.approve_experience,
+        module_handout: form.module_handout ? {
+          preparation_id: form.module_handout.preparation_id, handout_id: form.module_handout.handout_id,
+          attribute_allocations: form.module_handout.attribute_allocations,
+        } : null,
+        approve_module_handout: form.approve_module_handout,
         asset_details: form.asset_details, equipment: form.equipment,
       }
       if (saved.creation_mode === 'point_buy') body.attributes = form.attributes
@@ -165,6 +173,7 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
         {mode === 'random' ? '随机生成整组属性并保存草稿' : '创建购点草稿'}
       </button>}
       {!saved && ruleset?.age_rules && <p className="hint">创建时生成幸运与教育检定并锁定年龄。90岁及以上缺少本地完整调整条款，尚不支持；购点采用460点可选规则。</p>}
+      {!saved && <p className="hint">模组专属角色请先在<a href="#/preparations">模组准备的 HO 资料</a>中核对年龄、职业等要求，再按要求创建；保存草稿后可选择 HO 调整方案。</p>}
       {!saved && !!ruleset?.experience_packages?.length && <p className="hint">如需经历包，请先确定最终年龄：警务至少25岁、罪犯20岁、医务30岁；战场按参战时年龄与模组年份差计算。创建后在下方选包并分配经历点，最多一包，须KP许可。</p>}
       {saved && ruleset && <>
         <CharacteristicEditor character={saved} ruleset={ruleset} values={form.attributes}
@@ -180,6 +189,7 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
         </section>}
         <SkillAllocator character={saved} ruleset={ruleset} value={form} onChange={update} />
         <ExperiencePackages character={saved} ruleset={ruleset} value={form} onChange={update} />
+        <ModuleHandoutEditor key={`${saved.id}:${saved.module_handout?.preparation_id ?? ''}`} character={saved} ruleset={ruleset} value={form} dirty={dirty} onChange={update} />
         <CharacterDetails character={saved} value={form} onChange={update} />
       </>}
     </fieldset>

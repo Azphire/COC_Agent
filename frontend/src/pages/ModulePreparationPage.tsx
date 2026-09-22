@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { api, hostToken } from '../api/session'
 import type { KnowledgeSource } from '../api/knowledge'
 import { entityLabels, importPreparation } from '../api/preparation'
-import type { Entity, EntityType, Preparation, Relation } from '../api/preparation'
+import type { Entity, EntityType, PreparationDocument as Preparation, Relation } from '../api/preparation'
 import ModuleStructurePanel from '../components/ModuleStructurePanel'
+import HandoutDefinitionView from '../components/HandoutDefinitionView'
 
 export default function ModulePreparationPage() {
   const token = hostToken()
@@ -107,6 +108,10 @@ export default function ModulePreparationPage() {
         <p>人物准备：{entities.filter(e => e.type === 'npc' && e.status === 'approved').length} 个已批准。请核对当前场景的人物绑定；若范围内没有人物，可继续无人物场景，测试人物请勾选专用标记。</p><div className="action-row"><button disabled={busy || ['extracting', 'approved', 'stale'].includes(current.status)} onClick={() => void command(`/module-preparations/${current.id}/generate`)}>生成实体草稿</button><button disabled={busy || !current.initial_scene_entity_id || current.status === 'extracting' || current.status === 'stale'} onClick={() => void command(`/module-preparations/${current.id}/approve`)}>批准准备版本</button><button onClick={() => void refresh()}>刷新状态</button></div>
         <p>初始场景：{entities.find(e => e.id === current.initial_scene_entity_id)?.title || '尚未设置'}</p><details><summary>最近准备与审阅记录</summary>{current.activity?.map((entry, i) => <p key={i}>{new Date(entry.time).toLocaleString()} · {entry.action} {entry.title}</p>)}</details>
       </section>
+      {!!current.handouts?.length && <section data-testid="preparation-handouts"><h3>模组专属 HO 与建卡要求</h3>
+        <p>建卡前核对年龄、职业和人物要求；按这些要求创建草稿后，在角色编辑器中选择本准备包及 HO。私密正文由主机在房间定向分配。</p>
+        {current.handouts.map(handout => <article key={handout.id}><h4>{handout.title}</h4><HandoutDefinitionView handout={handout} /></article>)}
+      </section>}
       <ModuleStructurePanel key={current.id} preparationId={current.id} token={token} entities={entities} />
       <section><h3>实体草稿审阅</h3>{entities.length === 0 && <p>尚无实体，生成草稿或手动新增。</p>}{entities.map(entity => <EntityEditor key={`${entity.id}:${entity.version}`} entity={entity} token={token} busy={busy} command={command} initial={entity.id === current.initial_scene_entity_id} onInitial={() => void command(`/module-preparations/${current.id}`, { initial_scene_entity_id: entity.id, required_entity_ids: current.required_entity_ids }, 'PATCH')} required={current.required_entity_ids.includes(entity.id)} onRequired={(checked) => {
         if (!current.initial_scene_entity_id) { setError('请先设置初始场景'); return }

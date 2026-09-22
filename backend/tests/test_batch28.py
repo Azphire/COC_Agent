@@ -495,8 +495,8 @@ async def test_inspect_character_returns_new_specialty_names_and_values():
         SimpleNamespace(get=nothing),
         room,
         SimpleNamespace(cycle_id="cycle"),
-        None,
-        None,
+        SimpleNamespace(member_id="keeper"),
+        SimpleNamespace(role="keeper"),
         "inspect_character",
         SimpleNamespace(member_id="player"),
     )

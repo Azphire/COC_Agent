@@ -79,6 +79,9 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
 
     raw_values = dict(values)
     issues.extend(adjust_for_age(character, ruleset))
+    from app.rules.handouts import apply_attributes as apply_handout_attributes
+
+    apply_handout_attributes(character, ruleset, issue)
     values = dict(character.effective_attributes)
 
     character.derived_values = {}
@@ -257,6 +260,16 @@ def recalculate(character: CharacterData, ruleset: RuleSet) -> None:
     aggregate_initial(character)
     apply_initial_mythos(character)
     apply_san(character)
+    if ruleset.edition == "coc7" and "san" in character.derived_values:
+        # POW may exceed 100 (rulebook physical p26), but SAN cannot exceed
+        # 99 - Mythos (physical p131), including characters with zero Mythos.
+        san_maximum = max(0, 99 - character.initial_mythos)
+        if character.module_handout:
+            character.derived_values["san_max"] = san_maximum
+        character.derived_values["san"] = min(character.derived_values["san"], san_maximum)
+    from app.rules.handouts import apply_skills as apply_handout_skills
+
+    apply_handout_skills(character, ruleset, definitions, issue)
     character.skill_half_values = {key: value // 2 for key, value in character.skill_values.items()}
     from app.rules.character_options import credit_finances
 

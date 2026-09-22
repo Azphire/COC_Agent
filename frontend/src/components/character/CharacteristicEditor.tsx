@@ -25,7 +25,7 @@ export default function CharacteristicEditor({ ruleset, character, values, onCha
             min={minimum} max={item.maximum} value={value ?? ''}
             aria-invalid={invalid} onChange={event => onChange({ ...values, [item.key]: { value: Number(event.target.value) } })} />
           <small>{minimum}–{item.maximum} · {random ? `${item.random_formula} × ${item.random_multiplier}` : `每级 ${item.point_buy_cost} 点`}</small>
-          {ruleset.age_rules && <small>已保存的年龄调整后值：{character.effective_attributes[item.key] ?? '—'}</small>}
+          {ruleset.age_rules && <small>已保存的最终值（含年龄与 HO 调整）：{character.effective_attributes[item.key] ?? '—'}</small>}
           {ruleset.age_rules && <small>困难：{character.derived_values[`${item.key}_half`]} · 极难：{character.derived_values[`${item.key}_fifth`]}</small>}
           {invalid && <small className="field-error">请输入范围内的整数</small>}
         </label>

@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from pydantic import Field, StrictInt, model_validator
+from pydantic import Field, StrictBool, StrictInt, model_validator
 
 from app.domain.character import (
     BoundedInt,
@@ -12,6 +12,7 @@ from app.domain.character import (
     SkillAllocation,
 )
 from app.domain.character_details import AssetDetail, Background, EquipmentEntry
+from app.domain.handouts import ModuleHandoutSelection
 from app.domain.specializations import CustomSpecialization
 
 
@@ -50,6 +51,8 @@ class PatchCharacterRequest(DomainModel):
     experience: ExperienceSelection | None = None
     experience_skills: dict[str, SkillAllocation] | None = None
     approve_experience: list[str] | None = Field(default=None, max_length=1)
+    module_handout: ModuleHandoutSelection | None = None
+    approve_module_handout: StrictBool = False
     era: Literal["1920s", "modern"] | None = None
     background: Background | None = None
     asset_details: list[AssetDetail] | None = Field(default=None, max_length=100)

@@ -1,4 +1,11 @@
 {
+  "source_handouts": {
+    "9b63dcfbcc35ce7e667dc86b5000760627b820790ef908106e2335df87ffedd1": {
+      "HO1": "4309cf3d7367fb55d74ff2be53cdea28e01984b2e049d8d5f11a25b06ab2e0cf",
+      "HO2": "cd457bccd143dde2d015fb59cfbf0c1d5e0f5c1fac8ea87904dea17de6f57c10",
+      "HO3": "c31943e211b3a3ff91eb7e9b377188f01ff153370fed7d6ec9e1deee963e1ff8"
+    }
+  },
   "numeric_approvals": {
     "batch17-npc-values-v1-user-approval": "7b0f879e85e1afc2145796fdaf734665039bfd3cfb4919143b7955b15d328729"
   },

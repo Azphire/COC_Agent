@@ -125,6 +125,26 @@ class RoomEntityService:
             self.agents.knowledge.repository.available(prep.source_id, prep.source_hash),
             "knowledge_missing：来源版本不可用",
         )
+        from app.preparation.handouts import validate_handouts
+        from app.rooms.schemas import SessionStateV1
+
+        state = SessionStateV1.model_validate(room.session_state)
+        handouts = [h.model_dump(mode="json") for h in validate_handouts(
+            prep.document.get("handouts", []), prep.source_hash,
+        )]
+        catalog = {
+            "preparation_id": prep.id,
+            "source_id": prep.source_id,
+            "source_hash": prep.source_hash,
+            "preparation_version": prep.version,
+            "handouts": handouts,
+        } if handouts else None
+        require(
+            not state.handout_assignments or state.handout_catalog == catalog,
+            "房间已经分发 HO，不能换成其他准备版本", 409,
+        )
+        state.handout_catalog = catalog
+        room.session_state = state.model_dump(mode="json")
         rows = await self.rows(session, room.id)
         require(
             not rows

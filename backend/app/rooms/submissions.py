@@ -137,10 +137,17 @@ class SubmissionService:
                 require(len(slots) < 100, "房间最多发布 100 个角色")
                 draft = CharacterDraft.model_validate(row.character)
                 from app.rules.experiences import approve_experience
+                from app.rules.handouts import approve_module_handout
                 from app.rules.occupation_exceptions import approve_occupation_exceptions
                 from app.rules.specializations import approve_specializations
 
                 try:
+                    self.characters.validate_handout_source(draft)
+                    if body.approve_module_handout:
+                        approve_module_handout(
+                            draft,
+                            self.characters.ruleset(draft.ruleset_id, draft.ruleset_version),
+                        )
                     approve_experience(
                         draft,
                         self.characters.ruleset(draft.ruleset_id, draft.ruleset_version),

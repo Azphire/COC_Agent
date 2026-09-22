@@ -18,6 +18,17 @@ export async function importPreparation(file: File, token: string): Promise<Pack
 export type NPCCheckStats = { attributes: Record<string, number>; skills: Record<string, number>; source: string; page?: number | null }
 export const entityLabels: Record<EntityType, string> = { scene: '场景', npc: '人物', location: '地点', clue: '线索', item: '物品' }
 export type SourceReference = { source_title: string; source_hash: string; physical_page: number | null; page_kind: string }
+export type HandoutAdjustments = {
+  attribute_points: number; attribute_choices: string[]; attribute_maximum: number | null; attribute_maxima: Record<string, number>
+  skill_bonuses: Record<string, number>; credit_maximum: number | null; skill_maximum: number
+  required_age: number | null; required_occupation: string | null; required_era: string | null
+  requirements_note: string; order_note: string; ruleset_id: string
+}
+export type PreparedHandout = {
+  id: string; title: string; text: string; source_hash: string
+  source_pages: number[]; source_block_ids: string[]; adjustments?: HandoutAdjustments | null
+}
+export type PreparationDocument = Preparation & { handouts?: PreparedHandout[] }
 export type PublicEntity = { holder_name?: string | null; held_by_member_id?: string | null; id: string; type: EntityType; title: string; public_summary: string; source_references: SourceReference[]; state: string; revealed_time: string | null; correction_reference: number | null; origin?: string; fact_scope?: 'current_scene' | 'historical' | 'unknown'; scope_label?: string }
 export type Entity = PublicEntity & { combat_template?: Record<string, unknown> | null; reviewed_by?: string; review_basis?: string; source_block_ids?: string[]; interactions?: Record<string, unknown>[]; check_stats?: NPCCheckStats | null; sanity_effects?: Record<string, unknown>[]; preparation_id: string; keeper_summary: string; status: string; initial_visibility: string; evidence_ids: string[]; source_pages: number[]; suggested_checks: { kind: string; name: string; difficulty: string }[]; reveal_conditions: { access_policy?: 'automatic' | 'requires_check' | 'requires_condition' | 'host_review' | null; scene_id: string | null; required_entity_ids: string[]; successful_check: { kind: string; name: string; difficulty: string } | null; note: string }; confidence: number | null; validation_errors: string[]; generated_by: string; host_edited: boolean; version: number }
 export type Preparation = { package_bindable?: boolean; coverage_summary?: CoverageSummary; reviewed_by?: string; activity?: { time: string; action: string; title: string }[]; id: string; source_id: string; source_hash: string; display_title: string; status: string; version: number; scope: { page_start: number | null; page_end: number | null; section: string | null }; source: { title: string; relative_reference: string; file_types?: string[]; mime_type: string; page_count: number; chunk_count: number } | null; initial_scene_entity_id: string | null; required_entity_ids: string[]; generated_entity_count: number; approved_entity_count: number; rejected_entity_count: number; model_call_count: number; safe_error: string | null; completed_batches: number; total_batches: number }

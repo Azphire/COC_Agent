@@ -44,6 +44,10 @@ class CharacterRuntimeV1(DomainModel):
 
 
 class SessionStateV1(DomainModel):
+    # Frozen at preparation binding. Only KP sees the catalog; assignments are
+    # projected by recipient before HTTP, websocket, or Agent context selection.
+    handout_catalog: dict | None = None
+    handout_assignments: list[dict] = Field(default_factory=list, max_length=100)
     time_receipts: dict[str, dict] = Field(default_factory=dict)
     module_runtime: ModuleRuntimeState = Field(default_factory=ModuleRuntimeState)
     combat: CombatState = Field(default_factory=CombatState)
@@ -104,12 +108,20 @@ class ReviewCharacterSubmission(DomainModel):
     approve_specializations: list[str] = Field(default_factory=list, max_length=200)
     approve_occupation_exceptions: list[str] = Field(default_factory=list, max_length=2)
     approve_experience: list[str] = Field(default_factory=list, max_length=1)
+    approve_module_handout: StrictBool = False
     client_request_id: UUID
 
 
 class AssignCharacter(DomainModel):
     slot_id: UUID
     member_id: UUID | None = None
+
+
+class AssignHandout(DomainModel):
+    handout_id: Name
+    slot_id: UUID
+    member_id: UUID
+    client_request_id: UUID
 
 
 class PatchSession(DomainModel):
