@@ -23,12 +23,12 @@ export async function api<T>(path: string, token: string, method = 'GET', body?:
   const response = await fetch(`/api${path}`, {
     method, headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(path === '/model/test' || path.endsWith('/generate-draft') ? 600000 : path.endsWith('/structure/build') ? 180000 : 15000),
+    signal: AbortSignal.timeout(path === '/model/test' || path.endsWith('/generate-draft') || /^\/party-batches\/[^/]+\/next$/.test(path) ? 600000 : path.endsWith('/structure/build') || path.startsWith('/launch-drafts/') || path === '/launch/rules/refresh' ? 180000 : 15000),
   })
   if (!response.ok) {
     const data = await response.json().catch(() => ({}))
     const issues = (data.detail?.issues || []).map((issue: { field: string; message: string }) => `${issue.field}：${issue.message}`).join('\n')
-    const message = data.detail?.message || (typeof data.detail === 'string' ? data.detail : '') || `请求失败（${response.status}），请检查输入`
+    const message = data.detail?.message || (typeof data.detail === 'string' ? data.detail : '') || (response.status >= 500 ? `连接或服务暂不可用（${response.status}），请稍后重试；已保存进度可以恢复` : `请求失败（${response.status}），请检查输入`)
     throw new ApiError([message, issues].filter(Boolean).join('\n'), response.status)
   }
   return response.json()

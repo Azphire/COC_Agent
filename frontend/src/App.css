@@ -153,6 +153,65 @@ pre {
 .structure-children { padding-left: 1rem; border-left: 1px solid #46505c; }
 .structure-workspace summary { overflow-wrap: anywhere; }
 @media (max-width: 800px) { .structure-workspace { grid-template-columns: 1fr; } }
+.app-header { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 24px; margin-bottom: 28px; }
+.app-header nav { margin: 0; }
+.brand { color: #1b3931; text-decoration: none; font-size: 22px; font-weight: 750; }
+.admin-navigation { margin-left: auto; position: relative; }
+.admin-navigation > summary, .game-menu > summary { cursor: pointer; padding: 10px 14px; border: 1px solid #99aaa4; border-radius: 6px; }
+.admin-navigation[open] > nav { position: absolute; right: 0; top: 44px; z-index: 20; width: 280px; padding: 16px; background: white; border: 1px solid #dce4e1; box-shadow: 0 10px 30px #16392c20; }
+.home-intro { padding: clamp(24px, 6vw, 64px); background: #edf3ee; }
+.home-intro h1 { max-width: 630px; font-size: clamp(28px, 5vw, 46px); line-height: 1.4; }
+.eyebrow { color: #526561; letter-spacing: .08em; }
+.home-actions { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 30px; align-items: center; }
+.primary-link, .secondary-link { display: inline-block; text-decoration: none; padding: 12px 18px; border-radius: 6px; }
+.primary-link { background: #245d4e; color: white; }
+.secondary-link { border: 1px solid #245d4e; background: white; }
+.wizard-steps { list-style: none; display: flex; flex-wrap: wrap; gap: 20px; padding: 0; margin: 24px 0; }
+.wizard-steps li { border-bottom: 3px solid #dce4e1; padding: 8px 12px; color: #526561; }
+.wizard-steps li[aria-current="step"] { color: #245d4e; border-color: #245d4e; font-weight: 700; }
+.launch-wizard > details { margin-top: 20px; }
+.party-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; margin-top: 16px; }
+.party-member { border: 1px solid #b9cbc0; background: #f8faf7; border-radius: 8px; padding: 18px; overflow-wrap: anywhere; }
+.party-member h3 { margin-top: 0; }
+.party-member p { line-height: 1.65; }
+.party-member details { margin-top: 14px; }
+.acknowledgement { margin: 24px 0; font-weight: 400; line-height: 1.7; }
+.acknowledgement input { margin-right: 8px; }
+.launch-issues { border-left: 4px solid #a97413; padding: 14px 32px; background: #fff4d4; }
+.room-heading { position: relative; margin-top: 0; padding-right: 155px; }
+.room-heading .game-menu { position: absolute; right: 20px; top: 8px; z-index: 12; }
+.game-menu-content { position: absolute; right: 0; min-width: min(380px, 80vw); max-height: 75vh; overflow: auto; padding: 20px; background: white; border: 1px solid #dce4e1; border-radius: 8px; box-shadow: 0 10px 30px #16392c20; }
+.inline-seq { display: inline; }
+.game-desktop { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 18px; align-items: start; }
+.game-main { min-width: 0; display: flex; flex-direction: column; }
+.game-main > .agent-game { order: 2; }
+.game-main > .investigation-drawer { order: 3; }
+.game-desktop .story-panel { margin-top: 18px; }
+.game-desktop .timeline { list-style: none; min-height: 160px; max-height: clamp(160px, calc(100dvh - 660px), 500px); margin: 0; padding-left: 0; }
+.game-sidebar { min-width: 0; margin-top: 18px; }
+.game-sidebar > details { margin: 0 0 12px; border: 1px solid #dce4e1; border-radius: 8px; background: white; }
+.game-sidebar > details > summary { padding: 14px; font-weight: 650; }
+.game-sidebar section { margin: 0; border: 0; padding: 14px; }
+.game-sidebar .runtime-cards { padding: 0 14px; }
+.game-sidebar form { padding: 12px; }
+.game-desktop .agent-game { display: flex; flex-direction: column; margin-top: 12px; padding: 14px 18px; box-shadow: 0 4px 16px #16392c12; }
+.game-desktop .agent-game > form { order: 3; padding: 0; border: 0; margin: 8px 0 0; }
+.game-desktop .agent-game .check-list { order: 2; max-height: 34vh; overflow: auto; }
+.game-desktop .agent-game textarea { min-height: 88px; }
+.game-desktop .agent-game .check-card { margin: 8px 0; }
+.investigation-drawer { background: #edf3ee; padding: 12px 16px; border-radius: 6px; }
+.management-banner { border-left: 4px solid #a97413; background: #fff4d4; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@media (max-width: 850px) {
+  .game-desktop { grid-template-columns: 1fr; }
+  .game-sidebar { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  .game-desktop .agent-game { position: static; }
+  .room-heading { padding-right: 20px; }
+  .room-heading .game-menu { position: static; }
+  .game-menu-content { right: 20px; }
+  .app-header { gap: 10px; }
+  .app-header nav { gap: 2px; }
+}
 .combat-panel { border: 1px solid #8c6353; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
 .combat-panel li { padding: .4rem 0; }
 .combat-panel li[aria-current="step"] { border-left: 3px solid #b88043; padding-left: .6rem; }

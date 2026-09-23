@@ -137,6 +137,7 @@ class TeammateBehaviorPolicy:
         treatment_options=(),
         active_requests=(),
         fingerprint_context=None,
+        wording_sources=(),
     ):
         if information_request and decision.mode == "pass":
             return BehaviorRejection(accepted=False, reason="question_requires_answer_not_action")
@@ -148,6 +149,17 @@ class TeammateBehaviorPolicy:
         if decision.related_player_action_seq != action_seq:
             return BehaviorRejection(accepted=False, reason="unrelated_player_action")
         speech, action = decision.speech_text or "", decision.action_text or ""
+        from app.agents.teammate_wording import proposal_completion_error, source_claim_error
+
+        error = source_claim_error(speech, wording_sources) or source_claim_error(
+            action, wording_sources,
+        )
+        if not error and decision.mode in {"act", "assist"}:
+            error = proposal_completion_error(
+                action, speech, explicit_action_request=explicit_action_request,
+            )
+        if error:
+            return BehaviorRejection(accepted=False, reason=error)
         from app.agents.results import answer_result_error, result_error
         from app.memory.facts import readonly_recall
         items = (inventory_state or {}).get("known_items", [])

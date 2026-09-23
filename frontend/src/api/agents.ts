@@ -6,6 +6,7 @@ export type AgentProfileInput = {
   goals: string; speaking_style: string; action_tendency: string; model_preset: 'default';
 }
 export type AgentProfile = AgentProfileInput & { id: string; created_at: string; updated_at: string }
+export const personaFields: [keyof Pick<AgentProfileInput, 'background' | 'personality' | 'goals' | 'speaking_style' | 'action_tendency'>, string][] = [['background', '背景'], ['personality', '性格'], ['goals', '动机'], ['speaking_style', '说话风格'], ['action_tendency', '行动倾向']]
 export type Check = {
   opposed?: { opponent_member_id?: string; opponent_npc_id?: string; kind: string; name: string } | null;
   combined?: { name: string; difficulty: string; requirement: 'any' | 'all' } | null;

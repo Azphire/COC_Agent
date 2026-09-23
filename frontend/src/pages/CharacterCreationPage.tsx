@@ -45,7 +45,7 @@ function obviousInvalid(form: EditableFields, ruleset: RuleSet, saved: Character
   })
 }
 
-export default function CharacterCreationPage({ characterId }: { characterId?: string }) {
+export default function CharacterCreationPage({ characterId, onFinalized }: { characterId?: string; onFinalized?: (character: Character) => void }) {
   const [rulesets, setRulesets] = useState<RuleSet[]>([])
   const [rulesetId, setRulesetId] = useState('')
   const [mode, setMode] = useState<Character['creation_mode']>('random')
@@ -95,6 +95,7 @@ export default function CharacterCreationPage({ characterId }: { characterId?: s
   }
   function accept(character: Character, message: string) {
     setSaved(character); setForm(character); setDirty(false); setApiIssues([]); setNotice(message)
+    if (character.status === 'finalized') onFinalized?.(character)
   }
   async function act(action: () => Promise<void>) {
     setBusy(true); setError(''); setApiIssues([])

@@ -145,6 +145,11 @@ class RoomService:
         if credential_type != "member" and host_matches(self.settings, token):
             return Identity(room.host_member_id, True)
         require(credential_type != "host", "身份凭据无效", 401)
+        from app.rooms.play_session import local_identity
+
+        local = await local_identity(self, session, room, token)
+        if local:
+            return local
         member = await session.scalar(
             select(RoomMember).where(
                 RoomMember.room_id == room.id,
@@ -347,25 +352,24 @@ class RoomService:
     async def create(self, body):
         invite = secrets.token_urlsafe(24)
         async with self.transaction() as session:
-            room = GameRoom(
-                id=str(uuid4()),
-                name=body.name,
-                host_member_id=str(uuid4()),
-                invite_hash=digest(invite),
-                status="lobby",
-                revision=0,
-                state_version=1,
-                session_state=SessionStateV1().model_dump(mode="json"),
-                created_at=utc_now(),
-                updated_at=utc_now(),
-            )
-            session.add(room)
-            await session.flush()
-            await self.new_member(session, room, body.host_name, role="host")
-            self.append(session, room, "room.created", room.host_member_id, {"name": room.name})
+            room = await self.create_in_session(session, body, invite)
             await session.flush()
             view = await self.view(session, room, Identity(room.host_member_id, True))
         return {"room": view, "invite_code": invite}
+
+    async def create_in_session(self, session, body, invite):
+        """Share the room transaction with durable launch intent (no generation here)."""
+        room = GameRoom(
+            id=str(uuid4()), name=body.name, host_member_id=str(uuid4()),
+            invite_hash=digest(invite), status="lobby", revision=0, state_version=1,
+            session_state=SessionStateV1().model_dump(mode="json"),
+            created_at=utc_now(), updated_at=utc_now(),
+        )
+        session.add(room)
+        await session.flush()
+        await self.new_member(session, room, body.host_name, role="host")
+        self.append(session, room, "room.created", room.host_member_id, {"name": room.name})
+        return room
 
     async def list_rooms(self):
         async with self.database.sessions() as session:
@@ -453,6 +457,19 @@ class RoomService:
     async def _command(self, room_id, token, action, body=None, target=None):
         stopped_task = None
         async with self.lock(room_id):
+            launch = getattr(self, "launch_service", None)
+            if action in {"start", "resume"} and self.agent_service and launch:
+                # Authenticate before any availability request; keep network
+                # metadata outside the write transaction. command's model
+                # operation guard holds the configuration stable until commit.
+                async with self.database.sessions() as session:
+                    room = await self.room(session, room_id)
+                    identity = await self.identity(session, room, token)
+                    require(identity.is_host, "仅主机可以执行此操作", 403)
+                    module = await self.agent_service.module(session, room.id)
+                    enabled = module and module.enabled
+                if enabled:
+                    await launch.check_model()
             async with self.transaction() as session:
                 room = await self.room(session, room_id)
                 identity = await self.identity(session, room, token)
@@ -758,6 +775,11 @@ class RoomService:
             if action in ("start", "resume"):
                 if self.agent_service:
                     await self.agent_service.navigation.require_available(session, room.id)
+                    module = await self.agent_service.module(session, room.id)
+                    if module and module.enabled:
+                        from app.launch.preflight import require_agent_start
+
+                        await require_agent_start(self.agent_service, session, room)
                 players = [m for m in members if m.active and m.role == "player"]
                 require(players, "至少需要一个活动玩家席位")
                 require(

@@ -35,7 +35,8 @@ export default function RoomTimelineEvent({ event: suppliedEvent, draft, room, d
       : event.type === 'scene.updated' ? <p>场景：{String(p.scene_title)} · {String(p.scene_summary)}</p>
       : event.type === 'handout.assigned' ? <p>私密 HO：{String((p.assignment as { title?: string } | undefined)?.title ?? '已分配资料')} · 已定向分配给 {room.members.find(item => item.id === event.recipient_member_id)?.display_name ?? '本人'}。正文见“HO 私密资料”。</p>
       : event.type === 'dice.rolled' ? <p>{String(p.reason)} · {String(p.expression)} → [{(p.dice as number[]).join(', ')}] {Number(p.modifier) >= 0 ? '+' : ''}{String(p.modifier)} = <strong>{String(p.total)}</strong></p>
-      : <details><summary>{event.type}</summary><pre>{JSON.stringify(p, null, 2)}</pre></details>}
+      : ['game.started', 'game.paused', 'game.resumed', 'game.ended'].includes(event.type) ? <p>{{ 'game.started': '调查开始。', 'game.paused': '游戏已暂停。', 'game.resumed': '游戏已恢复。', 'game.ended': '调查已结束。' }[event.type]}</p>
+      : room.is_host ? <details><summary>{event.type}</summary><pre>{JSON.stringify(p, null, 2)}</pre></details> : <p>{String(p.display_text || p.text || p.description || '角色或现场状态已更新。')}</p>}
     {p.check_notice ? <p>{String(p.check_notice)}</p> : null}
     {event.type === 'check.resolved' && p.compound ? <CompoundCheckPanel check={p as Check} room={room} /> : null}
     {(p.citations as Citation[] | undefined)?.map(c => <details className="rule-citation" key={c.evidence_id}><summary>《{c.source_title}》{c.page_kind === 'pdf' ? 'PDF' : c.page_kind === 'word' ? 'Word' : '文本'} {c.physical_page ? `p.${c.physical_page}` : ''}</summary><p>{c.edition} {c.source_version} {c.section} {c.page_label && `· 页标签 ${c.page_label}`}</p><p className="preserve-lines">{c.excerpt}</p></details>)}

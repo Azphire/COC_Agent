@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { autonomyReason } from './autonomy'
-import { api, requestId } from '../api/session'
+import { api, hostToken, requestId } from '../api/session'
 import type { Result, Room } from '../api/rooms'
 import type { AgentProfile } from '../api/agents'
+import type { PlaySession } from '../api/launch'
 import { difficultyLabels, resultLabels } from '../api/agents'
 import KnowledgeBindingPanel from './KnowledgeBindingPanel'
 import HostEntityPanel from './HostEntityPanel'
@@ -12,15 +13,17 @@ import CheckSettlementPanel from './CheckSettlementPanel'
 import CompoundCheckPanel from './CompoundCheckPanel'
 import CombatPanel from './CombatPanel'
 
-type Props = { room: Room; token: string; acceptRoom: (room: Room) => void }
+type Props = { room: Room; token: string; acceptRoom: (room: Room) => void; onManage?: () => void }
 
-export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
+export default function AgentGamePanel({ room, token, acceptRoom, onManage }: Props) {
   const [profiles, setProfiles] = useState<AgentProfile[]>([])
   const [modules, setModules] = useState<{ id: string; title: string }[]>([])
   const [moduleId, setModuleId] = useState('stopped-clock')
   const [selection, setSelection] = useState<Record<string, string>>({})
   const [action, setAction] = useState('')
-  const [actor, setActor] = useState('')
+  const [actorChoice, setActor] = useState(() => localStorage.getItem(`coc.actor.${room.id}`) || '')
+  const localSeats = room.members.filter(member => member.active && member.role === 'player' && member.controller_type === 'human' && member.access_type === 'host_managed')
+  const actor = localSeats.find(member => member.id === actorChoice)?.id || (localSeats.length === 1 ? localSeats[0].id : '')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [runs, setRuns] = useState<Record<string, unknown>[]>([])
@@ -33,12 +36,14 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
   const [behaviors, setBehaviors] = useState<Record<string, unknown>[]>([])
   const [summaries, setSummaries] = useState<Record<string, unknown>[]>([])
   const pending = useRef<{ content: string; id: string } | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const prefix = `/rooms/${room.id}`
   const game = room.game
   const cycle = game?.cycle
   const clarifiesOwnAction = !!cycle?.requires_clarification && cycle.triggering_member_id === (room.is_host ? actor : room.self_member_id)
   const active = !!cycle && ['running', 'waiting_for_roll', 'waiting_for_review', 'failed'].includes(cycle.status)
   const editable = room.is_host && ['lobby', 'paused'].includes(room.status) && !active
+  useEffect(() => { if (room.status === 'running') inputRef.current?.focus() }, [room.id, room.status])
   useEffect(() => {
     if (room.is_host) {
       api<AgentProfile[]>('/agent-profiles', token).then(setProfiles).catch(e => setError(e.message))
@@ -96,10 +101,16 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
     </section>}
     </details>}
     {error && <p role="alert">{error}</p>}
-    <CombatPanel room={room} busy={busy} command={command} />
-    {game?.preparation && <InvestigationBoard entities={game.public_entities || []} onSelect={entity => { setTarget(entity.id); setAction(text => text || `关于${entity.title}，`); setCategory('dialogue') }} />}
-    {game?.module && <section className="agent-game"><h2>{game.module.title}</h2><p>开场介绍：{game.module.public_introduction}</p>
-      <p role="status" data-testid="agent-cycle-status">{game.module.completed ? '调查已结束' : !cycle || cycle.status === 'completed' ? '你想说什么，或做什么？' : cycle.status === 'cancelled' ? '可以继续交谈或行动' : cycle.status === 'failed' ? '主持暂时中断，请查看主机详情' : cycle.status === 'waiting_for_roll' ? '等待你的选择；仍可交谈、问规则或补充方法' : cycle.status === 'waiting_for_review' ? '这个问题需要主机处理，仍可继续交谈' : 'KP 正在回应；可以继续输入'}</p>
+    {(room.is_host || room.combat?.active || room.combat?.pending) && <CombatPanel room={room} busy={busy} command={command} />}
+    {game?.preparation && <details className="investigation-drawer"><summary>已知人物、地点、线索与物品</summary><InvestigationBoard entities={game.public_entities || []} onSelect={entity => { setTarget(entity.id); setAction(text => text || `关于${entity.title}，`); setCategory('dialogue'); inputRef.current?.focus() }} /></details>}
+    {game?.module && <section className="agent-game"><h2 className="visually-hidden">对话与行动</h2>
+      <p role="status" data-testid="agent-cycle-status">{game.module.completed ? '调查已结束' : !cycle || cycle.status === 'completed' ? '你想说什么，或做什么？' : cycle.status === 'cancelled' ? '可以继续交谈或行动' : cycle.status === 'failed' ? '回应暂时中断，已保存当前回合' : cycle.status === 'waiting_for_roll' ? '等待掷骰或选择；仍可交谈、问规则或补充方法' : cycle.status === 'waiting_for_review' ? '等待主机处理，仍可继续交谈' : cycle.current_node === 'update_summary' ? '本轮回应已完成，正在收尾；可以继续输入' : ['run_teammates', 'decide_teammates'].includes(cycle.current_node) ? '队友行动中；可以继续输入' : 'KP 正在回应；可以继续输入'}</p>
+      {cycle?.status === 'failed' && onManage && <button type="button" disabled={busy || room.status !== 'running'} onClick={async () => {
+        setBusy(true); setError('')
+        try { const result = await api<PlaySession>(`${prefix}/play-session/command`, hostToken(), 'POST', { member_id: room.self_member_id, command: 'retry' }); if (result.room) acceptRoom(result.room) }
+        catch (e) { setError(e instanceof Error ? e.message : '重试失败，当前回合已保留。') }
+        finally { setBusy(false) }
+      }}>重试回应</button>}
       {cycle?.safe_error && <p role="alert">{cycle.safe_error}</p>}
       {clarifiesOwnAction && <p role="status" data-testid="action-clarification">需要澄清：{cycle?.clarification_question}</p>}
       {room.is_host && active && <details><summary>主机回合控制</summary><div className="action-row">
@@ -114,8 +125,8 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
         if (!pending.current || pending.current.content !== content) pending.current = { content, id: requestId() }
         if (await command(clarify ? '/clarifications' : '/actions', { ...body, client_request_id: pending.current.id })) { setAction(''); setTarget(''); pending.current = null }
       }}>
-        {room.is_host && <label>真人行动席位<select id="agent-action-actor" value={actor} onChange={e => setActor(e.target.value)}><option value="">选择本地真人调查员</option>{room.members.filter(m => m.active && m.role === 'player' && m.controller_type === 'human' && m.access_type === 'host_managed').map(m => <option key={m.id} value={m.id}>{m.display_name}</option>)}</select></label>}
-        <label>{category === 'rule_question' ? '规则问题' : '对话与行动'}<textarea id="agent-action" value={action} maxLength={2000} onChange={e => setAction(e.target.value)} placeholder="直接说话、问 KP，或描述你想做什么……" required /></label>
+        {room.is_host && room.members.filter(m => m.active && m.role === 'player' && m.controller_type === 'human' && m.access_type === 'host_managed').length > 1 && <label>真人行动席位<select id="agent-action-actor" value={actor} onChange={e => { setActor(e.target.value); localStorage.setItem(`coc.actor.${room.id}`, e.target.value) }}><option value="">选择本地真人调查员</option>{room.members.filter(m => m.active && m.role === 'player' && m.controller_type === 'human' && m.access_type === 'host_managed').map(m => <option key={m.id} value={m.id}>{m.display_name}</option>)}</select></label>}
+        <label>{category === 'rule_question' ? '规则问题' : '对话与行动'}<textarea ref={inputRef} id="agent-action" value={action} maxLength={2000} onChange={e => setAction(e.target.value)} placeholder="直接说话、问 KP，或描述你想做什么……" required /></label>
         <details><summary>人物、线索与规则快捷输入</summary>
           <button type="button" onClick={() => { setCategory(category === 'rule_question' ? 'dialogue' : 'rule_question'); setTarget('') }}>{category === 'rule_question' ? '返回对话' : '查规则'}</button>
           {game.conversation_targets?.map(npc => <button key={npc.id} type="button" onClick={() => { setTarget(npc.id); setAction(text => text || `${npc.title}，`); setCategory('dialogue') }}>{npc.title}</button>)}
@@ -135,7 +146,7 @@ export default function AgentGamePanel({ room, token, acceptRoom }: Props) {
           {!check.sanity && <p><strong>{check.result?.total} · {resultLabels[check.result?.level || '']}</strong> · 本次目标 {check.result?.threshold} · {check.result?.passed ? '通过' : '未通过'}</p>}
         </>}
       </article>)}</div>
-      <h3>已公开线索</h3>{game.module.clues.length === 0 ? <p>尚未发现线索。</p> : game.module.clues.map(clue => <article key={clue.id}><h4><button type="button" onClick={() => { setAction(text => text || `关于${clue.title}，`); setTarget(clue.id); setCategory('dialogue') }}>{clue.title}</button></h4><p>{clue.content}</p></article>)}
+      {!game.preparation && <details><summary>已公开线索</summary>{game.module.clues.length === 0 ? <p>尚未发现线索。</p> : game.module.clues.map(clue => <article key={clue.id}><h4><button type="button" onClick={() => { setAction(text => text || `关于${clue.title}，`); setTarget(clue.id); setCategory('dialogue') }}>{clue.title}</button></h4><p>{clue.content}</p></article>)}</details>}
     </section>}
     {room.is_host && game?.module && <section data-testid="host-agent-debug"><details onToggle={e => setDebugOpen(e.currentTarget.open)}><summary>主机 Agent 调试面板 · HOST_DEBUG</summary>
       <button disabled={busy} onClick={async () => {

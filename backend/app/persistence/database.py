@@ -8,7 +8,9 @@ from app.persistence import (  # noqa: F401
     adjudication_models,
     agent_models,
     knowledge_models,
+    launch_models,
     module_ir_models,
+    party_models,
     preparation_models,  # noqa: F401
     room_models,
 )

@@ -16,8 +16,10 @@ from app.api import (
     characters,
     health,
     knowledge,
+    launch,
     model,
     module_ir,
+    party,
     preparation,
     room_submissions,
     rooms,
@@ -27,7 +29,9 @@ from app.auth import require_host
 from app.character.repository import CharacterRepository, VersionConflict
 from app.character.service import CharacterError, CharacterService
 from app.config import Settings
+from app.launch.service import LaunchService
 from app.models.settings import ModelSettings
+from app.party.service import PartyService
 from app.persistence.database import Database
 from app.rooms.realtime import RoomHub
 from app.rooms.service import RoomError, RoomService
@@ -65,6 +69,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             agent_service.model.configuration = model_settings
             application.state.room_service.model_configuration = model_settings
             application.state.room_service.agent_service = agent_service
+            character_service = application.state.room_service.submissions.characters
+            application.state.party_service = PartyService(agent_service, character_service)
+            application.state.launch_service = LaunchService(
+                agent_service, character_service, application.state.party_service, model_settings,
+            )
+            application.state.room_service.launch_service = application.state.launch_service
             await agent_service.preparation.initialize()
             agent_service.runtime = AgentRuntime(agent_service)
             await agent_service.runtime.initialize()
@@ -95,6 +105,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(knowledge.router)
     application.include_router(preparation.router)
     application.include_router(module_ir.router)
+    application.include_router(party.router)
+    application.include_router(launch.router)
 
     @application.middleware("http")
     async def host_boundary(request, call_next):

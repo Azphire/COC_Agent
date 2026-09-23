@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from agent_fixture_setup import bind_fixture_rules
 from test_action_adjudication import plan_for
 from test_agent_runtime import submit, wait_cycle
 from test_module_navigation import navigation_game, structure_data  # noqa: F401
@@ -311,6 +312,8 @@ def team_game(client, lobby):  # noqa: F811
                 prefix + "/agent-bindings", json={"member_id": member, "profile_id": profile["id"]}
             )
         )
+    bind_fixture_rules(client, prefix)
+    client.app.state.agent_service.model.adapter = FakeModelAdapter(responder=responder)
     ok(client.post(prefix + "/resume"))
     return {**lobby, "chen": chen}
 

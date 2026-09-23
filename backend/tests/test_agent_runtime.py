@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from adjudication_helpers import ScenarioAdapter as FakeModelAdapter
+from agent_fixture_setup import bind_fixture_rules
 from pydantic import ValidationError
 from test_rooms import headers, join, lobby, ok, prepare  # noqa: F401
 
@@ -116,9 +117,10 @@ def game(client, lobby):  # noqa: F811
                 prefix + "/agent-bindings", json={"member_id": member, "profile_id": profile["id"]}
             )
         )
-    ok(client.post(prefix + "/resume"))
     adapter = FakeModelAdapter(responder=scenario)
     client.app.state.agent_service.model.adapter = adapter
+    bind_fixture_rules(client, prefix)
+    ok(client.post(prefix + "/resume"))
     return {**lobby, "adapter": adapter, "profiles": profiles}
 
 

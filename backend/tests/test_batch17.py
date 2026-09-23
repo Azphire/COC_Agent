@@ -246,6 +246,18 @@ def test_continuous_lure_requires_real_placed_local_source():
 def interactions(client, module_battle, monkeypatch):  # noqa: F811
     d, svc = module_battle, client.app.state.agent_service
     monkeypatch.setattr(svc.runtime, "schedule", lambda *_: None)
+    # Prepared Agent rooms now require an actual public CoC7 rules source before
+    # start. Keep the fixture's approved module binding and mechanic assertions.
+    rule_path = svc.settings.data_dir / "rules" / "CoC7-fixture.txt"
+    rule_path.parent.mkdir(exist_ok=True)
+    rule_path.write_text("第七版技能检定使用百分骰，结果不高于技能值时成功。", encoding="utf-8")
+    svc.knowledge.indexer.index("rules")
+    source = next(s for s in svc.knowledge.repository.sources() if s.title == rule_path.name)
+    binding = ok(client.get(d["prefix"] + "/knowledge"))
+    ok(client.patch(d["prefix"] + "/knowledge", json={
+        "enabled": True, "module": binding["module"],
+        "rules": [{"source_id": source.source_id, "source_hash": source.source_hash}],
+    }))
     for member, role in [(d["room"]["host_member_id"], "keeper"), (d["agent"], "investigator")]:
         profile = ok(client.post("/api/agent-profiles", json={"role": role, "name": role}), 201)
         ok(

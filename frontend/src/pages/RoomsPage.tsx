@@ -3,7 +3,7 @@ import RuntimeCards from '../components/RuntimeCards'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import RoomTimelineEvent from '../components/RoomTimelineEvent'
 import { api, ApiError, authHeaders, hostToken, requestId, socketUrl } from '../api/session'
-import { credentialKey, roomStatus, storedRooms } from '../api/rooms'
+import { credentialKey, roomStatus, storedRooms, storyEvent } from '../api/rooms'
 import type { Result, Room, RoomEvent, RoomSummary, Save, SessionState } from '../api/rooms'
 import { charactersApi } from '../api/characters'
 import type { Character } from '../api/characters'
@@ -13,10 +13,14 @@ import CharacterSubmissionPanel from '../components/CharacterSubmissionPanel'
 import RoomHandoutsPanel from '../components/RoomHandoutsPanel'
 import { acceptNarrationEvent, emptyNarrationStream, reduceNarrationStream } from '../api/narrationStream'
 import type { NarrationStreamState, StreamMessage } from '../api/narrationStream'
+import { launchApi } from '../api/launch'
+import type { PlaySession } from '../api/launch'
+import RoomGameMenu from '../components/RoomGameMenu'
+import CombatPanel from '../components/CombatPanel'
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : '请求失败，请重试' }
 
-export default function RoomsPage({ roomId, unlocked, onUnlock }: { roomId?: string; unlocked: boolean; onUnlock: () => void }) {
+export default function RoomsPage({ roomId, unlocked, onUnlock, joinOnly = false }: { roomId?: string; unlocked: boolean; onUnlock: () => void; joinOnly?: boolean }) {
   const [rooms, setRooms] = useState<RoomSummary[]>([])
   const [error, setError] = useState('')
   const [name, setName] = useState('')
@@ -27,9 +31,9 @@ export default function RoomsPage({ roomId, unlocked, onUnlock }: { roomId?: str
   useEffect(() => {
     if (unlocked && !roomId) api<RoomSummary[]>('/rooms', hostToken()).then(setRooms).catch(error => setError(errorText(error)))
   }, [unlocked, roomId])
-  if (roomId) return <RoomSession key={`${roomId}:${unlocked}`} roomId={roomId} initialInvite={invites[roomId] || ''} />
+  if (roomId) return <RoomAccess key={`${roomId}:${unlocked}`} roomId={roomId} initialInvite={invites[roomId] || ''} />
   return <>
-    <section><h2>多人房间</h2><p>主机发布调查员，真人玩家通过邀请码加入，可配置 AI KP 和调查员队友共同游玩。</p></section>
+    <section><h2>{joinOnly ? '加入朋友' : '多人房间'}</h2><p>{joinOnly ? '输入朋友分享的邀请码，加入后选择或提交自己的角色并准备。' : '创建新游戏可使用首页向导；这里保留旧房间管理入口。'}</p></section>
     {error && <p role="alert">{error}</p>}
     <form onSubmit={async event => {
       event.preventDefault(); setBusy(true); setError('')
@@ -43,7 +47,7 @@ export default function RoomsPage({ roomId, unlocked, onUnlock }: { roomId?: str
       <label>显示名<input id="join-name" maxLength={120} value={displayName} onChange={e => setDisplayName(e.target.value)} required /></label>
     </div><button disabled={busy}>加入房间</button></form>
     {storedRooms().length > 0 && <section><h2>重新连接</h2>{storedRooms().map(id => <p key={id}><a href={`#/rooms/${id}`}>继续房间 {id}</a></p>)}</section>}
-    {!unlocked ? <HostUnlock onUnlock={onUnlock} /> : <>
+    {!joinOnly && (!unlocked ? <HostUnlock onUnlock={onUnlock} /> : <>
       <form onSubmit={async event => {
         event.preventDefault(); setBusy(true); setError('')
         try {
@@ -53,13 +57,42 @@ export default function RoomsPage({ roomId, unlocked, onUnlock }: { roomId?: str
         } catch (error) { setError(errorText(error)) } finally { setBusy(false) }
       }}><h2>创建房间</h2><label>房间名称<input id="room-name" maxLength={120} value={name} onChange={e => setName(e.target.value)} required /></label><button disabled={busy}>创建房间</button></form>
       <section><h2>主机房间列表</h2>{rooms.length === 0 && <p>尚无房间</p>}{rooms.map(room => <p key={room.id}><a href={`#/rooms/${room.id}`}>{room.name}</a> · {roomStatus[room.status]}</p>)}</section>
-    </>}
+    </>)}
   </>
 }
 
-function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite: string }) {
-  const token = localStorage.getItem(credentialKey(roomId)) || hostToken()
-  const credentialType = localStorage.getItem(credentialKey(roomId)) ? 'member' : 'host'
+function RoomAccess({ roomId, initialInvite }: { roomId: string; initialInvite: string }) {
+  const remoteToken = localStorage.getItem(credentialKey(roomId))
+  const [management, setManagement] = useState(false)
+  const [play, setPlay] = useState<PlaySession | null>(null)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const hasHost = !!hostToken() && !remoteToken
+  const actorKey = `coc.actor.${roomId}`
+  const [selected, setSelected] = useState(localStorage.getItem(actorKey) || '')
+  useEffect(() => {
+    localStorage.setItem('coc.last-room', roomId)
+    if (!hasHost || management) return
+    let cancelled = false
+    queueMicrotask(() => { if (!cancelled) { setLoading(true); setPlay(null); setError('') } })
+    launchApi.play(roomId, selected || undefined).then(result => {
+      if (cancelled) return
+      setPlay(result)
+      if (result.selected_member_id) localStorage.setItem(actorKey, result.selected_member_id)
+    }).catch(e => { if (!cancelled) setError(e.message) }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [roomId, hasHost, management, selected, actorKey])
+  const token = management ? hostToken() : remoteToken || play?.member_token || ''
+  return <>
+    {management && <section className="management-banner"><strong>主机管理视图</strong><p>此视图会读取 KP 资料与全部 HO。</p><button onClick={() => setManagement(false)}>回到调查员游戏桌面</button></section>}
+    {!management && play && play.local_members.length > 1 && <label>当前扮演的调查员<select id="local-investigator" value={play.selected_member_id || ''} onChange={e => setSelected(e.target.value)}><option value="">选择本地调查员</option>{play.local_members.map(member => <option key={member.id} value={member.id}>{member.display_name}</option>)}</select></label>}
+    {loading && <p role="status">正在进入调查员游戏桌面…</p>}{error && <p role="alert">{error}</p>}
+    {!token && !loading && <section><p>{hasHost ? '当前尚未选择可操作的本地真人调查员。' : '请先通过邀请码加入，或在新游戏向导中验证主机身份。'}</p>{hasHost && <button onClick={() => setManagement(true)}>进入主机管理，配置本地调查员</button>}<p><a href="#/">返回首页</a></p></section>}
+    {token && <RoomSession key={`${roomId}:${management ? 'host' : play?.selected_member_id || 'member'}`} roomId={roomId} initialInvite={initialInvite} token={token} credentialType={management ? 'host' : 'member'} onManage={hasHost && !management ? () => setManagement(true) : undefined} />}
+  </>
+}
+
+function RoomSession({ roomId, initialInvite, token, credentialType, onManage }: { roomId: string; initialInvite: string; token: string; credentialType: string; onManage?: () => void }) {
   const [room, setRoom] = useState<Room | null>(null)
   const [events, setEvents] = useState<RoomEvent[]>([])
   const [narration, setNarration] = useState(emptyNarrationStream)
@@ -211,14 +244,15 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
   const self = room?.members.find(member => member.id === room.self_member_id)
   const writable = room?.status !== 'ended'
   const lobby = room?.status === 'lobby' || room?.status === 'paused'
+  const openingSeq = events.find(event => event.payload.opening)?.seq || 0
   return <div className="room-session">
-    <p><a href="#/rooms">返回房间入口</a> · <span role="status" data-testid="connection">{token ? connection : '缺少凭据，请返回入口解锁或加入'}</span></p>
+    <p className="connection-row"><a href="#/">返回首页</a> · <span role="status" data-testid="connection">{token ? connection : '缺少凭据，请返回入口解锁或加入'}</span></p>
     {error && <p role="alert">{error}</p>}
     {!room ? <p>等待认证与房间同步…</p> : <>
-      <section><h2>{room.name} · <span data-testid="room-status">{roomStatus[room.status]}</span></h2>
-        <p>最新事件序号：<strong data-testid="latest-seq">{room.latest_seq}</strong> · {isHost ? '主机管理身份' : self?.display_name}</p>
+      <section className="room-heading"><h2>{room.name} · <span data-testid="room-status">{roomStatus[room.status]}</span></h2>
+        <p>{isHost ? '主机管理身份' : `你扮演：${self?.display_name || '调查员'}`}{isHost && <> · <small className="inline-seq">事件 <span data-testid="latest-seq">{room.latest_seq}</span></small></>}</p>
+        {!isHost && <RoomGameMenu room={room} onManage={onManage} onLeave={() => onManage ? window.location.hash = '#/' : void leave()} />}
         {isHost && writable && <><p>邀请码：<code data-testid="invite-code">{invite || '仅创建／重新生成时显示，请重新生成以分享'}</code></p><button disabled={busy} onClick={() => void command('/invite/rotate')}>重新生成邀请码</button></>}
-        {!isHost && <button disabled={busy} onClick={() => void leave()}>离开房间并清除凭据</button>}
         {isHost && <div className="action-row">
           {room.status === 'lobby' && <button disabled={busy} onClick={() => void command('/start')}>开始游戏</button>}
           {room.status === 'running' && <button disabled={busy} onClick={() => void command('/pause')}>暂停游戏</button>}
@@ -226,6 +260,24 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
           {['running', 'paused'].includes(room.status) && <button disabled={busy} onClick={() => { if (window.confirm('结束后房间将永久只读。确认结束游戏？')) void command('/end') }}>结束游戏</button>}
         </div>}
       </section>
+      <div className={isHost ? "management-content" : "game-desktop"}><div className="game-main">
+      <section className="story-panel"><h2>剧情时间线</h2>{writable && !room.game?.enabled && <>
+        <div className="field-grid"><label>可见性<select id="event-visibility" value={visibility} onChange={e => setVisibility(e.target.value)}><option value="public">公开</option><option value="actor_and_host">仅自己与主机</option>{isHost && <option value="host_only">仅主机</option>}</select></label>
+        {isHost && <label>操作身份<select value={actor} onChange={e => setActor(e.target.value)}><option value="">主机</option>{room.members.filter(m => m.active && m.role === 'player' && m.controller_type === 'human' && m.access_type === 'host_managed').map(m => <option key={m.id} value={m.id}>{m.display_name}</option>)}</select></label>}</div>
+        <form onSubmit={e => { e.preventDefault(); void send('messages') }}><label>消息<textarea id="chat-message" value={text} onChange={e => setText(e.target.value)} maxLength={4000} required /></label><button disabled={busy || !text.trim()}>发送消息</button></form>
+        <form onSubmit={e => { e.preventDefault(); void send('rolls') }}><div className="field-grid"><label>骰子表达式<input id="dice-expression" value={expression} maxLength={32} onChange={e => setExpression(e.target.value)} required /></label><label>原因<input id="dice-reason" value={reason} maxLength={2000} onChange={e => setReason(e.target.value)} /></label></div><button disabled={busy}>服务端掷骰</button></form>
+      </>}
+      <ol className="timeline" data-testid="timeline" ref={timelineRef} onScroll={event => {
+        const timeline = event.currentTarget
+        followTimeline.current = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 48
+      }}>{events.filter(event => event.visibility !== 'host_only' && !event.type.startsWith('agent.cycle') && !event.type.startsWith('review.') && (isHost || storyEvent(event) && event.seq >= openingSeq)).map(event => <RoomTimelineEvent key={event.type === 'keeper.narration' && event.payload.cycle_id ? `keeper-${event.payload.cycle_id}` : event.seq} event={event} room={room} />)}
+        {narration.draft && <RoomTimelineEvent key={`keeper-${narration.draft.cycle_id}`} draft={narration.draft} room={room} />}
+      </ol>
+      {isHost && <details data-testid="host-event-debug"><summary>主机私密事件 · HOST_DEBUG</summary><ol>{events.filter(event => event.visibility === 'host_only' || event.type.startsWith('agent.cycle') || event.type.startsWith('review.')).map(event => <RoomTimelineEvent key={event.seq} event={event} room={room} debug />)}</ol></details>}
+      {isHost && <div className="action-row"><button onClick={() => void exportLog('jsonl')}>导出 JSONL</button><button onClick={() => void exportLog('markdown')}>导出 Markdown</button></div>}
+      </section>
+      <AgentGamePanel room={room} token={token} acceptRoom={acceptRoom} onManage={onManage} />
+      </div><aside className="game-sidebar" aria-label="调查员资料">
       <details open={lobby}><summary>人物与席位</summary><section><h2>玩家与席位</h2><ul className="character-list">{room.members.map(member => <li key={member.id} data-member-id={member.id}>
         <strong>{member.display_name}</strong> · {member.role === 'host' ? '主机' : member.controller_type === 'agent' ? (room.game?.bindings.some(b => b.member_id === member.id) ? 'AI 调查员' : 'Agent · 待绑定档案') : member.access_type === 'remote' ? '远程真人' : '本地真人'}
         <p>{!member.active ? '已离开' : online.includes(member.id) ? '在线' : member.access_type === 'host_managed' && member.role === 'player' ? '主机管理' : '离线'} · {member.ready ? '已准备' : '未准备'}</p>
@@ -252,31 +304,17 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
             {slot.member_id && (isHost || slot.member_id === room.self_member_id) && <button disabled={busy} onClick={() => void command(`/character-assignments/${slot.id}`, undefined, 'DELETE')}>取消分配 · {slot.public_summary.name}</button>}
             {isHost && !slot.member_id && room.status === 'lobby' && <button disabled={busy} onClick={() => void command(`/character-slots/${slot.id}`, undefined, 'DELETE')}>撤下 · {slot.public_summary.name}</button>}
           </div>}
-          {slot.character_snapshot && <details><summary>完整角色卡 · {slot.public_summary.name}</summary><pre>{JSON.stringify(slot.character_snapshot, null, 2)}</pre></details>}
+          {isHost && slot.character_snapshot && <details><summary>完整角色卡 · {slot.public_summary.name}</summary><pre>{JSON.stringify(slot.character_snapshot, null, 2)}</pre></details>}
         </article>)}
       </section>
       </details>
-      <RoomHandoutsPanel room={room} token={token} acceptRoom={acceptRoom} />
-      <section><h2>对话时间线</h2>{writable && !room.game?.enabled && <>
-        <div className="field-grid"><label>可见性<select id="event-visibility" value={visibility} onChange={e => setVisibility(e.target.value)}><option value="public">公开</option><option value="actor_and_host">仅自己与主机</option>{isHost && <option value="host_only">仅主机</option>}</select></label>
-        {isHost && <label>操作身份<select value={actor} onChange={e => setActor(e.target.value)}><option value="">主机</option>{room.members.filter(m => m.active && m.role === 'player' && m.controller_type === 'human' && m.access_type === 'host_managed').map(m => <option key={m.id} value={m.id}>{m.display_name}</option>)}</select></label>}</div>
-        <form onSubmit={e => { e.preventDefault(); void send('messages') }}><label>消息<textarea id="chat-message" value={text} onChange={e => setText(e.target.value)} maxLength={4000} required /></label><button disabled={busy || !text.trim()}>发送消息</button></form>
-        <form onSubmit={e => { e.preventDefault(); void send('rolls') }}><div className="field-grid"><label>骰子表达式<input id="dice-expression" value={expression} maxLength={32} onChange={e => setExpression(e.target.value)} required /></label><label>原因<input id="dice-reason" value={reason} maxLength={2000} onChange={e => setReason(e.target.value)} /></label></div><button disabled={busy}>服务端掷骰</button></form>
-      </>}
-      <ol className="timeline" data-testid="timeline" ref={timelineRef} onScroll={event => {
-        const timeline = event.currentTarget
-        followTimeline.current = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 48
-      }}>{events.filter(event => event.visibility !== 'host_only' && !event.type.startsWith('agent.cycle') && !event.type.startsWith('review.')).map(event => <RoomTimelineEvent key={event.type === 'keeper.narration' && event.payload.cycle_id ? `keeper-${event.payload.cycle_id}` : event.seq} event={event} room={room} />)}
-        {narration.draft && <RoomTimelineEvent key={`keeper-${narration.draft.cycle_id}`} draft={narration.draft} room={room} />}
-      </ol>
-      {isHost && <details data-testid="host-event-debug"><summary>主机私密事件 · HOST_DEBUG</summary><ol>{events.filter(event => event.visibility === 'host_only' || event.type.startsWith('agent.cycle') || event.type.startsWith('review.')).map(event => <RoomTimelineEvent key={event.seq} event={event} room={room} debug />)}</ol></details>}
-      <div className="action-row"><button onClick={() => void exportLog('jsonl')}>导出 JSONL</button><button onClick={() => void exportLog('markdown')}>导出 Markdown</button></div>
-      </section>
-      <AgentGamePanel room={room} token={token} acceptRoom={acceptRoom} />
-      <SanityPanel room={room} busy={busy} command={command} />
+      <details><summary>{isHost ? "HO 管理" : "我的 HO"}</summary><RoomHandoutsPanel room={room} token={token} acceptRoom={acceptRoom} /></details>
+
+      <details><summary>角色状态与背包</summary><RuntimeCards room={room} /></details>
+      <details><summary>理智与疯狂</summary><SanityPanel room={room} busy={busy} command={command} /></details>
+      {!isHost && !room.combat?.active && !room.combat?.pending && <details><summary>伤势与治疗</summary><CombatPanel room={room} busy={busy} command={command} /></details>}
       <section><h2>当前场景</h2><h3 data-testid="scene-title">{room.session_state.scene_title || '尚未设置场景'}</h3><p className="preserve-lines">{room.session_state.scene_summary}</p>
         <p>回合：{room.session_state.round_number ?? '—'} · 当前行动：{room.character_slots.find(s => s.id === room.session_state.active_slot_id)?.public_summary.name || '—'}</p>
-        <RuntimeCards room={room} />
         {isHost && ['running', 'paused'].includes(room.status) && <button disabled={busy} onClick={() => setEditing({ state: structuredClone(room.session_state), revision: room.revision })}>编辑场景</button>}
         {editing && writable && <form onSubmit={async event => { event.preventDefault(); if (await command('/session-state', { expected_revision: editing.revision, state: editing.state }, 'PATCH')) setEditing(null) }}>
           <label>场景标题<input id="scene-title" maxLength={200} value={editing.state.scene_title} onChange={e => setEditing({ ...editing, state: { ...editing.state, scene_title: e.target.value } })} /></label>
@@ -287,6 +325,7 @@ function RoomSession({ roomId, initialInvite }: { roomId: string; initialInvite:
           <div className="action-row"><button disabled={busy}>保存场景</button><button type="button" onClick={() => setEditing(null)}>取消编辑</button></div>
         </form>}
       </section>
+      </aside></div>
       {isHost && <section><h2>存档</h2>{['running', 'paused'].includes(room.status) && <form onSubmit={event => { event.preventDefault(); void command('/snapshots', { name: saveName }) }}><label>存档名称<input id="save-name" maxLength={120} value={saveName} onChange={e => setSaveName(e.target.value)} required /></label><button disabled={busy}>创建存档</button></form>}
         {saves.map(save => <p key={save.id}>{save.name} · 事件 {save.event_seq} <button disabled={busy || room.status !== 'paused'} onClick={async () => {
           if (window.confirm(`载入“${save.name}”将恢复场景、角色资源和分配。之后的事件保留，房间保持暂停；凭据和在线状态不变。确认载入？`)) {

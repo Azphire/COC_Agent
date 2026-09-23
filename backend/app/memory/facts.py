@@ -517,7 +517,7 @@ def render_facts(records, ids=()):
         lines.append(label + r["text"])
         blocks.append("\n".join(lines))
     return (
-        "\n".join(dict.fromkeys(blocks)) or "没有检索到与这个问题对应的原始记录，不能确认具体内容。"
+        "\n".join(dict.fromkeys(blocks)) or "我还没核对清楚，暂时不能确认。"
     )
 
 

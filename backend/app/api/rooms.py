@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request, WebSocket
 from fastapi.responses import Response
 
 from app.auth import bearer, require_host
+from app.launch.schemas import PlayCommand, PlaySessionInput
 from app.rooms import schemas as s
 from app.rooms.sanity_schemas import (
     EncounterReview,
@@ -77,6 +78,41 @@ async def join_room(body: s.JoinRoom, svc: Service):
 @router.get("/{room_id}")
 async def get_room(room_id: UUID, svc: Service, token: Token):
     return await svc.get(room_id, token)
+
+
+@router.post("/{room_id}/play-session", dependencies=[Depends(require_host)])
+async def local_play_session(room_id: UUID, body: PlaySessionInput, svc: Service):
+    from app.rooms.play_session import play_session
+
+    return await play_session(svc, room_id, body.member_id)
+
+
+@router.post("/{room_id}/play-session/command", dependencies=[Depends(require_host)])
+async def play_command(room_id: UUID, body: PlayCommand, svc: Service, token: Token):
+    from app.rooms.play_session import play_session
+    from app.rooms.service import require
+
+    command = {
+        "save": "snapshot.create",
+        "load": "snapshot.load",
+        "retry": "agent.retry",
+        "cancel": "agent.cancel",
+    }.get(
+        body.command,
+        body.command,
+    )
+    require(body.command != "load" or body.snapshot_id, "请选择存档", 422)
+    result = await svc.command(
+        room_id,
+        token,
+        command,
+        s.CreateSnapshot(name=body.name) if body.command == "save" else None,
+        body.snapshot_id if body.command == "load" else None,
+    )
+    response = await play_session(svc, room_id, body.member_id)
+    if result.get("snapshot"):
+        response["snapshot_id"] = result["snapshot"]["id"]
+    return response
 
 
 @router.post("/{room_id}/invite/rotate")

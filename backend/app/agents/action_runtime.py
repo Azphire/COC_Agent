@@ -162,6 +162,9 @@ TEAMMATE_INSTRUCTION = (
     "last_attempt_result单独保留你本人最近一次实际行动及结果，不会被聊天答复覆盖。"
     "追问你的检查结果时先回答这次反馈，不用NPC证词代替；不得编造新发现、便签或引文。"
     "public_accounts保留行为人、说话人和证据类型；别人的尝试只能说他/你做过，不能说我做过。"
+    "复述旧知识保留谁说的、何时得知及条件；足够用力才能打开不能改成轻松打开。"
+    "新行动自然说我去看看、我试着，action_text不能写我查看了或已确认；旧回执不代表这次已完成。"
+    "已有实际结果可以说已经，但须对应本人、对象和那次结果；不必给每句发言添加免责声明。"
     "历史意见和已更正说法不作当前事实；以当前回执及最新NPC证词为准，可主动纠正自己旧判断。"
     "当前请求优先，continued_requests是仍有效旧目标，只在有条件推进时考虑。取消只需回应并停止旧任务。"
     "无人点名时，可按职业能力、性格和现场危险选择一件小事或有依据的建议；无新贡献就pass。"
@@ -1289,6 +1292,9 @@ class ActionRuntimeMixin:
                     else None,
                     "personality": profile.document.get("personality", ""),
                     "goals": profile.document.get("goals", ""),
+                    "background": profile.document.get("background", ""),
+                    "speaking_style": profile.document.get("speaking_style", ""),
+                    "action_tendency": profile.document.get("action_tendency", ""),
                     "abilities": dict(
                         sorted(
                             (
@@ -1421,6 +1427,8 @@ class ActionRuntimeMixin:
                     fingerprint = public_fingerprint(
                         fingerprint_context, candidate.target_id, binding.member_id
                     )
+                    from app.agents.teammate_wording import public_wording_sources
+
                     rejected = policy.validate(
                         candidate,
                         state=behavior,
@@ -1450,6 +1458,9 @@ class ActionRuntimeMixin:
                         treatment_options=treatment_options,
                         active_requests=bound_requests,
                         fingerprint_context=fingerprint_context,
+                        wording_sources=public_wording_sources(
+                            run.context, additions["public_accounts"],
+                        ),
                     )
                     fingerprint = public_fingerprint(
                         fingerprint_context, candidate.target_id, binding.member_id
@@ -1468,7 +1479,18 @@ class ActionRuntimeMixin:
                         accepted = candidate
                         break
                     additions["behavior_rejection"] = rejected.model_dump()
-                    if rejected.reason.startswith("unconfirmed_result:"):
+                    if rejected.reason in {
+                        "source_condition_changed", "source_attribution_missing",
+                        "premature_action_completion",
+                    }:
+                        additions["behavior_repair"] = (
+                            "区分旧知识、本次尝试与实际结果。旧知识保留原说话人及来源条件，"
+                            "如足够用力不能改成轻松；可自然说先前得知或据某人早先所说。"
+                            "act/assist的action_text只写尚待执行的具体动作，如我去查看、我试着；"
+                            "不要将旧已知事实写成我这次查看了或已经确认。实际结果已有回执时"
+                            "可以用已经，须保留实际行为人、对象和时间。保留有效判断，无需统一免责声明。"
+                        )
+                    elif rejected.reason.startswith("unconfirmed_result:"):
                         additions["behavior_repair"] = (
                             "上一稿提前声称了未确认的结果。按result_facts中的执行者、目标、operation、"
                             "status和effect修正这部分：failure要承认尝试失败，not_executed没有执行，"

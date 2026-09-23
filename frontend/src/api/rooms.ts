@@ -26,3 +26,8 @@ export const credentialKey = (roomId: string) => `coc.room.${roomId}`
 export function storedRooms() {
   return Object.keys(localStorage).filter(key => key.startsWith('coc.room.')).map(key => key.slice(9))
 }
+
+export function storyEvent(event: RoomEvent) {
+  return ['chat.message', 'dice.rolled', 'keeper.narration', 'npc.spoke', 'agent.spoke', 'agent.action_proposed', 'agent.needs_host_ruling', 'clue.revealed', 'entity.revealed', 'entity.corrected', 'scene.updated', 'module.completed', 'module.interaction', 'resource.item_used', 'handout.assigned', 'game.started', 'game.paused', 'game.resumed', 'game.ended'].includes(event.type)
+    || ['action.', 'check.', 'rules.', 'combat.', 'sanity.'].some(prefix => event.type.startsWith(prefix))
+}
