@@ -557,6 +557,10 @@ def generation_contract(schema, context):
             Field(
                 default="",
                 max_length=2000,
+                description="KP公开回答正文。responder为keeper时，完整回应本轮动作目标与"
+                "questions中的各个问题，保留player_statement的答复格式要求；"
+                "历史证词标明来源与历史性质，当前结果只依据实际回执。"
+                "responder为npc时这里只写相关动作或环境，问答留在npc_speech。",
                 json_schema_extra={"x-explicit-output": True},
             ),
         )
@@ -566,9 +570,11 @@ def generation_contract(schema, context):
                 str,
                 Field(
                     default="", min_length=8, max_length=1000,
-                    description="本轮实际可感知的目标内容或明确未能确认的部分。"
-                    "按玩家关注的多个公开对象逐项描述，遵守明确的分句要求，使用完整句子。"
-                    "内容仅依据已公开来源和实际回执。"
+                    description="给玩家的完整公开回答正文，本字段原样成为public_narration。"
+                    "在同一正文中逐项描述本轮关注的多个公开对象，并回答response_brief.questions"
+                    "中的每个问题，包括有公开来源的历史问题；遵守player_statement的答复格式。"
+                    "眼前观察、他人过去的估计或证词、当前实际结果分别说明，不把旧说法写成新发现。"
+                    "只依据已公开来源与实际回执，缺少依据时具体说明尚未确认的部分。"
                     "直接描述物件/伤口/环境的外观细节，不描述你试图观察的动作。"
                     "普通杂物可即兴外观，不产生可获得资源、核心线索或治疗效果。",
                     json_schema_extra={"x-explicit-output": True},
@@ -1128,12 +1134,22 @@ def restore_output(output, schema, context):
                     for t in context.get("current_targets", [])
                 )
             )
-            and set(action_kinds(focus.get("action", ""))) & {"search", "observe"}
+            and (
+                "search" in action_kinds(focus.get("action", ""))
+                or "observe" in action_kinds(focus.get("action", ""))
+                and focus.get("obstacle")
+                and proposal
+                and proposal.get("necessity") in {"required", "optional"}
+            )
             and value["parsed_intent"]["type"] in {"investigate", "observe"}
         ):
             # A scene search need not name the object it has not discovered yet.
             # The KP already chose a single gated discovery; bind that attempt
             # to its approved real check, retaining all normal prerequisites.
+            # An ordinary public observation cannot acquire an unrelated hidden
+            # discovery merely from an unnecessary model check. Explicitly named
+            # gated details were handled above; concrete risky observations retain
+            # their existing adjudication here.
             named_requirements = [
                 r
                 for r in requirements

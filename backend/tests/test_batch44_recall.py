@@ -67,7 +67,8 @@ def test_full_source_ids_stay_server_side_but_real_segment_prose_is_selected():
                              scope="public", source_event_ids=list(range(10000)))
     rows, _ = select_memory([e], "我继续研究保险柜。", memories=[memory])
     segment = next(r for r in rows if r["kind"] == "segment")
-    assert segment["summary"]["content"] == "调查员开始研究保险柜，暂未打开。"
+    assert '[e4 action.submitted] text="我调查保险柜。"' == segment["summary"]["content"]
+    assert "暂未打开" not in segment["summary"]["content"]
     assert "source_event_ids" not in json.dumps(rows)
     assert segment["source"]["range"] == [4, 4]
 

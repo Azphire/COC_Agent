@@ -322,6 +322,25 @@ async def build_context(
     context["inventory_state"] = await inventory_context(service, session, room, question)
     from app.memory.recall import select_memory, visible_tasks
 
+    prepared = await service.entities.binding(session, room.id)
+    recall_scene = prepared.current_scene if prepared else module.state.get("scene_id")
+    # Public knowledge carries an identity/scope projection. Old revealed
+    # entities remain searchable evidence, never candidate current referents.
+    recall_targets = [dict(e) for e in revealed_entities if e.get("fact_scope") == "current_scene"]
+    if recall_targets:
+        from app.persistence.preparation_models import RoomEntityState
+
+        target_map = {target["id"]: target for target in recall_targets}
+        for entity in await session.scalars(select(RoomEntityState).where(
+            RoomEntityState.room_id == room.id,
+            RoomEntityState.source_entity_id.in_(target_map),
+            RoomEntityState.state.in_(["revealed", "corrected"]),
+        )):
+            # Only approved aliases for already public/current identities enter
+            # the resolver; no keeper prose or hidden entity is copied to context.
+            target_map[entity.source_entity_id]["aliases"] = [
+                alias for alias in entity.snapshot.get("aliases", []) if isinstance(alias, str)]
+    explicit_target = (trigger or {}).get("payload", {}).get("target_entity_id")
     tasks = await visible_tasks(
         session, room.id, memory_events, member_id=binding.member_id,
         keeper=keeper, narrator=narrator,
@@ -331,13 +350,27 @@ async def build_context(
         evidence, memory_audit = select_memory(
             [e for e in memory_events if e["seq"] not in pending_seqs
              and e["seq"] < cycle.state["triggering_event_seq"]],
-            question, scene_id=room.session_state.get("scene_id"), tasks=tasks,
+            question, scene_id=recall_scene, tasks=tasks,
+            targets=recall_targets, target_ids=[explicit_target] if explicit_target else [],
             memories=visible_memories,
             budget=min(3000, max(900, service.settings.agent_context_chars // 4)),
         )
     if evidence:
         context["memory_evidence"] = evidence
+        # The same exact record otherwise occupies both evidence projections.
+        # Keep memory provenance and historical status, and omit only a fully
+        # duplicated fact view (never a result with extra structured fields).
+        if not context["readonly_recall"]:
+            context["fact_evidence"] = [fact for fact in context["fact_evidence"] if not any(
+                row.get("source", {}).get("seq") == fact.get("source_event_seq")
+                and row.get("text") == fact.get("text") and not row.get("excerpt")
+                and not fact.get("result_fact") for row in evidence)]
     context["memory_selection_audit"] = memory_audit
+    require(memory_audit.get("required_complete", True),
+            "当前行动必需的历史证据超过记忆选取预算，无法完整装入；请缩小本轮问题范围", 422)
+    reference = memory_audit.get("reference_resolution", {})
+    if reference.get("status") in {"recent_reference", "recent_quote", "ambiguous", "unresolved"}:
+        context["memory_reference"] = reference
     if memory_audit["omitted"]:
         context["memory_omission"] = {
             "count": len(memory_audit["omitted"]),
@@ -375,7 +408,6 @@ async def build_context(
             "agent.action_proposed",
         }
     ][-6:]
-    prepared = await service.entities.binding(session, room.id)
     if prepared:
         public_entities = await service.entities.public(session, room.id)
         from app.module_ir.facts import relevant_public_facts
@@ -469,7 +501,8 @@ async def build_context(
             context["module"] = {k: visible[k] for k in ("id", "title", "scene")}
             context["public_state"] = {"scene_id": prepared.current_scene}
     if narrator:
-        context["profile"] = {"role": "public_narrator"}
+        context["profile"] = {"role": "public_narrator",
+                              "speaking_style": profile.document.get("speaking_style", "")}
         context["checks"] = [
             {k: v for k, v in c.items() if k not in {"dice", "settlement", "options"}}
             for c in context["checks"]
@@ -678,14 +711,21 @@ async def build_context(
             for k, v in memory_view(memory).items()
             if k in {"kind", "scope", "content", "epistemic_status"}
         }
-        # Full provenance remains on AgentMemory. Never replace the model's
-        # prose with a fixed 1200-character source selection.
+        # Full provenance remains on AgentMemory; legacy summary wording is
+        # rehydrated from visible source fields before entering a prompt.
         candidate["source_ref"] = (
             f"e{memory.coverage_start}-{memory.coverage_end}"
             if memory.coverage_start is not None else f"memory:{memory.id}"
         )
         if memory.kind == "summary" and any(m.kind == "summary_segment" for m in visible_memories):
             continue  # The selected segment is already in memory_evidence.
+        if memory.kind == "summary":
+            from app.memory.segments import required_records, summary_projection
+
+            originals = required_records(memory_events, memory.source_event_ids)
+            if not originals:
+                continue
+            _, candidate["content"] = summary_projection(originals)
         proposed = {**context, "memories": [*context["memories"], candidate]}
         if prompt_context_size(proposed) > budget - 1200:
             memory_audit["omitted"].append({"ref": candidate["source_ref"],
@@ -792,7 +832,9 @@ async def build_context(
     while prompt_context_size(context) > budget:
         rows = list(context.get("memory_evidence", []))
         removable = [i for i, row in enumerate(rows)
-                     if row.get("kind") not in {"pending_task", "short_term_goal"}]
+                     if row.get("kind") not in {"pending_task", "short_term_goal"}
+                     and row.get("source", {}).get("ref")
+                     not in memory_audit.get("required_refs", [])]
         if not removable:
             break
         row = rows.pop(removable[-1])

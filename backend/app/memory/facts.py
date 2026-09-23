@@ -51,12 +51,28 @@ def readonly_recall(text):
         and not re.search(r"原话|原文|复述|回顾|说过|告诉过|记错", text)
     ):
         return False
-    from app.preparation.action_authority import action_kinds, declared_action
+    from app.preparation.action_authority import (
+        action_kinds,
+        declared_action,
+        requested_action_kinds,
+    )
 
     # Classify independent current clauses before a historical purpose can
     # reserve the whole turn for recall. Quotes and past-tense self reports
     # remain evidence requests rather than executable attempts.
     unquoted = re.sub(r'“[^”]*”|‘[^’]*’|「[^」]*」|"[^"]*"', "", text)
+    for clause in re.split(r"[，,。；:：\n]", unquoted):
+        request = re.match(r"\s*(?:请|麻烦|劳驾)(?:你|您)?\s*(.+)", clause)
+        if not request:
+            continue
+        action = re.sub(
+            r"^(?:根据|依据|按照|按)[^，,。；:：\n]{1,32}"
+            r"(?:说法|证词|线索|记录|提示|指示|口令|暗号)(?:来|去)?", "", request[1])
+        if declared_action(action) and set(requested_action_kinds(action)) - {"converse"}:
+            # Historical evidence can guide an explicit delegated attempt.
+            # This selects ordinary planning; the delegate/authority gates still
+            # decide who may act and whether a check is required.
+            return False
     for sentence in re.split(r"(?<=[。！？;；\n])", unquoted):
         actor = re.search(r"(?:^|[，,…])\s*我(?:们)?", sentence)
         if not actor or re.search(r"如果|假如|假设", sentence):
@@ -167,7 +183,7 @@ def fact_records(visible_events, entities=(), *, members=None):
                          if f.get("source_event_seq") in by_seq]
             for index, fact in enumerate(result_facts([
                 *cycle_actions.get(p.get("cycle_id"), []), *originals, e,
-            ])):
+            ], result_event_seq=e["seq"])):
                 records.append({
                     **base, "id": f"event:{e['seq']}:result:{index}", "kind": "result",
                     "result_fact": fact, "text": describe_result(fact),

@@ -37,6 +37,25 @@ def question_request(text, name=""):
     )
 
 
+def historical_third_person_question(text, names=()):
+    """A question about someone's earlier account is not addressed to them."""
+    names = list(dict.fromkeys(n for name in names for n in (name, name.split("·")[0]) if n))
+    named = "|".join(re.escape(name) for name in names)
+    if re.search(r"你|您", text):
+        return False  # Preserve an actual second-person conversational follow-up.
+    if named and re.search(
+        r"(?:^|[，,。；;！？!?\n])\s*(?:" + named + r")(?:先生|女士)?[，,：:]|"
+        r"(?:询问|追问|请教|问)(?:一下)?(?:" + named + r")", text,
+    ):
+        return False
+    subject = "(?:" + "|".join([*(re.escape(name) for name in names), "他", "她"]) + ")"
+    return bool(re.search(
+        r"(?:^|[，,。；;！？!?\n])\s*" + subject
+        + r"[^，,。；;！？!?\n]{0,12}(?:早先|先前|之前|以前|刚才|当时|曾|原先|说过|提过)",
+        text,
+    ))
+
+
 def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
     """Keep valid model interpretations; repair only explicit ownership boundaries.
 
@@ -72,6 +91,11 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
             if start < request.source_end and end > request.source_start
         }
         if owners and owners != {request.addressee_id}:
+            continue
+        if (request.addressee_id in npc_ids and not owners
+                and historical_third_person_question(
+                    request.text, [people[request.addressee_id]],
+                )):
             continue
         if request.kind == "question" and not owners and not question_request(request.text):
             continue
@@ -148,6 +172,10 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
         and focus.question in raw
         and focus.question
         and question_request(focus.question, people.get(focus.addressee_id, ""))
+        and not (
+            focus.addressee_id in npc_ids
+            and historical_third_person_question(focus.question, [people[focus.addressee_id]])
+        )
         and not re.match(r"\s*(?:咱们|我们)(?!请你|让你|希望你)", focus.question)
         and not speaker_action(focus.question)
         and not inherited_speaker_action(
@@ -221,6 +249,13 @@ def repair_attribution(plan, raw, people, actor, *, npc_ids=(), explicit_spans=(
     requests = bind_requests(
         focus, raw, people, actor, npc_ids=npc_ids, explicit_spans=explicit_spans,
     )
+    if (focus.addressee_id in npc_ids
+            and not any(r.addressee_id == focus.addressee_id for r in requests)
+            and historical_third_person_question(
+                focus.question or raw, [people.get(focus.addressee_id, "")],
+            )):
+        focus.addressee_id = None
+        plan.focus = focus
     if not requests:
         own = speaker_action(raw)
         if own and (had_requests or not focus.action):
@@ -296,9 +331,12 @@ def requests_for(plan, member_id):
 def cancellation(text):
     # Stop scope is grammatical, not a list of task verbs. Matching the
     # stopped task against existing keys happens separately below.
+    # A truthfulness constraint on the answer does not withdraw the task;
+    # explicit "取消/停止" still carries its ordinary cancellation meaning.
     return bool(re.search(
         r"(?:^|[，,。；;])[^，,。；;！？!?“”\"]{0,24}?"
-        r"(?:不用|不必|不要|别|停止|取消|先不)(?!担心|害怕|紧张|客气)"
+        r"(?:停止|取消|(?:不用|不必|不要|别|先不)(?!(?:再)?(?:声称|宣称|断言)))"
+        r"(?!担心|害怕|紧张|客气)"
         r"[^，,。；;！？!?]+|算了|(?:全部|都)(?:停|别|不用)", text,
     ))
 
@@ -366,6 +404,7 @@ def reconcile_requests(behavior, requests, *, seq, scene_id, reachable_ids, name
                 new["kind"] == old["kind"] == "question"
                 or new["kind"] == old["kind"] == "delegate" and same_target
                 and set(new.get("operations", [])) & set(old.get("operations", []))
+                and new.get("text", "").strip() == old.get("text", "").strip()
             ):
                 status = status or "superseded"
         if (

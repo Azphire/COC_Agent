@@ -32,12 +32,15 @@ PLAN_INSTRUCTION = (
     "先从current_clauses选本轮语句ID填focus：action_clause_ids是玩家现在实际尝试的动作，"
     "question_clause_ids是玩家向人说的话（不是KP的新问题），suggestion_clause_ids是建议，hypothesis_clause_ids是条件假设。"
     "没有则填空列表。同一片段可同时包含动作与交流；只选ID，不抄写或续写原文，服务端恢复对应片段。"
+    "本轮多个问题、多个明确对象均保留；答复格式要求不是行动，不得因只选首个动作而遗失。"
     "focus.requests逐一记录向每个人说的话：addressee_id绑定对象，clause_ids只选对他所说的连续片段；"
     "kind=question索取信息或意见，delegate委托尝试，cancel取消旧任务，suggestion建议，hypothesis假设。"
     "请求的target_id填实际操作对象；continuity=ongoing仅用于携带物或转场后仍相关的长期目标，"
     "本地查看用scene。明确改做另一件事才填replaces_prior=true。"
     "问设备用途、操作意见属于question；能帮我检查一下吗属于delegate。别人的任务不能放进本人action_clause_ids。"
     "没有向人说话就不填requests。‘我打开门，走进里面’两段都是本人的连续行动，不能分给队友。"
+    "问某人早先说过什么是向KP核对旧证词，不是再次向那名NPC发问；"
+    "第三人称提到姓名不等于称呼本人。只有当前实际对他说话才给该NPC分配requests。"
     "addressee_id是谈话对象，action_target_id是动作目标，分别选候选ID；可以同时问人和操作物品。"
     "提问、建议、假设不代表已经行动。自身动作可选当前场景，意图用实际动作类型。"
     "obstacle只写当前任务已存在的阻力或危险。普通交流、可辨认文字、公开图示没有障碍时写空字符串，proposed_check=null。"
@@ -79,15 +82,22 @@ PLAN_INSTRUCTION = (
 )
 NARRATION_INSTRUCTION = (
     "你是中文跑团的公开叙述者，输出KeeperNarration。只回应response_brief指定的本轮任务。"
+    "player_statement保留本轮完整原话，保留其中明确的回应格式要求；"
+    "questions按本轮说话对象分配，不替队友答复或宣布其任务完成。"
+    "public_style只规定KP公开说话方式，不提供剧情事实；内容长度服从本轮需要，不固定句数。"
     "question是当前问题，attempt是玩家正在尝试的动作，completed_results是服务端实际结果。"
-    "responder为npc才输出npc_speech.text，写第一人称台词；public_narration只写简短动作或环境，可空，不能重复台词。"
+    "responder为keeper时，公开正文须同时覆盖本轮多个动作目标和questions中的每个问题。"
+    "ordinary_observation=true时完整正文写入observed_detail；否则写入public_narration。"
+    "观察与历史问题混合时，在同一正文中分别说明眼前状况和有来源的旧证词，不把旧证词写成当前发现。"
+    "responder为npc时才输出npc_speech.text，写第一人称台词；此时public_narration只写简短动作或环境，可空，不能重复台词。"
     "先有内容地回答玩家当前问题，再适度给出可以继续尝试的方向，让玩家选择做法。"
     "responder.portrayal供人物表达；allowed_facts是公开依据，claim_ids只选对应ID，已知可读文字应准确回答。"
     "answer_basis=improvise或旧unrecorded时，自然补全普通见闻、环境、可读文字或临时互动对象，不需主机审阅。"
     "以当前场景和已公开线索引导即兴，不强迫调查路线，不覆盖已有内容，不补写核心真相、隐藏答案或关键发现。"
     "incidental_memories保留了先前即兴的说话人和地点；追问时保持一致，历史地点不代表当前在场。"
     "current_state是已执行的当前状态及原事件，优先于初始场景描述和旧即兴；不能把已执行结果说回初始状态。"
-    "每轮最多两处简短即兴细节，先写入public_narration或npc_speech，再把原样短句列入incidental_details。"
+    "incidental_details只摘录已在observed_detail、public_narration或npc_speech正文中原样说出的简短即兴细节，最多两处；"
+    "不能用它代替正文对某个对象的观察或某个问题的回答。"
     "临时对象仅作叙述互动，不创建可结算实体、出口或资源；检定结果、物品交接和行动成功以completed_results为准。"
     "询问是否还物品仍待玩家递出，提出建议仍待玩家决定，不能描述这些已经发生。"
     "withdrawal只表示本轮服务端处理的撤回；为空就不能谈撤回。"
@@ -97,7 +107,7 @@ NARRATION_INSTRUCTION = (
     "inventory_state为空库存时，不得叙述持有、交出或使用手机、手电等道具。"
     "readonly_recall只限制副作用。复述原话时fact_ids保留原文；问结果或现状时依据result_fact直接自然回答，不能堆旧记录。"
     "用自然叙述解释真实结果：成功要回答本次任务具体得知或做成什么；失败写未能确认的内容或已结算后果。"
-    "本轮必须在public_narration或npc_speech写实际回应；claim_ids只提供依据，不能代替回应或复播旧描写。"
+    "本轮必须在对应正文字段写实际回应；claim_ids只提供依据，不能代替回应或复播旧描写。"
     "已公开文字可以直接读，不再叫骰。visit_kind=revisit时按现状描述回到此地，不复述醒来的开场。"
     "recent_dialogue包含近期问答，dialogue_answers是可用证词而非必背台词；先回答新问题。"
     "questions中的多个问题逐项回答，不把玩家问句复述成自己提出的问题。"
@@ -745,8 +755,8 @@ def generation_prompt(context, schema):
             # carry continuity. Replaying the old conversation here can make a
             # rejected previous answer look like fresh evidence for this reply.
             brief["recent_dialogue"] = []
-        if result.get("triggering_action"):
-            result["triggering_action"]["payload"]["text"] = brief.get("player_statement", "")
+        # The original current utterance survives independently of the selected
+        # action/recipient. It includes additional questions and output format.
         result.pop("fact_evidence", None)
         # Prior dialogue supplies continuity, not the paragraph to emit again.
         details = brief.get("incidental_memories", [])
@@ -2409,10 +2419,14 @@ class ActionRuntimeMixin:
             # Historical evidence is removable only as a complete sourced row.
             omitted_memory = []
             prior_omissions = run.context.get("memory_omission", {}).get("count", 0)
+            required_refs = set(run.context.get("memory_selection_audit", {}).get(
+                "required_refs", [],
+            ))
             while context_size() > budget:
                 evidence = list(run.context.get("memory_evidence", []))
                 removable = [i for i, entry in enumerate(evidence)
-                             if entry.get("kind") not in {"pending_task", "short_term_goal"}]
+                             if entry.get("kind") not in {"pending_task", "short_term_goal"}
+                             and entry.get("source", {}).get("ref") not in required_refs]
                 if not removable:
                     break
                 entry = evidence.pop(removable[-1])

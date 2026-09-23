@@ -656,7 +656,7 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             if len(candidates) == 1
             else None
         )
-        operated_items.append({"id": eid, "instance_id": instance,
+        operated_items.append({"id": eid, "instance_id": instance, "quantity": 1,
                                "names": [item.snapshot["title"],
                                                    *item.snapshot.get("aliases", [])]})
     if rule.encounter_operation == "sound_once" and not operated_items:
@@ -696,6 +696,7 @@ async def apply_interaction(agents, session, room, args, *, run=None, host=False
             "actor_id": actor,
             "target_id": args.entity_id,
             "target_name": entity.snapshot.get("title", ""),
+            "recipient_member_id": args.recipient_member_id,
             "operated_items": operated_items,
             "operations": receipt["operations"],
             **{k: receipt[k] for k in ("action_target_id", "action_text") if k in receipt},

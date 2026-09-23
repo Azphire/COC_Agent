@@ -511,7 +511,13 @@ def required_kinds(rule):
     if rule.use_effect:
         return {"use", "consume"}
     if rule.action_kinds:
-        return set(rule.action_kinds)
+        kinds = set(rule.action_kinds)
+        # Older approved search methods also list "observe" as a synonym.
+        # A timed search still requires a search attempt: looking at public
+        # features cannot authorize its elapsed time or discovery effects.
+        if rule.elapsed_minutes and "search" in kinds:
+            kinds.discard("observe")
+        return kinds
     if rule.inventory_operation:
         return {
             "give": {"give"},

@@ -103,6 +103,61 @@ def task_source_records(events, tasks):
     return list(records.values())
 
 
+def summary_projection(records):
+    """Render bounded source excerpts/values, never unverified model assertions.
+
+    References bind both a source record and its exact field/slice. The model's
+    proposed prose remains in the stored audit only: valid citation IDs cannot
+    make an invented password, owner or outcome safe to send to the next model.
+    """
+    references, lines = [], []
+    for record in records:
+        if record.get("kind") != "exact_source_record":
+            continue
+        payload, values = record["payload"], []
+        paths = [(key,) for key in (
+            "operation", "operations", "passed", "instance_id", "from_member_id",
+            "to_member_id", "recipient_member_id", "target_id", "quantity",
+        ) if key in payload]
+        paths += [("result", key) for key in ("passed", "total")
+                  if key in (payload.get("result") or {})]
+        for index, item in enumerate(payload.get("operated_items", [])):
+            paths += [("operated_items", index, key) for key in ("id", "instance_id", "quantity")
+                      if key in item]
+        prose = next((key for key in ("content", "public_summary", "text", "display_text",
+                                     "summary", "scene_summary") if payload.get(key)), None)
+        if prose:
+            paths.insert(0, (prose,))
+        for path in paths:
+            value = payload
+            for key in path:
+                value = value[key]
+            reference = {"source_id": record["id"], "path": list(path)}
+            # Exact records stay complete in the ledger. A long source excerpt
+            # explicitly advertises its range; it is never a rewritten fact.
+            if isinstance(value, str) and len(value) > 220:
+                value = value[:220]
+                reference["excerpt"] = {"start": 0, "end": 220}
+            label = ".".join(map(str, path))
+            if "excerpt" in reference:
+                label += "[原文片段0:220]"
+            field = label + "=" + canonical(value)
+            if sum(map(len, lines)) + sum(map(len, values)) + len(field) > 1400:
+                continue
+            references.append(reference)
+            values.append(field)
+        if values:
+            lines.append(f"[e{record['source_event_seq']} {record['event_type']}] "
+                         + "; ".join(values))
+    return references, "\n".join(lines) or "本段仅含来源索引；精确记录需按来源召回。"
+
+
+def bind_summary(content, required):
+    references, rendered = summary_projection(required)
+    return {"content": rendered, "generated_content": content,
+            "fact_references": references, "rendering": "source_fields_v1"}
+
+
 def select_chunks(
     events, base_context, fits, *, partial_seq=None, partial_offset=0, all_events=None
 ):
@@ -177,7 +232,7 @@ def make_segment(content, events, chunks, *, tasks=(), member_id=None, prior_chu
         "version": 1,
         "reader_member_id": member_id,
         "summary": {
-            "content": content,
+            **bind_summary(content, required),
             "positions": [r for r in required if r.get("kind") in {"npc_statement", "judgment"}],
             "unfinished": deepcopy(list(tasks)),
             "epistemic_status": "derived_summary_not_fact_authority",
@@ -253,6 +308,12 @@ def validate_segment(document, events):
     required = required_records(events, completed)
     if canonical(document["required_facts"]) != canonical(required):
         raise ValueError("Required source fields changed or omitted")
+    summary = document.get("summary", {})
+    if summary.get("rendering") == "source_fields_v1":
+        references, rendered = summary_projection(required)
+        if (summary.get("content") != rendered
+                or canonical(summary.get("fact_references")) != canonical(references)):
+            raise ValueError("Summary body or fact references changed")
     if document["coverage"]["fully_covered_seqs"] != completed:
         raise ValueError("Completion does not match processed chunks")
     if document["coverage"]["retained_count"] != len(required):
@@ -290,6 +351,7 @@ def active_segments(memories, visible_events):
         ):
             continue
         try:
+            validate_segment(document, events)
             if canonical(document.get("task_source_records", [])) != canonical(
                 task_source_records(events, tasks)
             ):
@@ -300,6 +362,13 @@ def active_segments(memories, visible_events):
             c["seq"] in by_seq and c["digest"] == source_digest(by_seq[c["seq"]])
             for c in document["source_chunks"]
         ):
+            if document["summary"].get("rendering") != "source_fields_v1":
+                # Old saves retain their exact ledger and recovery coverage;
+                # upgrade only the disposable prompt view, never stored history.
+                document = deepcopy(document)
+                document["summary"].update(bind_summary(
+                    document["summary"]["content"], document["required_facts"]
+                ))
             selected.append(document)
     return selected
 

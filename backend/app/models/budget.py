@@ -9,6 +9,7 @@ import json
 import math
 import re
 from collections import Counter
+from copy import deepcopy
 from functools import lru_cache
 
 from app.models.base import ModelError
@@ -109,36 +110,48 @@ def compact_schema(schema):
     return schema
 
 
-def schema_envelope(messages, response_schema, tools, *, provider, output_mode):
-    """Match the provider's actual schema/tools placement, including JSON mode."""
+@lru_cache(maxsize=64)
+def _class_schema(schema_class):
+    return json.dumps(schema_class.model_json_schema(), ensure_ascii=False, separators=(",", ":"))
+
+
+@lru_cache(maxsize=64)
+def _schema_placement(schema_json, provider, output_mode):
+    """Cache stable schema transformations, keyed by all transport choices."""
     from app.models.ollama import generation_schema
 
+    schema = compact_schema(generation_schema(json.loads(schema_json)))
+    if provider == "ollama":
+        return {"format": schema}, None
+    if output_mode == "json_object":
+        return {"response_format": {"type": "json_object"}}, {
+            "role": "system",
+            "content": "Return only a JSON object matching this schema. "
+            "Do not output reasoning. JSON schema: "
+            + json.dumps(schema, ensure_ascii=False),
+        }
+    from app.models.openai_compatible import strict_schema
+
+    return {"response_format": {
+        "type": "json_schema", "json_schema": {
+            "name": "model_response", "strict": True, "schema": strict_schema(schema),
+        },
+    }}, None
+
+
+def schema_envelope(messages, response_schema, tools, *, provider, output_mode):
+    """Match the provider's actual schema/tools placement, including JSON mode."""
     result = {"messages": [dict(m) for m in messages]}
     if tools:
         result["tools"] = [dict(t) for t in tools]
     if response_schema is not None:
-        schema = compact_schema(generation_schema(
-            response_schema.model_json_schema()
-            if isinstance(response_schema, type) else dict(response_schema)
-        ))
-        if provider == "ollama":
-            result["format"] = schema
-        elif output_mode == "json_object":
-            result["response_format"] = {"type": "json_object"}
-            result["messages"].insert(0, {
-                "role": "system",
-                "content": "Return only a JSON object matching this schema. "
-                "Do not output reasoning. JSON schema: "
-                + json.dumps(schema, ensure_ascii=False),
-            })
-        else:
-            from app.models.openai_compatible import strict_schema
-
-            result["response_format"] = {
-                "type": "json_schema", "json_schema": {
-                    "name": "model_response", "strict": True, "schema": strict_schema(schema),
-                },
-            }
+        schema_json = (_class_schema(response_schema) if isinstance(response_schema, type)
+                       else json.dumps(response_schema, ensure_ascii=False, separators=(",", ":")))
+        fields, message = _schema_placement(schema_json, provider, output_mode)
+        # Provider adapters may mutate their envelope. Never expose cached objects.
+        result.update(deepcopy(fields))
+        if message:
+            result["messages"].insert(0, dict(message))
     return result
 
 
@@ -157,12 +170,45 @@ def _tokenizer(model):
         return None
 
 
-def _estimate(text):
+def _estimate_units(text):
     ascii_chars = sum(len(s) for s in re.findall(r"[\x00-\x7f]+", text))
     cjk = sum("\u2e80" <= c <= "\u9fff" for c in text)
     other = sum(len(c.encode("utf-8")) for c in text if ord(c) > 127
                 and not "\u2e80" <= c <= "\u9fff")
-    return math.ceil(ascii_chars / 3 + cjk * 1.25 + other)
+    # Integer twelfths preserve exact additivity across cached schema boundaries.
+    return ascii_chars * 4 + cjk * 15 + other * 12
+
+
+def _estimate(text):
+    return math.ceil(_estimate_units(text) / 12)
+
+
+@lru_cache(maxsize=64)
+def _stable_estimate_units(text):
+    return _estimate_units(text)
+
+
+def _estimate_envelope(envelope, text):
+    """Count stable schema text once without changing the whole-request estimate."""
+    stable = []
+    for key in ("format", "response_format", "tools"):
+        if key in envelope:
+            stable.append(json.dumps(envelope[key], ensure_ascii=False, separators=(",", ":")))
+    messages = envelope["messages"]
+    if messages and messages[0].get("content", "").startswith(
+        "Return only a JSON object matching this schema. "
+    ):
+        stable.append(json.dumps(messages[0], ensure_ascii=False, separators=(",", ":")))
+    units, reused = 0, 0
+    remainder = text
+    for fragment in stable:
+        if fragment not in remainder:
+            continue
+        before = _stable_estimate_units.cache_info().hits
+        units += _stable_estimate_units(fragment)
+        reused += _stable_estimate_units.cache_info().hits - before
+        remainder = remainder.replace(fragment, "", 1)
+    return math.ceil((units + _estimate_units(remainder)) / 12), reused
 
 
 def measure_request(settings, messages, response_schema=None, tools=None, output_limit=None):
@@ -173,7 +219,10 @@ def measure_request(settings, messages, response_schema=None, tools=None, output
     text = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
     tokenizer = _tokenizer(settings.model_name)
     method = "cached_model_tokenizer" if tokenizer else "conservative_estimate"
-    raw = len(tokenizer.encode(text)) if tokenizer else _estimate(text)
+    if tokenizer:
+        raw, cached_parts = len(tokenizer.encode(text)), 0
+    else:
+        raw, cached_parts = _estimate_envelope(envelope, text)
     key = _model_key(settings)
     calibration = _calibration.get(key, {"factor": 1.0, "samples": 0})
     # Chat framing / provider wrappers are not described by a vocabulary alone.
@@ -181,6 +230,7 @@ def measure_request(settings, messages, response_schema=None, tools=None, output
     reserve = output_limit or settings.model_output_limit
     return {
         "method": method, "raw_estimate": raw, "input_tokens": input_tokens,
+        "schema_measurement_cache_hits": cached_parts,
         "output_reserve": reserve, "total_tokens": input_tokens + reserve,
         "token_limit": settings.model_context_limit,
         "within_token_limit": input_tokens + reserve <= settings.model_context_limit,

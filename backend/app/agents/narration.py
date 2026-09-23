@@ -9,11 +9,13 @@ from app.rules.display import check_display
 def question_parts(question):
     """Separate current factual questions joined by a comma, retaining their wording."""
     result = []
-    for sentence in re.findall(r"[^？?]+[？?]", question):
+    for sentence in re.findall(r"[^。；;\n？?]+[？?]", question):
         parts = re.split(r"[，,：:]", sentence)
         pending = ""
         for part in parts:
-            if re.search(r"什么|为何|为什么|怎么|哪|谁|是否|能否|听得见|感觉|[？?]", part):
+            if re.search(
+                r"什么|为何|为什么|怎么|哪|谁|多少|何时|是否|能否|听得见|感觉|[？?]", part,
+            ):
                 result.append((pending + part).rstrip("？?") + "？")
                 pending = ""
             else:
@@ -90,6 +92,14 @@ def response_brief(plan, context, results, *, withdrawal=None):
         ),
         None,
     )
+    if not npc and addressee not in people:
+        # An action focus is only the executable part of the utterance. Keep
+        # every current KP question, while attributed requests still belong to
+        # their actual respondents and must not be answered as if they acted.
+        question = raw
+        for request in focus.requests if focus else []:
+            if request.text and request.text in question:
+                question = question.replace(request.text, "", 1)
     if npc and focus and not focus.action and all(
         r.addressee_id == npc["id"] for r in focus.requests
     ):
@@ -177,11 +187,13 @@ def response_brief(plan, context, results, *, withdrawal=None):
             for c in facts
         ],
         "questions": question_parts(question),
-        "player_statement": (
-            question if npc and focus and focus.requests
-            and any(r.addressee_id != addressee for r in focus.requests)
-            else raw if npc else attempt or question
-        ),
+        # Verbatim current input also carries response format and other current
+        # questions. Routing is expressed by responder/questions, never by
+        # silently shortening the player's statement to the first action.
+        "player_statement": raw,
+        "public_style": {
+            "speaking_style": context["profile"]["speaking_style"],
+        } if context.get("profile", {}).get("speaking_style") else {},
         "source_quotes": list(dict.fromkeys(written_sources))[:3],
         "current_scene": scene,
         "observation_subject": next((

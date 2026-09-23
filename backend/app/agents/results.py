@@ -3,17 +3,20 @@
 import re
 
 
-def result_facts(events):
+def result_facts(events, *, result_event_seq=None):
     facts = []
-    actors = {e['payload'].get('cycle_id'): e.get('actor_member_id') for e in events
-              if e['type'] in {'action.submitted', 'agent.action_proposed'}}
+    actors = {}
     originals = {e["seq"]: e for e in events}
-    for event in events:
+    for event in sorted(events, key=lambda e: e["seq"]):
         p = event["payload"]
         cycle = p.get("cycle_id")
         if event["type"] in {"action.submitted", "agent.action_proposed"}:
+            # Only earlier proposals can supply a fallback actor. In particular,
+            # a teammate's later proposal never changes an earlier receipt.
             actors[cycle] = event.get("actor_member_id")
         if event["type"] == "action.result":
+            if result_event_seq is not None and event["seq"] != result_event_seq:
+                continue
             for saved in p.get("facts", []):
                 original = originals.get(saved.get("source_event_seq"), {})
                 source = original.get("payload", {})
@@ -22,9 +25,14 @@ def result_facts(events):
                 fact = {
                     **saved,
                     "cycle_id": saved.get("cycle_id") or cycle,
-                    "actor_id": saved.get("actor_id") or actors.get(cycle),
+                    "actor_id": saved.get("actor_id") or source.get("actor_id")
+                    or (source.get("target_member_id")
+                        if original.get("type") == "check.resolved" else None)
+                    or event.get("actor_member_id") or actors.get(cycle),
                     "operated_items": saved.get("operated_items")
                     or source.get("operated_items", []),
+                    "recipient_member_id": saved.get("recipient_member_id")
+                    or source.get("recipient_member_id") or source.get("to_member_id"),
                 }
                 if fact.get("status") in {"not_executed", "technical_failure"}:
                     fact["source_action_seq"] = fact.get(
@@ -40,6 +48,8 @@ def result_facts(events):
                         fact["target_id"], fact["target_name"] = None, None
                 facts.append(fact)
             continue
+        if result_event_seq is not None:
+            continue  # Original receipts only rehydrate the selected committed facts.
         if event["type"] not in {
             "combat.resolved", "module.interaction", "check.resolved", "scene.updated",
         }:
@@ -64,9 +74,17 @@ def result_facts(events):
         passed = p.get("passed", result.get("passed"))
         if event["type"] == "module.interaction" and passed is None:
             passed = True
+        source_action = originals.get(p.get("source_event_seq"), {})
+        action_actor = source_action.get("actor_member_id") if source_action.get("type") in {
+            "action.submitted", "agent.action_proposed",
+        } else None
         for op in operations:
             facts.append({
-                "actor_id": p.get("actor_id") or actors.get(cycle)
+                "actor_id": p.get("actor_id")
+                or (p.get("target_member_id") if event["type"] == "check.resolved" else None)
+                or action_actor
+                or (event.get("actor_member_id") if event["type"] == "module.interaction" else None)
+                or actors.get(cycle)
                 or p.get("target_member_id") or event.get("actor_member_id"),
                 "target_id": p.get("target_id") or p.get("entity_id"),
                 "target_name": p.get("target_name") or p.get("target"),
@@ -75,6 +93,7 @@ def result_facts(events):
                 if passed is False else "attempted",
                 "effect": p.get("summary") or p.get("text") or p.get("display_text", ""),
                 "operated_items": p.get("operated_items", []),
+                "recipient_member_id": p.get("recipient_member_id") or p.get("to_member_id"),
                 "source_event_seq": event["seq"], "cycle_id": cycle,
                 **({"source_action_seq": p["source_event_seq"]}
                    if p.get("source_event_seq") is not None else {}),

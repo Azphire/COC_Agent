@@ -164,6 +164,19 @@ async def enqueue_teammate(service, session, room, parent, event, binding, reque
     state = initial_state(room.id, cycle_id, binding.member_id, event.seq, [], origin="teammate")
     state["related_player_cycle_id"] = parent.id
     state["request_keys"] = [r["key"] for r in requests]
+    if requests:
+        from app.agents.task_receipts import bind_task_operands
+        from app.preparation.inventory import inventory_context
+
+        inventory = await inventory_context(service, session, room,
+                                            "\n".join(r.get("text", "") for r in requests))
+        targets = [t for t in await service.entities.public(session, room.id)
+                   if t.get("fact_scope") == "current_scene"]
+        state["request_operands"] = {
+            r["key"]: bind_task_operands(r, inventory, binding.member_id,
+                                        parent.state.get("triggering_member_id"), targets=targets)
+            for r in requests
+        }
     if service.combat.route(room, event.payload["text"]):
         state.update(combat_flow=True, combat_actor_id=binding.member_id)
     session.add(AgentCycle(id=cycle_id, room_id=room.id, status="queued", state=state))
@@ -290,15 +303,21 @@ async def settle_teammate_tasks(service, session, room):
         cycle = await session.get(AgentCycle, behavior.task_cycle_id)
         if not cycle or cycle.status not in {"completed", "failed", "cancelled"}:
             continue
-        events = [
-            e
-            for e in await session.scalars(
+        public_events = list(await session.scalars(
                 select(RoomEvent)
                 .where(RoomEvent.room_id == room.id, RoomEvent.visibility == "public")
                 .order_by(RoomEvent.seq)
-            )
-            if e.payload.get("cycle_id") == cycle.id
-        ]
+            ))
+        from app.memory.events import story_events
+
+        active_story, _ = story_events([
+            {"seq": e.seq, "type": e.type, "payload": e.payload,
+             "visibility": e.visibility, "actor_member_id": e.actor_member_id}
+            for e in public_events
+        ], include_initial_reveals=True)
+        active_seqs = {e["seq"] for e in active_story}
+        events = [e for e in public_events if e.seq in active_seqs
+                  and e.payload.get("cycle_id") == cycle.id]
         feedback = [
             e
             for e in events
@@ -361,20 +380,40 @@ async def settle_teammate_tasks(service, session, room):
             or cycle.status == "cancelled"
             or not feedback
         )
-        successful_operations = {
-            fact["operation"] for fact in public_results.get("current_result_facts", [])
-            if fact.get("status") == "success" and fact.get("operation") != "check"
-        }
+        from app.agents.task_receipts import receipt_progress
+
+        facts = [f for f in public_results.get("current_result_facts", [])
+                 if f.get("source_event_seq") in active_seqs]
+        public_results["current_result_facts"] = facts
         if observation_completed:
-            successful_operations.add("observe")
-        requested_operations = {
-            op for request in behavior.pending_requests
-            if request.get("key") in cycle.state.get("request_keys", [])
-            for op in request.get("operations", [])
-        }
-        confirmed = bool(successful_operations) and (
-            not requested_operations or requested_operations <= successful_operations
+            plan = record.document.get("plan") or {}
+            focus = plan.get("focus") or {}
+            facts.append({"operation": "observe", "status": "success", "actor_id": row.member_id,
+                          "cycle_id": cycle.id, "target_id": focus.get("action_target_id")
+                          or (plan.get("parsed_intent") or {}).get("target_id"),
+                          "source_event_seq": cycle.state.get("triggering_event_seq")})
+        outcomes, consumed = {}, set()
+        for request in behavior.pending_requests:
+            if request.get("key") not in cycle.state.get("request_keys", []):
+                continue
+            operands = dict(request)
+            frozen = cycle.state.get("request_operands", {}).get(request["key"], {})
+            for key, value in frozen.items():
+                if key not in operands or operands[key] is None:
+                    operands[key] = value
+            outcomes[request["key"]] = receipt_progress(
+                operands, facts, actor=row.member_id, cycle_id=cycle.id, consumed=consumed,
+            )
+        confirmed = bool(outcomes) and all(done for _, done in outcomes.values())
+        confirmed = confirmed and not any(
+            r.get("kind") == "delegate" and r.get("key") not in outcomes
+            for r in behavior.pending_requests
         )
+        if not outcomes and not behavior.pending_requests:
+            confirmed = observation_completed or any(
+                f.get("status") == "success" and f.get("operation") != "check"
+                and f.get("actor_id") == row.member_id for f in facts
+            )
         behavior.task_status = (
             "generation_failed"
             if technical
@@ -414,24 +453,20 @@ async def settle_teammate_tasks(service, session, room):
             behavior.last_attempt_result = dict(behavior.last_result)
             parent = await session.get(AgentCycle, cycle.state.get("related_player_cycle_id"))
             if parent:
-                source_seq = parent.state.get("triggering_event_seq")
                 pending = []
                 for request in behavior.pending_requests:
-                    if (
-                        request.get("key") not in cycle.state.get("request_keys", [])
-                        and request.get("source_event_seq") != source_seq
-                    ):
+                    if request.get("key") not in outcomes:
                         pending.append(request)
                         continue
-                    remaining = set(request.get("operations", [])) - successful_operations
+                    remaining, completed = outcomes[request["key"]]
                     if (request.get("kind") == "delegate"
                             and behavior.task_status != "cancelled"
-                            and (remaining or not confirmed)):
-                        pending.append({**request, "operations": sorted(remaining),
+                            and not completed):
+                        pending.append({**remaining,
                                         "last_result_kind": behavior.task_status})
                     else:
                         behavior.request_history = [*behavior.request_history, {
-                            **request, "status": behavior.task_status,
+                            **request, "status": "completed" if completed else behavior.task_status,
                             "result_cycle_id": cycle.id,
                             "result_event_seqs": [e.seq for e in feedback],
                         }][-24:]
@@ -442,7 +477,7 @@ async def settle_teammate_tasks(service, session, room):
                 if r.get("key") in cycle.state.get("request_keys", []) else r
                 for r in behavior.pending_requests
             ]
-        if behavior.task_status == "completed":
+        if behavior.task_status == "completed" and not behavior.pending_requests:
             behavior.current_short_term_goal = ""
         row.document = behavior.model_dump(mode="json")
         service.rooms.append(

@@ -164,8 +164,16 @@ async def continue_treatment_question(service, session, room, cycle, action):
 
 
 def dialogue_target(raw, candidates, previous=None, selected=None, *, member_names=()):
+    from app.preparation.turn_focus import historical_third_person_question
+
     if not re.search(r"问|说|你好|您好|听得见|[?？]|告诉|请教|聊|打招呼", raw):
         return None
+    candidates = [
+        candidate for candidate in candidates
+        if not historical_third_person_question(
+            raw, [candidate["title"], *candidate.get("aliases", [])],
+        )
+    ]
     salutation = re.match(r"\s*([\w·]{2,20}?)(?:先生|女士)?[，,：:]", raw)
     if any(
         name

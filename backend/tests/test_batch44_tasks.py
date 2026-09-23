@@ -30,6 +30,8 @@ def test_successful_check_requires_actual_transfer_receipt_to_finish_task(client
                                   current_short_term_goal="把钥匙交给同伴", pending_requests=[{
                                       "key": "transfer", "kind": "delegate", "operations": ["give"],
                                       "text": "把钥匙交给同伴", "source_event_seq": request.seq,
+                                      "target_id": "companion",
+                                      "item_instance_ids": ["key-instance"],
                                   }])
             session.add(AgentBehaviorRecord(room_id=room.id, member_id=member,
                                             document=state.model_dump(mode="json")))
@@ -40,6 +42,7 @@ def test_successful_check_requires_actual_transfer_receipt_to_finish_task(client
             if executed:
                 svc.rooms.append(session, room, "module.interaction", member, {
                     "cycle_id": cid, "operation": "give", "passed": True,
+                    "recipient_member_id": "companion",
                     "text": "钥匙已交给同伴。", "operated_items": [{"id": "key-instance"}],
                 })
             await session.flush()

@@ -361,6 +361,40 @@ class ActionPolicyValidator:
             titles = [e["title"] for e in candidates]
             if len(titles) != len(set(titles)):
                 return "clarification_required", "当前场景有多个同名目标"
+        if (
+            intent.type in {"observe", "investigate", "interact", "use_item", "assist"}
+            and intent.target_id in facts.visible_entity_ids
+            and intent.target_id != facts.scene_id
+            and not (
+                intent.type in {"observe", "investigate"}
+                and intent.target_id in facts.local_entity_ids
+                and facts.approved_entities.get(intent.target_id, {}).get("type") == "scene"
+            )
+        ):
+            from app.preparation.action_authority import (
+                aliases,
+                mentions_alias,
+                operative_fragments,
+            )
+
+            # Inspect only the selected actual action, so separate questions,
+            # historical mentions and other people's requests cannot donate a
+            # target. This guard concerns visible objects; approved hidden
+            # discoveries retain their existing access/condition validation.
+            # A local scene's prepared entity may differ from its node ID;
+            # either can contain a multi-object observation.
+            action = (
+                plan.focus.action if plan.focus and plan.focus.action else intent.evidence_quote
+            )
+            operative = "".join(f["text"] for f in operative_fragments(action))
+            named = {
+                eid for eid, entity in facts.approved_entities.items()
+                if eid in facts.visible_entity_ids & facts.local_entity_ids
+                and entity.get("type") != "scene"
+                and any(mentions_alias(operative, name) for name in aliases(entity))
+            }
+            if named and intent.target_id not in named:
+                return "clarification_required", "计划目标与玩家明确提到的对象不一致"
         if intent.type == "move":
             transitions = [t for t in facts.transitions.values() if t.get("approved")]
             if local_scene_movement(

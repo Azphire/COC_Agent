@@ -1,0 +1,235 @@
+"""Disposable task operands and receipt-based progress; no model calls."""
+
+import re
+from copy import deepcopy
+
+QUANTITY = r"([0-9]+|[零〇一二两三四五六七八九十百千]+)(?:个|把|本|张|份|支|枚|件|瓶)"
+ITEM_OPERATIONS = {"give", "take", "pickup", "drop", "place", "throw", "use", "consume"}
+
+
+def quantity_value(value):
+    if value.isdigit():
+        return int(value)
+    digits = dict(zip("零〇一二两三四五六七八九", [0, 0, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9]))
+    total, current = 0, 0
+    for word in value:
+        if word in digits:
+            current = digits[word]
+        else:
+            total += (current or 1) * {"十": 10, "百": 100, "千": 1000}[word]
+            current = 0
+    return total + current
+
+
+def requested_quantity(text):
+    found = re.search(QUANTITY, text)
+    return quantity_value(found[1]) if found else 1
+
+
+def bind_task_operands(request, inventory, actor, requester=None, *, targets=()):
+    """Freeze only uniquely supported IDs before the proposed action executes."""
+    from app.preparation.action_authority import operative_fragments, requested_action_kinds
+
+    operations = request.get("operations", [])
+    if len(operations) > 1:
+        bound = deepcopy(request)
+        bound["executor_member_id"] = actor
+        mapped = deepcopy(request.get("operation_operands", {}))
+        aliases = {"drop": "place", "pickup": "take"}
+        fragments = operative_fragments(request.get("text", ""))
+        for operation in operations:
+            if operation in mapped:
+                continue
+            parts = [f["text"] for f in fragments if aliases.get(operation, operation)
+                     in requested_action_kinds(f["text"])]
+            # A shared fragment with several actions does not establish which
+            # item/quantity belongs to each. Keep that obligation pending.
+            if len(parts) != 1 or len(set(requested_action_kinds(parts[0]))
+                                       & set(operations)) > 1:
+                mapped[operation] = {"unresolved_operands": True}
+                continue
+            single = {"text": parts[0], "operations": [operation]}
+            scoped = _bind_single(single, inventory, actor, requester, targets=targets)
+            mapped[operation] = {
+                "target_id": None, "recipient_member_id": None,
+                "item_ids": [], "item_instance_ids": [], "required_items": {},
+                **scoped,
+            }
+        bound["operation_operands"] = mapped
+        return bound
+    return _bind_single(request, inventory, actor, requester, targets=targets)
+
+
+def _bind_single(request, inventory, actor, requester, *, targets):
+    from app.preparation.action_authority import mentions_alias
+
+    bound = deepcopy(request)
+    bound["executor_member_id"] = actor
+    text = request.get("text", "")
+    item_ids = [item["id"] for item in inventory.get("known_items", [])
+                if any(mentions_alias(text, name) for name in item.get("names", []))]
+    if item_ids and not bound.get("item_ids"):
+        bound["item_ids"] = item_ids
+    if set(request.get("operations", [])) & ITEM_OPERATIONS and item_ids:
+        required_items = {}
+        named_spans = []
+        for item in inventory.get("known_items", []):
+            if item["id"] not in item_ids:
+                continue
+            spans = {(m.start(), m.end()) for name in item.get("names", []) if name
+                     for m in re.finditer(re.escape(name), text)}
+            # A title and its shorter alias can name the same occurrence.
+            spans = {span for span in spans if not any(
+                outer != span and outer[0] <= span[0] and span[1] <= outer[1] for outer in spans
+            )}
+            if len(spans) != 1:
+                bound["unresolved_operands"] = True
+                continue
+            start, end = next(iter(spans))
+            if any(start < previous_end and previous_start < end
+                   for previous_start, previous_end in named_spans):
+                bound["unresolved_operands"] = True
+            named_spans.append((start, end))
+            prefix = text[:start]
+            quantity = re.search(QUANTITY + r"\s*$", prefix)
+            count = quantity_value(quantity[1]) if quantity else 1
+            if re.search(r"所有|全部|若干|几|一些|一半|半", prefix[-8:]) or count < 1:
+                bound["unresolved_operands"] = True
+            required_items[item["id"]] = count
+        bound["required_items"] = required_items
+        bound["quantity"] = sum(required_items.values())
+    if not bound.get("target_id") and "give" not in request.get("operations", []):
+        named = {t["id"] for t in targets if any(
+            mentions_alias(text, name)
+            for name in [t.get("title", ""), *t.get("aliases", [])] if name
+        )}
+        if len(named) == 1:
+            bound["target_id"] = next(iter(named))
+    if "give" in request.get("operations", []):
+        recipients = {member["id"] for member in inventory.get("members", [])
+                      if member["id"] != actor and member.get("name")
+                      and re.search(r"(?:给|到)" + re.escape(member["name"]), text)}
+        if requester and re.search(r"(?:给|到)我", text):
+            recipients.add(requester)
+        if len(recipients) == 1:
+            bound["recipient_member_id"] = next(iter(recipients))
+        bound.setdefault("quantity", requested_quantity(text))
+        held = [h["instance_id"] for h in inventory.get("holders", [])
+                if h["holder_id"] == actor and h["item_id"] in item_ids]
+        # Multiple interchangeable instances with a smaller requested quantity
+        # remain item-type bound; never pick an arbitrary physical instance.
+        if len(held) == bound["quantity"] and not bound.get("item_instance_ids"):
+            bound["item_instance_ids"] = held
+    return bound
+
+
+def receipt_progress(request, facts, *, actor, cycle_id, consumed):
+    """Return remaining request and completion flag; each receipt unit counts once."""
+    current = deepcopy(request)
+    completed_seqs = list(current.get("completion_event_seqs", []))
+    previous_seqs = set(completed_seqs)
+    progress = deepcopy(current.get("operation_progress", {}))
+    remaining_ops = []
+    for operation in request.get("operations", []):
+        operands = {**request, **request.get("operation_operands", {}).get(operation, {})}
+        if operands.get("unresolved_operands"):
+            remaining_ops.append(operation)
+            continue
+        previous = progress.get(operation, {})
+        if not previous and len(request.get("operations", [])) == 1:
+            previous = {k: request[k] for k in ("remaining_quantity", "remaining_item_instance_ids")
+                        if k in request}
+        item_operation = operation in ITEM_OPERATIONS
+        instances = list(previous.get(
+            "remaining_item_instance_ids", operands.get("item_instance_ids", [])
+        )) if item_operation else []
+        quantity = previous.get("remaining_quantity", operands.get(
+            "quantity", requested_quantity(operands.get("text", ""))
+        )) if item_operation else 1
+        instance_bound = bool(instances)
+        counted_instances = set(previous.get("counted_item_instances", []))
+        remaining_items = deepcopy(previous.get(
+            "remaining_items", operands.get("required_items", {})
+        ))
+        if remaining_items:
+            quantity = sum(remaining_items.values())
+        if instances:
+            quantity = len(instances)
+        item_ids = set(operands.get("item_ids", [])) if item_operation else set()
+        target = (operands.get("recipient_member_id") if operation == "give" else None)
+        target = target or operands.get("target_id")
+        progressed = False
+        for fact in facts:
+            if (fact.get("status") != "success" or fact.get("operation") != operation
+                    or fact.get("actor_id") != actor or fact.get("cycle_id") != cycle_id
+                    or current.get("executor_member_id",
+                                   current.get("addressee_id", actor)) != actor
+                    or fact.get("source_event_seq") in previous_seqs):
+                continue
+            actual_target = (fact.get("recipient_member_id") if operation == "give" else None)
+            actual_target = actual_target or fact.get("action_target_id") or fact.get("target_id")
+            if target and actual_target != target:
+                continue
+            items = fact.get("operated_items", [])
+            if not item_operation and not target:
+                continue  # An observation of an unrelated object is not completion.
+            if item_operation and not (instances or item_ids):
+                # A legacy request without frozen operands cannot use just the
+                # subset named by a receipt: another requested item may be absent.
+                # Keep it pending until the ordinary enqueue path binds it.
+                continue
+            if operation == "give" and not target:
+                continue  # Ambiguous recipient remains pending.
+            units = items if item_operation or instances or item_ids else [{}]
+            for item in units:
+                instance = item.get("instance_id") or item.get("id")
+                if operation in {"give", "pickup", "take", "drop", "place", "throw"} and (
+                    instance in counted_instances
+                ):
+                    continue
+                if instances and instance not in instances:
+                    continue
+                if item_ids and item.get("id") not in item_ids:
+                    continue
+                if remaining_items and remaining_items.get(item.get("id"), 0) <= 0:
+                    continue
+                key = (fact.get("source_event_seq"), operation, instance)
+                if key in consumed:
+                    continue
+                consumed.add(key)
+                if instances:
+                    instances.remove(instance)
+                quantity -= 1 if instance_bound or instance else max(1, item.get("quantity", 1))
+                if instance:
+                    counted_instances.add(instance)
+                if remaining_items:
+                    remaining_items[item["id"]] -= 1
+                progressed = True
+                if fact.get("source_event_seq") not in completed_seqs:
+                    completed_seqs.append(fact["source_event_seq"])
+                if quantity <= 0:
+                    break
+            if quantity <= 0:
+                break
+        if quantity > 0:
+            remaining_ops.append(operation)
+            if progressed or previous:
+                progress[operation] = {"remaining_quantity": quantity}
+                if counted_instances:
+                    progress[operation]["counted_item_instances"] = sorted(counted_instances)
+                if remaining_items:
+                    progress[operation]["remaining_items"] = remaining_items
+                if operands.get("item_instance_ids"):
+                    progress[operation]["remaining_item_instance_ids"] = instances
+        else:
+            progress.pop(operation, None)
+    current["operations"] = remaining_ops
+    current.pop("remaining_quantity", None)
+    current.pop("remaining_item_instance_ids", None)
+    if progress:
+        current["operation_progress"] = progress
+        if len(remaining_ops) == 1:
+            current.update(progress.get(remaining_ops[0], {}))
+    if completed_seqs:
+        current["completion_event_seqs"] = completed_seqs
+    return current, bool(request.get("operations")) and not remaining_ops

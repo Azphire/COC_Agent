@@ -363,6 +363,10 @@ class SummaryRecoveryService:
                         tasks=prepared_tasks,
                         prior_chunks=prior_chunks,
                     )
+                    # Only source-rendered prose enters legacy summary/context
+                    # paths. The original generated wording is retained inside
+                    # the segment's audit, outside all prompt projections.
+                    content = document["summary"]["content"]
                     require(
                         canonical(document["required_facts"]) == canonical(prepared_required),
                         "摘要必保留集合在生成期间发生变化",
