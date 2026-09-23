@@ -55,6 +55,55 @@ def public_fingerprint(context, target_id=None, actor_id=None):
     ).hexdigest()
 
 
+def technical_task_retry(decision, state, active_requests, fingerprint):
+    """Only an unexecuted attempt of this request/target/operation can retry."""
+    from app.preparation.action_authority import action_kinds
+
+    if decision.mode not in {"act", "assist"} or not decision.target_id:
+        return False
+    operations = sorted(set(action_kinds(decision.action_text or "")) - {"converse", "pass"})
+    if not operations:
+        return False
+    active = {r["key"]: r for r in active_requests
+              if r.get("key") and r.get("kind") == "delegate" and r.get("available", True)}
+    matches = {}
+    for request in state.pending_requests:
+        key = request.get("key")
+        failure = request.get("technical_failure", {})
+        current = active.get(key)
+        if (not current or request.get("last_result_kind") != "generation_failed"
+                or request.get("completion_event_seqs")
+                or failure.get("executed") is not False or not failure.get("cycle_id")
+                or failure.get("target_id") != decision.target_id
+                or sorted(failure.get("operations", [])) != operations):
+            continue
+        requested = set(current.get("operations", []))
+        if "search" in operations and "observe" in requested:
+            requested.add("search")
+        if not set(operations) <= requested:
+            continue
+        targets = {current.get("target_id"), request.get("target_id")}
+        targets.update(o.get("target_id")
+                       for o in current.get("operation_operands", {}).values())
+        if decision.target_id not in targets:
+            continue
+        if (state.last_attempt_result.get("cycle_id") == failure["cycle_id"]
+                and state.last_attempt_result.get("kind") in {"attempted", "completed", "blocked"}):
+            continue
+        matches[key] = failure["cycle_id"]
+    if not matches:
+        return False
+    # A legacy cooldown, or a cooldown from a different actual execution, cannot
+    # be erased merely because some still-pending request failed to generate.
+    return all(
+        c.task_cycle_id and sorted(c.operations) == operations
+        and any(matches.get(key) == c.task_cycle_id for key in c.request_keys)
+        for c in state.cooldowns
+        if c.remaining_cycles > 0 and c.target_id == decision.target_id
+        and c.action_type == decision.action_type and c.state_fingerprint == fingerprint
+    )
+
+
 class TeammateBehaviorPolicy:
     def __init__(self, threshold=0.65, cooldown_cycles=2):
         self.threshold, self.cooldown_cycles = threshold, cooldown_cycles
@@ -86,6 +135,8 @@ class TeammateBehaviorPolicy:
         public_accounts=(),
         result_facts=(),
         treatment_options=(),
+        active_requests=(),
+        fingerprint_context=None,
     ):
         if information_request and decision.mode == "pass":
             return BehaviorRejection(accepted=False, reason="question_requires_answer_not_action")
@@ -498,22 +549,17 @@ class TeammateBehaviorPolicy:
         if normalized(text) in {"继续调查", "四周很安静", "四周安静下来"}:
             return BehaviorRejection(accepted=False, reason="empty_template", repetition_score=1)
         recent = recent_outputs[-3:]
+        # Earlier ownership/response-mode normalization may change the target.
+        # Novelty and cooldown must see the target that will actually execute.
+        if fingerprint_context is not None:
+            fingerprint = public_fingerprint(fingerprint_context, decision.target_id, actor_id)
         relevant_change = any(
             c.target_id == decision.target_id and c.state_fingerprint != fingerprint
             for c in state.cooldowns
         )
-        adjusted_after_result = bool(
-            decision.goal_status == "adjust"
-            and state.last_result.get("kind") == "blocked"
-            and not state.last_result.get("reviewed_in_cycle")
-        )
         technical_retry = bool(
-            explicit_action_request and decision.mode in {"act", "assist"}
-            and state.pending_requests and (
-                state.last_result.get("kind") == "generation_failed"
-                or any(r.get("last_result_kind") == "generation_failed"
-                       for r in state.pending_requests)
-            )
+            explicit_action_request
+            and technical_task_retry(decision, state, active_requests, fingerprint)
         )
         if relevant_change or technical_retry:
             recent = []  # A changed world permits a new attempt through the normal KP/check gates.
@@ -527,7 +573,6 @@ class TeammateBehaviorPolicy:
             )
         if (
             decision.mode in {"act", "assist"}
-            and not adjusted_after_result
             and not technical_retry
             and any(
                 c.remaining_cycles > 0
@@ -542,7 +587,8 @@ class TeammateBehaviorPolicy:
             )
         return BehaviorRejection(accepted=True, repetition_score=score)
 
-    def advance(self, state, decision, *, cycle_id, fingerprint, safe_goal):
+    def advance(self, state, decision, *, cycle_id, fingerprint, safe_goal,
+                requests=(), task_cycle_id=None):
         if state.last_acted_cycle == cycle_id:
             return state
         cooldowns = [
@@ -551,6 +597,8 @@ class TeammateBehaviorPolicy:
             if c.remaining_cycles > 1
         ]
         if decision.mode in {"act", "assist"}:
+            from app.preparation.action_authority import action_kinds
+
             cooldowns = [
                 c
                 for c in cooldowns
@@ -562,6 +610,11 @@ class TeammateBehaviorPolicy:
                     target_id=decision.target_id,
                     remaining_cycles=self.cooldown_cycles,
                     state_fingerprint=fingerprint,
+                    request_keys=[r["key"] for r in requests
+                                  if r.get("kind") == "delegate" and r.get("key")],
+                    operations=sorted(set(action_kinds(decision.action_text or ""))
+                                      - {"converse", "pass"}),
+                    task_cycle_id=task_cycle_id,
                 )
             )
         return BehaviorState(

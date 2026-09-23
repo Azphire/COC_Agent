@@ -285,7 +285,8 @@ def test_dynamic_observed_detail_is_the_only_body():
     contract = generation_contract(KeeperNarration, context)
     assert narration_body_field(contract) == "observed_detail"
     description = contract.model_json_schema()["properties"]["observed_detail"]["description"]
-    assert "多个公开对象逐项描述" in description and "明确的分句要求" in description
+    assert "多个公开对象" in description and "答复格式" in description
+    assert "每个问题" in description and "历史问题" in description
 
 
 def test_generation_uses_only_this_turn_public_claim_ids():
@@ -316,7 +317,18 @@ class StreamingScenario(FakeModelAdapter):
         self.narrations += 1
         field = narration_body_field(schema)
         text = "雨水沿石阶流下。钟面停着。"
-        body = json.dumps({field: text}, ensure_ascii=False)
+        context = next(json.loads(m["content"]) for m in reversed(messages)
+                       if m.get("role") == "user" and m.get("content", "").startswith("{"))
+        brief = context.get("response_brief", {})
+        sources = {s["id"]: s for s in brief.get("answer_sources", [])}
+        coverage = []
+        for requirement in brief.get("answer_requirements", []):
+            source = next((sources[s] for s in requirement["source_ids"] if s in sources), None)
+            if source:
+                coverage.append({"requirement_id": requirement["id"], "body_quote": text,
+                                 "source_id": source["id"], "source_quote": source["text"],
+                                 "status": "answered"})
+        body = json.dumps({field: text, "answer_coverage": coverage}, ensure_ascii=False)
         cut = body.index("。") + 1
         await kwargs["on_delta"](body[:cut])
         self.first = time.time()

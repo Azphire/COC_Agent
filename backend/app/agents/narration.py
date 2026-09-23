@@ -187,6 +187,10 @@ def response_brief(plan, context, results, *, withdrawal=None):
             for c in facts
         ],
         "questions": question_parts(question),
+        "routed_requests": [
+            {"kind": r.kind, "addressee_id": r.addressee_id, "text": r.text}
+            for r in focus.requests
+        ] if focus else [],
         # Verbatim current input also carries response format and other current
         # questions. Routing is expressed by responder/questions, never by
         # silently shortening the player's statement to the first action.
@@ -281,7 +285,7 @@ class NarrationValidator:
 
     def validate(
         self, output, *, documents, public_ids, scene_id, results, brief=None,
-        inventory_state=None, prefix=False,
+        inventory_state=None, prefix=False, partial=False,
     ):
         text = "\n".join(
             [
@@ -485,6 +489,12 @@ class NarrationValidator:
             "资源变化必须使用实际结算记录",
             422,
         )
+        from app.agents.narration_coverage import coverage_audit, coverage_repair_message
+
+        coverage = coverage_audit(output, brief or {}, prefix=prefix, partial=partial)
+        require(coverage["valid"], coverage_repair_message(coverage), 422)
+        if coverage["checked"]:
+            require(coverage["complete"], coverage_repair_message(coverage), 422)
         # These are structural and literal checks, not proof of semantic truth.
         # The public narrator never receives private KP material. Its prose and
         # incidental details do not create entities, resources, exits or results.
@@ -493,6 +503,7 @@ class NarrationValidator:
             "checks": len(checks),
             "scene_id": scene_id,
             "scope": "visibility_and_result_references; semantic correctness not proven",
+            "answer_coverage": coverage,
         }
 
 

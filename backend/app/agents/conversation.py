@@ -164,6 +164,13 @@ async def enqueue_teammate(service, session, room, parent, event, binding, reque
     state = initial_state(room.id, cycle_id, binding.member_id, event.seq, [], origin="teammate")
     state["related_player_cycle_id"] = parent.id
     state["request_keys"] = [r["key"] for r in requests]
+    from app.preparation.action_authority import action_kinds
+
+    state["teammate_attempt"] = {
+        "target_id": event.payload.get("target_id"),
+        "operations": sorted(set(action_kinds(event.payload.get("text", "")))
+                             - {"converse", "pass"}),
+    }
     if requests:
         from app.agents.task_receipts import bind_task_operands
         from app.preparation.inventory import inventory_context
@@ -353,22 +360,34 @@ async def settle_teammate_tasks(service, session, room):
                 {"seq": e.seq, "type": e.type, "payload": e.payload,
                  "actor_member_id": e.actor_member_id} for e in events
             ])
-        observation_completed = (
+        narration_validation = (record.document.get("narration_validation") or {}) if record else {}
+        narration_text = ((record.document.get("narration") or {}).get("public_narration", "")
+                          if record else "")
+        observation_reply = next((e for e in reversed(feedback)
+                                  if e.type == "keeper.narration"
+                                  and not e.payload.get("safe_fallback")
+                                  and e.payload.get("text", "").strip()
+                                  and e.payload.get("text") == narration_text), None)
+        # public_results' flag describes what the plan could observe. Only this
+        # child's validated, published response proves a completed read-only
+        # observation; a proposal or an earlier already-revealed event does not.
+        observation_completed = bool(
             public_results.get("observation_completed")
             and not public_results.get("blocked_discovery")
             and not public_results.get("failed_tools")
+            and narration_validation.get("valid") is True
+            and narration_validation.get("answer_complete") is not False
+            and observation_reply
         )
-        settled = any(
+        settled = bool(observation_completed) or any(
             e.type in {
                 "check.resolved", "module.interaction", "combat.resolved",
                 "entity.revealed", "clue.revealed",
             }
             for e in events
         )
-        narration_failed = (
-            record and (record.document.get("narration_validation") or {}).get("valid") is False
-        )
-        technical = not settled and (
+        narration_failed = narration_validation.get("valid") is False
+        technical = cycle.status != "cancelled" and not settled and (
             cycle.status == "failed" or cycle.state.get("teammate_attempt_failed")
             or narration_failed
         )
@@ -382,8 +401,13 @@ async def settle_teammate_tasks(service, session, room):
         )
         from app.agents.task_receipts import receipt_progress
 
+        result_seqs = {e.seq for e in events if e.type in {
+            "check.resolved", "module.interaction", "combat.resolved", "scene.updated",
+        }}
         facts = [f for f in public_results.get("current_result_facts", [])
-                 if f.get("source_event_seq") in active_seqs]
+                 if f.get("source_event_seq") in active_seqs
+                 and (f.get("status") not in {"success", "failure"}
+                      or f.get("source_event_seq") in result_seqs)]
         public_results["current_result_facts"] = facts
         if observation_completed:
             plan = record.document.get("plan") or {}
@@ -391,7 +415,7 @@ async def settle_teammate_tasks(service, session, room):
             facts.append({"operation": "observe", "status": "success", "actor_id": row.member_id,
                           "cycle_id": cycle.id, "target_id": focus.get("action_target_id")
                           or (plan.get("parsed_intent") or {}).get("target_id"),
-                          "source_event_seq": cycle.state.get("triggering_event_seq")})
+                          "source_event_seq": observation_reply.seq})
         outcomes, consumed = {}, set()
         for request in behavior.pending_requests:
             if request.get("key") not in cycle.state.get("request_keys", []):
@@ -472,8 +496,14 @@ async def settle_teammate_tasks(service, session, room):
                         }][-24:]
                 behavior.pending_requests = pending
         else:
+            attempt = cycle.state.get("teammate_attempt", {})
             behavior.pending_requests = [
-                {**r, "last_result_kind": "generation_failed"}
+                {**cycle.state.get("request_operands", {}).get(r.get("key"), {}), **r,
+                 "last_result_kind": "generation_failed",
+                 "technical_failure": {
+                     "cycle_id": cycle.id, "target_id": attempt.get("target_id"),
+                     "operations": attempt.get("operations", []), "executed": False,
+                 }}
                 if r.get("key") in cycle.state.get("request_keys", []) else r
                 for r in behavior.pending_requests
             ]

@@ -186,6 +186,18 @@ class NPCSpeech(DomainModel):
     answers: list[NPCAnswer] = Field(default_factory=list, max_length=12)
 
 
+class AnswerCoverage(DomainModel):
+    requirement_id: str
+    body_quote: str = Field(min_length=1, max_length=2000)
+    source_id: str | None = Field(default=None, json_schema_extra={"x-explicit-output": True})
+    source_quote: str = Field(
+        default="", max_length=1200, json_schema_extra={"x-explicit-output": True},
+    )
+    status: Literal["answered", "unknown"] = Field(
+        default="answered", json_schema_extra={"x-explicit-output": True},
+    )
+
+
 class KeeperNarration(DomainModel):
     schema_version: Literal[1] = 1
     fact_ids: list[str] = Field(default_factory=list, max_length=6)
@@ -194,6 +206,7 @@ class KeeperNarration(DomainModel):
         max_length=2000,
         description="先回应玩家，可适度补充普通细节。NPC台词仅放npc_speech。不得创造核心真相或未结算效果。",
     )
+    answer_coverage: list[AnswerCoverage] = Field(default_factory=list, max_length=12)
     npc_speech: NPCSpeech | None = Field(
         default=None, json_schema_extra={"x-explicit-output": True}
     )
@@ -265,6 +278,9 @@ class Cooldown(DomainModel):
     target_id: str | None
     remaining_cycles: int = Field(ge=0, le=10)
     state_fingerprint: str
+    request_keys: list[str] = Field(default_factory=list, max_length=12)
+    operations: list[str] = Field(default_factory=list, max_length=12)
+    task_cycle_id: str | None = None
 
 
 class BehaviorState(DomainModel):

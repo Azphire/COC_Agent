@@ -210,17 +210,24 @@ def test_unexecuted_request_can_retry_but_real_failure_is_not_erased(result_kind
     text = "我过去看看车门有没有异常。"
     decision = TeammateDecision(mode="act", action_type="investigate", action_text=text,
                                 target_id="door", related_player_action_seq=2, confidence=1)
+    request = {"key": "1:0", "text": "请你检查车门。", "kind": "delegate",
+               "target_id": "door", "operations": ["observe"],
+               "last_result_kind": result_kind,
+               "technical_failure": {"cycle_id": "failed-attempt", "target_id": "door",
+                                     "operations": ["observe"], "executed": False}}
     state = BehaviorState(
         task_status=result_kind, last_result={"kind": result_kind},
-        pending_requests=[{"key": "1:0", "text": "请你检查车门。", "kind": "delegate"}],
+        pending_requests=[request],
         cooldowns=[Cooldown(action_type="investigate", target_id="door",
-                            remaining_cycles=2, state_fingerprint="same")],
+                            remaining_cycles=2, state_fingerprint="same",
+                            request_keys=[request["key"]], operations=["observe"],
+                            task_cycle_id="failed-attempt")],
     )
     result = TeammateBehaviorPolicy().validate(
         decision, state=state, recent_outputs=[text], other_outputs=[],
         player_text="陈拓，请你检查车门。", player_intent=None, public_ids={"door"},
         action_seq=2, fingerprint="same", explicit_action_request=True,
-        requested_operations=["observe"],
+        requested_operations=["observe"], active_requests=[request],
     )
     assert result.accepted is accepted
 

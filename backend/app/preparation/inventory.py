@@ -609,7 +609,7 @@ def bind_item_prose(text, view, actor):
     for clause in re.split(r"[，。；！？,;!?\n]", text):
         if re.search(r"没有|不用|不要|未持有|如果|假如|能否|是否|有没有", clause):
             continue
-        instrument = re.search(
+        instruments = re.finditer(
             r"(?:用|使用|借助|拿着|拿出|取出|举着)([^，。；！？,;!?]{1,16}?)"
             r"(?:撬|照明|照亮|敲|砸|切|剪|捆|划|点火|开锁|打开|修理)",
             clause,
@@ -627,12 +627,18 @@ def bind_item_prose(text, view, actor):
             require(any(h.get("title") and h["title"] in clause
                         and h.get("holder_id") == actor for h in view.get("holders", [])),
                     "声称可用的物品必须有实际持有记录", 422)
-        if instrument and re.fullmatch(
-            r"(?:我|自己|的|一只|双)?(?:手|脚|拳头|肩膀|身体|肘部|衣服|衣袖|鞋|力)(?:的|布条)?",
-            instrument[1],
-        ):
-            continue
-        if instrument or generic:
+        # Effort/body/manner plus a modal is not a physical instrument:
+        # "用力就能打开" must not invent an item named "力就能". Match the
+        # entire phrase; tool nouns remain subject to the normal held-instance
+        # check, including a later tool-use clause after a bare-hand action.
+        instruments = [match for match in instruments if not re.fullmatch(
+            r"(?:(?:我|自己|的|一只|双)?"
+            r"(?:手|脚|拳头|肩膀|身体|肘部|衣服|衣袖|鞋|力|力气|力量)(?:的|布条)?"
+            r"|(?:这|那)(?:种|个)?(?:方式|方法|办法))"
+            r"(?:就|便|才|也|还|能够|能|可以|来|去)*",
+            match[1],
+        )]
+        if instruments or generic:
             named = asserted_item_uses(clause, view, actor)
             require(
                 any(

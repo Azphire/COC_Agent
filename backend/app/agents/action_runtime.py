@@ -87,7 +87,11 @@ NARRATION_INSTRUCTION = (
     "public_style只规定KP公开说话方式，不提供剧情事实；内容长度服从本轮需要，不固定句数。"
     "question是当前问题，attempt是玩家正在尝试的动作，completed_results是服务端实际结果。"
     "responder为keeper时，公开正文须同时覆盖本轮多个动作目标和questions中的每个问题。"
-    "ordinary_observation=true时完整正文写入observed_detail；否则写入public_narration。"
+    "answer_requirements是本轮KP应答契约；answer_coverage逐项关联需求ID、"
+    "正文原样片段与可见来源ID。仅填ID、附属细节或NPC发言不算回答。"
+    "完整正文写入本次schema提供的唯一正文字段；纯观察使用observed_detail，"
+    "包含问题的完整答复使用public_narration。先把每项需求实际答入正文，再从正文摘取覆盖映射，"
+    "不能只在answer_coverage里填写答案。"
     "观察与历史问题混合时，在同一正文中分别说明眼前状况和有来源的旧证词，不把旧证词写成当前发现。"
     "responder为npc时才输出npc_speech.text，写第一人称台词；此时public_narration只写简短动作或环境，可空，不能重复台词。"
     "先有内容地回答玩家当前问题，再适度给出可以继续尝试的方向，让玩家选择做法。"
@@ -510,7 +514,7 @@ def generation_prompt(context, schema):
             if result.get(key):
                 result[key] = [{k: v for k, v in r.items() if k in {
                     "kind", "text", "target_id", "operations", "last_result_kind",
-                    "cancelled_keys", "needs_clarification",
+                    "cancelled_keys", "needs_clarification", "target_candidates",
                 }} for r in result[key]]
         if result.get("self_identity"):
             result.pop("profile", None)
@@ -1295,6 +1299,12 @@ class ActionRuntimeMixin:
             # work is a task opportunity, never a fresh direct-answer priority.
             if not fresh_request:
                 requests = continued
+            from app.agents.task_receipts import bind_task_operands
+
+            requests = [bind_task_operands(
+                r, public_inventory, binding.member_id, trigger.actor_member_id,
+                targets=[e for e in public if e.get("fact_scope") == "current_scene"],
+            ) for r in requests]
             request_text = "\n".join(r["text"] for r in requests)
             requested_action = any(r["kind"] == "delegate" for r in requests)
             requested_operations = list(
@@ -1330,6 +1340,8 @@ class ActionRuntimeMixin:
             if not requests and current.get("teammate_model_called"):
                 eligibility = None
             decisions, rejections, run_ids = [], [], []
+            bound_requests = requests
+            target_normalizations = []
             accepted = None
             failure_reason = None
             for attempt in range(2 if eligibility else 0):
@@ -1342,6 +1354,14 @@ class ActionRuntimeMixin:
                     async with self.rooms.database.sessions() as session:
                         run = await session.get(AgentRun, run_id)
                         candidate = TeammateDecision.model_validate(run.structured_output)
+                    original_target = candidate.target_id
+                    original_instances = list(candidate.item_instance_ids)
+                    from app.agents.task_receipts import normalize_teammate_target
+
+                    bound_requests = normalize_teammate_target(
+                        candidate, requests, run.context.get("inventory_state") or {},
+                        binding.member_id, trigger.actor_member_id, targets=public,
+                    )
                     decisions.append(candidate)
                     fingerprint = public_fingerprint(
                         fingerprint_context, candidate.target_id, binding.member_id
@@ -1373,7 +1393,21 @@ class ActionRuntimeMixin:
                         public_accounts=additions["public_accounts"],
                         result_facts=additions["result_facts"],
                         treatment_options=treatment_options,
+                        active_requests=bound_requests,
+                        fingerprint_context=fingerprint_context,
                     )
+                    fingerprint = public_fingerprint(
+                        fingerprint_context, candidate.target_id, binding.member_id
+                    )
+                    target_normalizations.append({
+                        "run_id": run_id,
+                        "original_target_id": original_target,
+                        "normalized_target_id": candidate.target_id,
+                        "original_item_instance_ids": original_instances,
+                        "normalized_item_instance_ids": list(candidate.item_instance_ids),
+                        "bound_request_keys": [r.get("key") for r in bound_requests],
+                        "fingerprint": fingerprint,
+                    })
                     rejections.append(rejected)
                     if rejected.accepted:
                         accepted = candidate
@@ -1634,7 +1668,7 @@ class ActionRuntimeMixin:
                         from app.agents.conversation import enqueue_teammate
 
                         child_id = await enqueue_teammate(
-                            self.service, session, room, cycle, event, binding, requests
+                            self.service, session, room, cycle, event, binding, bound_requests
                         )
                 updated = policy.advance(
                     previous,
@@ -1642,6 +1676,8 @@ class ActionRuntimeMixin:
                     cycle_id=cycle.id,
                     fingerprint=fingerprint,
                     safe_goal=safe_goal,
+                    requests=bound_requests,
+                    task_cycle_id=child_id if chosen.mode in {"act", "assist"} else None,
                 )
                 if new_task_result and eligibility and not failure_reason:
                     updated.last_result = {**updated.last_result, "reviewed_in_cycle": cycle.id}
@@ -1689,7 +1725,8 @@ class ActionRuntimeMixin:
                         "reason": failure_reason or rejections[-1].reason,
                     }
                     updated.pending_requests = [
-                        {**r, "last_result_kind": "generation_failed"} if r in requests else r
+                        {**r, "last_result_kind": "generation_failed"}
+                        if r.get("key") in {request.get("key") for request in requests} else r
                         for r in updated.pending_requests
                     ]
                 if row:
@@ -1721,6 +1758,7 @@ class ActionRuntimeMixin:
                         "task_status": updated.task_status,
                         "pending_request_keys": [r["key"] for r in updated.pending_requests],
                         "failure_reason": failure_reason,
+                        "target_normalizations": target_normalizations,
                     },
                     "host_only",
                 )
@@ -2244,10 +2282,18 @@ class ActionRuntimeMixin:
             output_reserve = max(
                 self.service.settings.model_output_limit, 1600 if schema is KeeperPlan else 900,
             )
+            if schema is KeeperNarration:
+                from app.agents.narration_coverage import prepare_response_contract
+
+                run.context["response_brief"] = prepare_response_contract(run.context)
             before_budget = deepcopy(generation_prompt(run.context, schema))
             budget_contract = generation_contract(schema, run.context)
 
             def measured_size(value):
+                if schema is KeeperNarration:
+                    from app.agents.narration_coverage import prepare_response_contract
+
+                    value["response_brief"] = prepare_response_contract(value)
                 chars = len(json.dumps(generation_prompt(value, schema), ensure_ascii=False,
                                        separators=(",", ":")))
                 measured = measure_request(
@@ -2445,6 +2491,9 @@ class ActionRuntimeMixin:
                 else:
                     brief.pop("historical_memory", None)
                 run.context = {**run.context, "response_brief": brief}
+                from app.agents.narration_coverage import prepare_response_contract
+
+                run.context["response_brief"] = prepare_response_contract(run.context)
             measured = measure_request(
                 self.service.settings, action_messages(run.context, schema, instruction),
                 generation_contract(schema, run.context), output_limit=output_reserve,
@@ -2521,6 +2570,8 @@ class ActionRuntimeMixin:
 
         from app.agents.generation_contracts import generation_contract, restore_output
 
+        verified_for_repair = {}
+
         async def validate_narration(output):
             from pydantic import ValidationError
 
@@ -2542,6 +2593,14 @@ class ActionRuntimeMixin:
                 validate_search_plan(restored, context)
             if schema is not KeeperNarration:
                 return
+            changed = [row for row in verified_for_repair.values()
+                       if row["body_quote"] not in restored.public_narration]
+            if changed:
+                raise ModelFormatError("修复丢失已验证内容", [{
+                    "field": "answer_coverage",
+                    "code": "补齐缺项并保留以下已验证正文片段及来源："
+                    + json.dumps(changed, ensure_ascii=False),
+                }])
 
             async with self.rooms.database.sessions() as session:
                 from app.persistence.room_models import GameRoom
@@ -2567,6 +2626,43 @@ class ActionRuntimeMixin:
             self.narration_streams[run_id] = stream
 
         async def record_call(document):
+            if schema is KeeperNarration:
+                from app.agents.narration_coverage import coverage_audit, normalize_coverage_spans
+
+                brief = context.get("response_brief", {})
+                raw = document.get("raw_output") or document.get("generated_output") or {}
+                raw_coverage = coverage_audit(raw, brief)
+                effective, normalizations = normalize_coverage_spans(raw, brief)
+                coverage = coverage_audit(effective, brief)
+                document = {
+                    **document,
+                    "raw_answer_coverage_audit": raw_coverage,
+                    "effective_answer_coverage": effective.get("answer_coverage", []),
+                    "answer_coverage_normalizations": normalizations,
+                }
+                if document.get("error_category") and coverage["verified"]:
+                    from app.persistence.room_models import GameRoom
+
+                    async with self.rooms.database.sessions() as session:
+                        room = await session.get(GameRoom, state["room_id"])
+                        run = await session.get(AgentRun, run_id)
+                        cycle = await session.get(AgentCycle, state["cycle_id"])
+                        for row in coverage["verified"]:
+                            try:
+                                component = KeeperNarration(
+                                    public_narration=row["body_quote"], answer_coverage=[row],
+                                )
+                                await self.validate_narration_output(
+                                    session, room, cycle, run, component, partial=True,
+                                )
+                            except (RoomError, ValueError):
+                                continue
+                            verified_for_repair.setdefault(row["requirement_id"], row)
+                document = {
+                    **document,
+                    "answer_origin": "native" if document.get("attempt", 1) == 1 else "repaired",
+                    "answer_coverage_audit": coverage,
+                }
             if stream:
                 document = {**document, "first_validated_segment_at": stream.first_display_at,
                             "stream_buffered_reason": stream.buffered_reason}
@@ -3814,6 +3910,7 @@ class ActionRuntimeMixin:
             ),
             brief=brief,
             inventory_state=run.context.get("inventory_state"),
+            partial=partial,
         )
         from app.agents.narration_stream import restored_recall_private_text
 
@@ -3917,14 +4014,39 @@ class ActionRuntimeMixin:
                     )
                 )
                 valid_answer_map = {}
+                valid_body_map = {}
                 # A repair addresses rejected content; it cannot replace an
                 # already valid answer from the first attempt with a new claim.
                 for call in sorted(calls, key=lambda c: c.document.get("attempt", 0)):
-                    generated = call.document.get("generated_output") or {}
+                    generated = (call.document.get("raw_output")
+                                 or call.document.get("generated_output") or {})
+                    if not isinstance(generated, dict):
+                        continue
                     brief = run.context.get("response_brief", {})
-                    if (generated.get("npc_speech") or {}).get(
-                        "answers"
-                    ):
+                    from app.agents.narration_coverage import (
+                        coverage_audit,
+                        normalize_coverage_spans,
+                    )
+
+                    generated, _ = normalize_coverage_spans(generated, brief)
+                    # A bad clause must not discard an independently verified
+                    # answer from this same draft. Keep first-attempt evidence,
+                    # and recheck each fragment through the publication boundary.
+                    for row in coverage_audit(generated, brief)["verified"]:
+                        if row["requirement_id"] in valid_body_map:
+                            continue
+                        try:
+                            fragment = KeeperNarration(
+                                public_narration=row["body_quote"], answer_coverage=[row],
+                            )
+                            await self.validate_narration_output(
+                                session, room, cycle, run, fragment, partial=True,
+                            )
+                        except (RoomError, ValueError):
+                            continue
+                        valid_body_map[row["requirement_id"]] = row
+                    speech = generated.get("npc_speech")
+                    if isinstance(speech, dict) and speech.get("answers"):
                         from app.agents.adjudication_schemas import NPCSpeech
 
                         await self.validated_npc_answers(
@@ -3940,26 +4062,35 @@ class ActionRuntimeMixin:
                                 answers=repaired_answers,
                             )
                     # Validate narration independently even if the NPC structure failed.
+                    generated_body = generated.get("observed_detail") or generated.get(
+                        "public_narration"
+                    )
+                    raw_claims = generated.get("claim_ids", [])
+                    valid_claims = isinstance(raw_claims, list) and all(
+                        isinstance(claim, str) for claim in raw_claims
+                    )
                     if (
-                        not retained.public_narration and generated.get("public_narration")
-                        and set(generated.get("claim_ids", [])) <= {
+                        not retained.public_narration and generated_body
+                        and valid_claims and set(raw_claims) <= {
                             c["claim_id"] for c in run.context.get("PUBLIC_CLAIM_OPTIONS", [])
                         }
                     ):
-                        component = KeeperNarration(public_narration=generated["public_narration"])
                         try:
+                            component = KeeperNarration(
+                                public_narration=generated_body,
+                                answer_coverage=generated.get("answer_coverage", []),
+                            )
                             await self.validate_narration_output(
                                 session, room, cycle, run, component, partial=True
                             )
-                        except RoomError:
+                        except (RoomError, ValueError):
                             pass
                         else:
                             retained.public_narration = component.public_narration
+                            retained.answer_coverage = component.answer_coverage
                     try:
                         candidate = restore_output(
-                            KeeperNarration.model_validate(
-                                call.document.get("generated_output") or {}
-                            ),
+                            KeeperNarration.model_validate(generated),
                             KeeperNarration,
                             run.context,
                         )
@@ -3986,6 +4117,72 @@ class ActionRuntimeMixin:
                         except RoomError:
                             continue
                         setattr(retained, field, getattr(component, field))
+                if valid_body_map:
+                    rebuild = not retained.public_narration or any(
+                        row["body_quote"] not in retained.public_narration
+                        for row in valid_body_map.values()
+                    )
+                    combined = KeeperNarration() if rebuild else retained.model_copy(deep=True)
+                    for row in valid_body_map.values():
+                        content = combined.public_narration
+                        if row["body_quote"] not in content:
+                            content = "\n".join(filter(None, [content, row["body_quote"]]))
+                        candidate = KeeperNarration(
+                            public_narration=content,
+                            answer_coverage=list({
+                                **{r.requirement_id: r for r in combined.answer_coverage},
+                                row["requirement_id"]: row,
+                            }.values()),
+                        )
+                        try:
+                            await self.validate_narration_output(
+                                session, room, cycle, run, candidate, partial=True,
+                            )
+                        except (RoomError, ValueError):
+                            continue
+                        combined = candidate
+                    if rebuild:
+                        # Rebuilding safe answer fragments must not erase actual
+                        # operations whose prose was outside the coverage map.
+                        results = await self.public_results(session, room, cycle)
+                        if any(e["type"] in {
+                            "check.resolved", "module.interaction", "combat.resolved",
+                            "scene.updated", "entity.revealed", "clue.revealed",
+                        } for e in results["events"]):
+                            from app.agents.narration import fallback_narration
+
+                            record = await session.get(ActionPlanRecord, cycle.id)
+                            receipt_text = fallback_narration(
+                                record.document["plan"]["parsed_intent"]["type"], results, "",
+                                brief=run.context.get("response_brief", {}),
+                                inventory_state=run.context.get("inventory_state"),
+                            )
+                            if receipt_text and receipt_text not in combined.public_narration:
+                                candidate = combined.model_copy(update={
+                                    "public_narration": "\n".join(filter(None, [
+                                        combined.public_narration, receipt_text,
+                                    ])),
+                                })
+                                try:
+                                    await self.validate_narration_output(
+                                        session, room, cycle, run, candidate, partial=True,
+                                    )
+                                except (RoomError, ValueError):
+                                    # Real effects take precedence if the fragments
+                                    # cannot safely coexist with their receipts.
+                                    combined = KeeperNarration(public_narration=receipt_text)
+                                else:
+                                    combined = candidate
+                    retained.public_narration = combined.public_narration
+                    retained.answer_coverage = combined.answer_coverage
+                try:
+                    await self.validate_narration_output(
+                        session, room, cycle, run, retained, partial=True,
+                    )
+                except (RoomError, ValueError) as error:
+                    run.context = {**run.context, "partial_retention_rejection": str(error)}
+                    retained = KeeperNarration()
+                    valid_answer_map.clear()
                 run.context = {**run.context, "validated_partial": retained.model_dump(mode="json")}
                 run.context = {**run.context, "npc_missing_question_indices": [
                     i for i, _ in enumerate(
@@ -4215,22 +4412,35 @@ class ActionRuntimeMixin:
                 [d for d in output.incidental_details if d not in speech_details], content
             )
             output.incidental_details = narration_details + speech_details
+            from app.agents.narration_coverage import coverage_audit
+
+            model_calls = list(await session.scalars(
+                select(AgentModelCall).where(AgentModelCall.run_id == run.id)
+            ))
+            repair_count = max(0, len(model_calls) - 1)
+            final_coverage = coverage_audit(
+                output.model_copy(update={"public_narration": content}),
+                run.context.get("response_brief", {}),
+            )
+            if fallback_reason and final_coverage["checked"]:
+                content += (
+                    "\n本次答复未完整生成；以上保留了已验证内容。"
+                    if final_coverage["complete"]
+                    else "\n本次答复未完整生成，未答部分仍待补充。"
+                )
+            answer_origin = (
+                "server_fallback" if fallback_reason else "repaired" if repair_count else "native"
+            )
             doc.narration_validation = {
                 **doc.narration_validation,
                 "valid": fallback_reason is None,
                 "fallback_reason": fallback_reason,
                 "npc_missing_question_indices": run.context.get("npc_missing_question_indices", []),
-                "repair_count": max(
-                    0,
-                    len(
-                        list(
-                            await session.scalars(
-                                select(AgentModelCall).where(AgentModelCall.run_id == run.id)
-                            )
-                        )
-                    )
-                    - 1,
-                ),
+                "repair_count": repair_count,
+                "answer_origin": answer_origin,
+                "answer_coverage": final_coverage,
+                "answer_complete": bool(final_coverage["complete"] and not fallback_reason)
+                if final_coverage["checked"] else None,
             }
             self.rooms.append(
                 session,
@@ -4258,6 +4468,7 @@ class ActionRuntimeMixin:
                         "citations": list({c["evidence_id"]: c for c in citations}.values()),
                         "needs_host_ruling": output.needs_host_ruling,
                         "safe_fallback": fallback_reason is not None,
+                        "answer_origin": answer_origin,
                         "check_notice": None,
                         "incidental_details": narration_details,
                         "incidental_source": "kp_improvisation",

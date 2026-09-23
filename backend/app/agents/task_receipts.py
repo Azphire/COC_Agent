@@ -60,6 +60,79 @@ def bind_task_operands(request, inventory, actor, requester=None, *, targets=())
     return _bind_single(request, inventory, actor, requester, targets=targets)
 
 
+def normalize_teammate_target(decision, requests, inventory, actor, requester=None, *, targets=()):
+    """Bind an already chosen attempt to its uniquely authorized current operand.
+
+    Request binding is also returned for generation, queueing and receipt settlement.
+    Discussion, refusal and explicit alternative choices remain the agent's choice.
+    """
+    from app.preparation.action_authority import action_kinds
+
+    current = [t for t in targets if t.get("fact_scope") == "current_scene"]
+    current += [{"id": p["id"], "title": p.get("name", ""),
+                 "aliases": p.get("names", [])}
+                for p in inventory.get("other_actors", [])
+                if p.get("fact_scope") == "current_scene"]
+    current += [{"id": m["id"], "title": m.get("name", "")}
+                for m in inventory.get("members", []) if m["id"] != actor]
+    allowed = {t["id"] for t in current}
+    bound = [bind_task_operands(r, inventory, actor, requester, targets=current) for r in requests]
+    if decision.mode not in {"act", "assist"} or decision.target_id:
+        return bound
+    operations = set(action_kinds(decision.action_text or "")) - {"converse", "pass"}
+    compatible = operations | ({"observe"} if "search" in operations else set())
+    candidates = set()
+    for request in bound:
+        if request.get("kind") != "delegate" or not request.get("available", True):
+            continue
+        for operation in compatible & set(request.get("operations", [])):
+            operands = {**request, **request.get("operation_operands", {}).get(operation, {})}
+            if operands.get("unresolved_operands"):
+                continue
+            target = operands.get("target_id")
+            if target in allowed:
+                candidates.add(target)
+            candidates.update(set(operands.get("target_candidates", [])) & allowed)
+    actual = bind_task_operands(
+        {"text": decision.action_text or "", "operations": sorted(operations)},
+        inventory, actor, requester, targets=current,
+    )
+    # If the agent names an alternative object, keep the normal clarification
+    # or authority path. Never reinterpret that action as the requested object.
+    named = {actual["target_id"]} if actual.get("target_id") else set(
+        actual.get("target_candidates", [])
+    )
+    if named:
+        candidates &= named
+    if len(candidates) == 1:
+        decision.target_id = next(iter(candidates))
+        decision.related_public_entity_ids = list(dict.fromkeys([
+            *decision.related_public_entity_ids, decision.target_id,
+        ]))[:8]
+    return bound
+
+
+def teammate_target_options(context):
+    """Separate actionable public entity IDs from available physical instances."""
+    inventory = context.get("inventory_state") or {}
+    actor = context.get("self_identity", {}).get("member_id")
+    actor = actor or context.get("action_identifiers", {}).get("actor_member_id")
+    entities = context.get("public_entities", context.get("current_targets", []))
+    current = [e["id"] for e in entities if e.get("fact_scope", "current_scene") == "current_scene"]
+    current += [p["id"] for p in inventory.get("other_actors", [])
+                if p.get("fact_scope") == "current_scene"]
+    current += [m["id"] for m in inventory.get("members", []) if m["id"] != actor]
+    current += [h["item_id"] for h in inventory.get("holders", []) if h.get("item_id")]
+    instances = [h["instance_id"] for h in inventory.get("holders", [])
+                 if actor and h.get("holder_id") == actor]
+    scene = context.get("action_identifiers", {}).get("current_scene_id")
+    scene = scene or context.get("public_state", {}).get("scene_id")
+    scene = scene or context.get("public_state", {}).get("scene")
+    instances += [item["instance_id"] for item in inventory.get("dropped_items", [])
+                  if scene and item.get("scene_node_id") == scene]
+    return list(dict.fromkeys(current)), list(dict.fromkeys(instances))
+
+
 def _bind_single(request, inventory, actor, requester, *, targets):
     from app.preparation.action_authority import mentions_alias
 
@@ -105,6 +178,8 @@ def _bind_single(request, inventory, actor, requester, *, targets):
         )}
         if len(named) == 1:
             bound["target_id"] = next(iter(named))
+        elif named:
+            bound["target_candidates"] = sorted(named)[:8]
     if "give" in request.get("operations", []):
         recipients = {member["id"] for member in inventory.get("members", [])
                       if member["id"] != actor and member.get("name")

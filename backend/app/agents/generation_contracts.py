@@ -10,6 +10,7 @@ from typing import Literal
 from pydantic import Field, create_model, model_validator
 
 from app.agents.adjudication_schemas import (
+    AnswerCoverage,
     KeeperNarration,
     KeeperPlan,
     NPCAnswer,
@@ -560,12 +561,37 @@ def generation_contract(schema, context):
                 description="KP公开回答正文。responder为keeper时，完整回应本轮动作目标与"
                 "questions中的各个问题，保留player_statement的答复格式要求；"
                 "历史证词标明来源与历史性质，当前结果只依据实际回执。"
+                "先在本字段实际写出answer_requirements各项答复，再从已写正文摘取body_quote填写映射。"
                 "responder为npc时这里只写相关动作或环境，问答留在npc_speech。",
                 json_schema_extra={"x-explicit-output": True},
             ),
         )
         ordinary_observation = context.get("response_brief", {}).get("ordinary_observation")
-        if ordinary_observation:
+        answer_requirements = context.get("response_brief", {}).get("answer_requirements", [])
+        observation_body = ordinary_observation and not any(
+            r.get("kind") == "question" for r in answer_requirements
+        )
+        if answer_requirements:
+            source_ids = tuple(s["id"] for s in context["response_brief"].get("answer_sources", []))
+            coverage = create_model(
+                "AnswerCoverage", __base__=AnswerCoverage,
+                requirement_id=(Literal[tuple(r["id"] for r in answer_requirements)], ...),
+                source_id=(Literal[(*source_ids, None)], Field(
+                    default=None, json_schema_extra={"x-explicit-output": True},
+                )),
+            )
+            fields["answer_coverage"] = (list[coverage], Field(
+                default_factory=list, max_length=12,
+                description="逐项映射answer_requirements：body_quote须原样出现在本次KP正文，"
+                "source_id/source_quote取本轮answer_sources；保留数值、证词归属和估计。"
+                "无依据则unknown并具体说明未知项。ID、附属细节或NPC台词均不能代替正文回答。",
+                json_schema_extra={"x-explicit-output": True},
+            ))
+        else:
+            fields["answer_coverage"] = (list[AnswerCoverage], Field(
+                default_factory=list, json_schema_extra={"x-server-bound": True},
+            ))
+        if observation_body:
             fields["observed_detail"] = (
                 str,
                 Field(
@@ -601,7 +627,7 @@ def generation_contract(schema, context):
             def responds_to_new_turn(value):
                 from app.agents.behavior import bigram_jaccard
 
-                if ordinary_observation and value.observed_detail:
+                if observation_body and value.observed_detail:
                     from app.models.base import ModelFormatError
 
                     if re.match(
@@ -614,6 +640,22 @@ def generation_contract(schema, context):
                     value.public_narration = value.observed_detail
 
                 brief = context.get("response_brief", {})
+                if answer_requirements:
+                    from app.agents.narration_coverage import (
+                        coverage_audit,
+                        coverage_repair_message,
+                        normalize_coverage_spans,
+                    )
+                    from app.models.base import ModelFormatError
+
+                    effective, _ = normalize_coverage_spans(value, brief)
+                    value.answer_coverage = [coverage.model_validate(row)
+                                             for row in effective.get("answer_coverage", [])]
+                    audit = coverage_audit(value, brief)
+                    if not audit["complete"]:
+                        raise ModelFormatError("KP正文需求覆盖未通过", [{
+                            "field": "answer_coverage", "code": coverage_repair_message(audit),
+                        }])
                 old = [d.get("text", "") for d in brief.get("incidental_memories", [])]
                 old += [
                     d.get("text", "")
@@ -678,6 +720,9 @@ def generation_contract(schema, context):
             )
         return result
     if schema is TeammateDecision:
+        from app.agents.task_receipts import teammate_target_options
+
+        entity_ids, instance_ids = teammate_target_options(context)
         fields = {
             name: (
                 str | None,
@@ -685,6 +730,17 @@ def generation_contract(schema, context):
             )
             for name in ("action_text", "speech_text")
         }
+        fields["target_id"] = (
+            Literal[tuple([*entity_ids, None])],
+            Field(default=None, description="当前可操作实体或在场人物ID；讨论或目标不明确时为空。",
+                  json_schema_extra={"x-explicit-output": True}),
+        )
+        fields["item_instance_ids"] = (
+            list[Literal[tuple(instance_ids)]] if instance_ids else list[str],
+            Field(default_factory=list, max_length=8 if instance_ids else 0,
+                  description="实际可用的物品实例ID。线索等场景实体ID填target_id；不用道具填空数组。",
+                  json_schema_extra={"x-explicit-output": True}),
+        )
         requests = context.get("addressed_requests", [])
         if requests and all(r["kind"] in {"question", "cancel"} for r in requests):
             # Constrain generation using the shared, validated request. The

@@ -819,7 +819,20 @@ def evaluate_replay(result, seqs, synthetic, long_text):
             break
         cursor = max(cursor, end)
     recoverable = bool(chunks) and cursor == chunks[0]["total"]
-    prompts = [json.loads(p[-1]["content"]) for p in result["actual_messages"]]
+    # A bounded repair appends textual validation feedback after the unchanged
+    # context. Keep every actual call while locating its JSON context envelope.
+    prompts = []
+    for messages in result["actual_messages"]:
+        for message in reversed(messages):
+            try:
+                context = json.loads(message["content"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(context, dict):
+                prompts.append(context)
+                break
+        else:
+            raise AssertionError("Actual model call is missing its JSON context envelope")
     kp = [p for p in prompts if p.get("response_brief")]
     teammate = [p for p in prompts if p.get("role") == "investigator" and p.get("self_identity")]
     public = [
