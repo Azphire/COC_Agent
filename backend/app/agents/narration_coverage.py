@@ -20,6 +20,8 @@ ESTIMATE = (
 )
 HISTORICAL = r"当时|此前|先前|早先|之前|以前|过去|曾|原话|旧|记录|说过|提过"
 TESTIMONY = r"说|称|表示|提到|记得|回忆|估计|估算|证词|据|认为|印象|交代|所述"
+ADVICE = r"建议|下一步|还需|有待|不妨|可以(?:先|再)?(?:核对|检查|查看|留意)|是否|能否"
+CONDITION = r"(?:只有|如果|假如|若)([^，。；;！？!?\n]{2,40})"
 FORMAT = (
     r"(?:请|要求|回答|答复).*(?:分句|完整句|句子|格式|逐项|分别|不要合成|简短|分点)|"
     r"(?:分句|逐项|分别).*(?:回答|说明)"
@@ -251,7 +253,9 @@ def _content_topics(requirement):
 
 def _unknown_for_requirement(text, requirement):
     topics = _content_topics(requirement)
-    clauses = [s.strip() for s in re.split(r"[，,。；;！？!?\n]", text) if s.strip()]
+    clauses = [
+        s.strip() for s in re.split(r"[，,。；;！？!?\n]|但是|但|不过|然而", text) if s.strip()
+    ]
     for index, clause in enumerate(clauses):
         if not re.search(UNKNOWN, clause):
             continue
@@ -274,7 +278,10 @@ def _polarity_errors(answer, quote):
     def negative(clause):
         # Unknown epistemic state is separate from denying an observable fact.
         clause = re.sub(UNKNOWN, "", clause)
-        return bool(re.search(r"没有|并无|不存在|未见|没见|不曾|从未|不是|并非|不在|并不", clause))
+        return bool(re.search(
+            r"没有|并无|不存在|未见|没见|不曾|从未|不是|并非|不在|并不|"
+            r"(?:不|没|未)(?=显眼|明显|留|开|关|少|多|丢|失|看|见)", clause,
+        ))
 
     source_clauses = [c for c in re.split(r"[，,。；;！？!?\n]", quote) if c]
     errors = []
@@ -286,6 +293,82 @@ def _polarity_errors(answer, quote):
             continue
         if negative(matching[0]) != negative(clause):
             errors.append("正文改变了来源断言的肯定/否定：" + matching[0])
+    return errors
+
+
+def _factual_clauses(text):
+    """Separate proposals/questions from assertions, including mixed sentences."""
+    advice = False
+    for match in re.finditer(r"[^，,。；;！？!?\n]+[，,。；;！？!?\n]*", text):
+        clause = match[0].strip()
+        suggested = bool(re.search(ADVICE, clause) or re.search(r"[？?]", clause))
+        inherited = advice and bool(re.match(r"(?:同时|并且|以及|并|再|还要)", clause))
+        embedded_fact = bool(
+            re.search(
+                r"并不存在|并无|没有|已证实|已经证实|确定|确实|准确|正好|书名是|名称是", clause,
+            )
+            or _quantities(clause)
+        ) and not re.search(r"是否|能否|会不会|有没有", clause)
+        if not suggested and not inherited or embedded_fact:
+            yield clause
+        advice = (suggested or inherited) and not bool(re.search(r"[。；;！？!?\n]$", clause))
+
+
+def _condition_errors(answer, support):
+    errors = []
+    actual_conditions = re.findall(CONDITION, answer)
+    for condition in re.findall(CONDITION, support):
+        # Conditions are small factual operands, not a generated template.
+        # Unknown equivalence stays conservative rather than dropping a premise.
+        if not any(_compact(condition) in _compact(actual) for actual in actual_conditions):
+            errors.append("正文未保留来源条件：" + condition)
+    return errors
+
+
+def _requirement_fact_text(answer, requirement):
+    """Scope retained predicates to this requirement, not its entire source."""
+    clauses = list(_factual_clauses(answer))
+    if re.search(r"多少|数量|数目|几(?:本|件|个|把|张|枚|份)", requirement["text"]):
+        units = set(re.findall(r"本|件|个|把|张|枚|份|支|瓶|扇|元", requirement["text"]))
+        matching = [c for c in clauses if any(
+            not units or unit in units for _, unit in _quantities(c)
+        )]
+    elif re.search(r"具体|名称|名字|书名|知道|清楚", requirement["text"]):
+        matching = [c for c in clauses if _unknown_for_requirement(c, requirement)]
+        if not matching:
+            matching = [c for c in clauses if _content_topics(requirement) & terms(c)]
+    else:
+        topic = _content_topics(requirement)
+        matching = [c for c in clauses if topic & terms(c)]
+    return "".join(matching) or answer
+
+
+def _observation_binding_errors(answer, requirement, source_text):
+    if requirement["kind"] != "observation" or requirement.get("generic_scope"):
+        return []
+    topic = _content_topics(requirement)
+    clauses = list(_factual_clauses(source_text))
+    scores = [len(topic & terms(c)) for c in clauses]
+    if not scores or not max(scores):
+        return []
+    selected = [c for c, score in zip(clauses, scores) if score == max(scores)]
+    other = [c for c, score in zip(clauses, scores) if score != max(scores)]
+    supported = _fact_atoms("".join(selected))
+    foreign = _fact_atoms("".join(other)) - supported
+    errors = []
+    for clause in _factual_clauses(answer):
+        if not topic & terms(clause):
+            continue
+        # A lead-in can list several visible objects before describing each.
+        # It does not assign one object's descriptive predicate to another.
+        listing = re.search(r"(?:注意到|看见|看到|观察到|查看|观察).*(?:和|以及|与|、)", clause)
+        if listing and not re.search(
+            r"有|留|是|为|显眼|明显|不存在|没有|布满|遍布|覆盖|打开|关闭", clause,
+        ):
+            continue
+        borrowed = [atom for atom in foreign if len(atom) >= 2 and atom in clause]
+        if borrowed:
+            errors.append("正文把同一来源中其他对象的事实移给当前对象：" + clause)
     return errors
 
 
@@ -306,11 +389,18 @@ def _source_errors(requirement, answer, row, source):
         if not {name for name in expected_speaker & actual_speaker if len(name) >= 2}:
             errors.append("所选证词的实际说话人不属于当前问题，不能改署名")
     errors += _polarity_errors(answer, quote)
+    errors += _observation_binding_errors(answer, requirement, source_text)
     # A model cannot cite an uninformative slice to discard the value/qualifier.
-    relevant = [
-        s for s in re.split(r"[。；;！？!?\n]", source_text) if _topic_terms(question) & terms(s)
-    ]
+    source_sentences = re.split(r"[。；;！？!?\n]", source_text)
+    relevant = []
+    for index, sentence in enumerate(source_sentences):
+        if not _topic_terms(question) & terms(sentence):
+            continue
+        if index and re.search(CONDITION, source_sentences[index - 1]):
+            relevant.append(source_sentences[index - 1])
+        relevant.append(sentence)
     support = "。".join(relevant) or quote
+    errors += _condition_errors(answer, support)
     quantity_question = bool(
         re.search(
             r"多少|几(?:本|件|个|把|张|枚|份|支|瓶|年|月|日)|数量|数目|金额|日期|何时", question
@@ -318,11 +408,19 @@ def _source_errors(requirement, answer, row, source):
     )
     expected = _requested_quantities(support, question) if quantity_question else set()
     actual = _quantities(answer)
+    if (
+        expected and re.search(r"少了|缺少|丢失|失窃", support)
+        and re.search(r"多了|增加|增多", answer)
+    ):
+        errors.append("正文改变了来源数量的增减方向")
     if expected and not expected <= actual:
         errors.append("正文未保留来源的具体数值/单位：" + support)
     if actual and not actual <= _quantities(source_text):
         errors.append("正文数值没有该可见来源支持")
-    estimate = expected and re.search(ESTIMATE, support + question)
+    estimate = (
+        expected and re.search(ESTIMATE, support + question)
+        or requirement["kind"] == "observation" and re.search(ESTIMATE, support)
+    )
     if estimate and not re.search(ESTIMATE, answer):
         errors.append("来源只给估计/范围，正文不能改成确定事实")
     if (
@@ -359,6 +457,21 @@ def _source_errors(requirement, answer, row, source):
             HISTORICAL, answer
         ):
             errors.append("旧证词不能写成本轮新发现")
+        # Naming the expected person elsewhere (e.g. "林先生当时在场")
+        # does not make another person's quantitative claim their testimony.
+        for clause in _factual_clauses(answer):
+            if not (_quantities(clause) or _unknown_for_requirement(clause, requirement)):
+                continue
+            explicit = re.search(
+                r"(?:^|[，,。；;])\s*([\u4e00-\u9fff·]{2,16}?)"
+                r"(?:早先|此前|当时|之前|曾经|曾|先前)?(?:估计|估算|表示|说|称|认为)", clause,
+            )
+            if explicit and not any(
+                len(name) >= 2 and name in explicit[1] for name in aliases
+            ) and not re.match(r"[他她其]", explicit[1]) and not (
+                _topic_terms(explicit[1]) <= _content_topics(requirement)
+            ):
+                errors.append("正文实际断言的说话人不属于来源：" + explicit[1])
     if not (_topic_terms(quote) & terms(answer)) and not (expected and expected <= actual):
         errors.append("正文片段未表达引用来源的具体内容")
     predicates = _topic_terms(quote) - _topic_terms(question)
@@ -368,6 +481,12 @@ def _source_errors(requirement, answer, row, source):
         and not (expected and expected <= actual)
     ):
         errors.append("正文只重复对象，未表达来源支持的具体观察或答复")
+    factual = "".join(_factual_clauses(answer))
+    content = _topic_terms(factual) - _topic_terms(question)
+    if not factual or not content and not re.search(
+        r"有|存在|留着|可见|明显|显眼|不知|不清|未知", factual
+    ):
+        errors.append("正文只有对象、问题或建议，缺少实际回答")
     # Explicit literal values (labels/codes/titles) must survive a paraphrase.
     for label, value in re.findall(r"([^，。；：:\n]{2,16})[：:]([^，。；\n]{1,30})", quote):
         if _topic_terms(label) & _topic_terms(question) and _compact(value) not in _compact(answer):
@@ -385,7 +504,7 @@ def _prefix_assertion_errors(body, requirements, sources):
     errors = []
     sentences = re.findall(r"[^。！？!?；;\n]+[。！？!?；;\n]", body)
     for index, sentence in enumerate(sentences):
-        if not _quantities(sentence):
+        if not any(_quantities(clause) for clause in _factual_clauses(sentence)):
             continue
         for requirement in requirements:
             if requirement["kind"] != "question" or not re.search(
@@ -423,6 +542,90 @@ def _prefix_assertion_errors(body, requirements, sources):
                     }
                 )
     return errors
+
+
+def _body_assertion_errors(body, requirement, source):
+    """Check every relevant factual assertion, independent of mapping copies.
+
+    Repetition and advice do not establish extra answers. A contradictory fact
+    anywhere in the body still invalidates a perfectly copied native mapping.
+    Context may supply a pronoun's speaker/history, never another value or an
+    unknown marker to excuse an incompatible assertion in the current clause.
+    """
+    topic = _content_topics(requirement)
+    support = source["text"]
+    expected = _requested_quantities(support, requirement["text"])
+    numeric = bool(re.search(r"多少|数量|数目|几(?:本|件|个|把|张|枚|份)", requirement["text"]))
+    units = {unit for _, unit in expected} if numeric else set()
+    errors = []
+    sentences = re.findall(r"[^。；;！？!?\n]+[。；;！？!?\n]*", body)
+    for index, sentence in enumerate(sentences):
+        for clause in _factual_clauses(sentence):
+            actual = _quantities(clause)
+            referring = bool(index and re.match(r"\s*(?:这些|这点|上述|以上|这项|它们)", clause))
+            inherited = referring and (
+                topic & terms(sentences[index - 1])
+                or any(unit in units for _, unit in _quantities(sentences[index - 1]))
+            )
+            related = bool(topic & terms(clause)) or any(unit in units for _, unit in actual)
+            related = related or inherited
+            if not related:
+                continue
+            # A topic lead-in ("至于具体书名") is not a positive knowledge claim.
+            informative = bool(
+                actual or re.search(UNKNOWN, clause) or inherited
+                or re.search(
+                    r"有|是|为|留着|可见|明显|显眼|打开|关闭|知道|清楚|确认|名称叫|书名叫", clause,
+                )
+                or (_topic_terms(support) - topic) & terms(clause)
+            )
+            if not informative:
+                continue
+            scope = sentence
+            speaker = requirement.get("speaker") or source.get("speaker", "")
+            aliases = [n for n in re.split(r"[·・\s]", speaker) if len(n) >= 2]
+            if index and (
+                inherited or re.search(CONDITION, sentences[index - 1])
+                or not any(n in scope for n in aliases) and re.match(
+                    r"\s*(?:[他她其]|据此|这些|这项|至于|具体|仍|但)", sentence,
+                )
+            ):
+                scope = sentences[index - 1] + sentence
+            errors += _polarity_errors(clause, support)
+            errors += _observation_binding_errors(clause, requirement, support)
+            failures = _source_errors(
+                requirement, scope, {"source_quote": support}, source,
+            )
+            errors += [e for e in failures if e.startswith("正文未保留来源条件")]
+            if re.search(r"已证实|确定|确实|准确|正好", clause):
+                errors += [e for e in failures if e.startswith((
+                    "来源只给估计", "正文把估计升级",
+                ))]
+            if actual and not actual <= _quantities(support):
+                errors.append("正文其他位置的数值没有所选来源支持：" + clause)
+            if numeric and any(unit in units for _, unit in actual):
+                errors += _source_errors(requirement, scope, {"source_quote": support}, source)
+            unknown = _unknown_for_requirement(support, requirement)
+            if unknown and re.search(
+                r"(?:名称|名字|书名).{0,8}(?:是|为|叫)|(?:知道|清楚|确认).{0,8}(?:名称|名字|书名)|《",
+                clause,
+            ) and not _unknown_for_requirement(clause, requirement):
+                errors.append("正文其他位置把来源未知内容改成已知：" + clause)
+            if any(title not in support for title in re.findall(r"《[^》]+》", clause)):
+                errors.append("正文其他位置给出了来源未提供的具体名称")
+            if requirement.get("historical") or source.get("historical"):
+                # Only actual testimony assertions need attribution; a later
+                # suggestion about this subject is not another historical fact.
+                testimony_fact = bool(actual and numeric or re.search(UNKNOWN, clause))
+                if testimony_fact:
+                    failures = _source_errors(
+                        requirement, scope, {"source_quote": support}, source,
+                    )
+                    errors += [e for e in failures if e.startswith(
+                        ("正文须将证词归属于", "正文实际断言的说话人",
+                         "证词须保留转述性质", "旧证词不能")
+                    )]
+    return list(dict.fromkeys(errors))
 
 
 def coverage_audit(output, brief, *, prefix=False, partial=False):
@@ -496,6 +699,8 @@ def coverage_audit(output, brief, *, prefix=False, partial=False):
                     reasons.append("引用不属于本轮该需求选定的可见来源")
                 else:
                     reasons += _source_errors(requirement, answer, row, source)
+                    if not prefix:
+                        reasons += _body_assertion_errors(body, requirement, source)
             elif row.get("status") != "unknown" or not re.search(UNKNOWN, answer):
                 reasons.append("无可见依据时须具体说明尚未知的内容")
             elif requirement.get("source_ids"):
@@ -541,13 +746,100 @@ def coverage_repair_message(audit):
     )
 
 
+def _fact_atoms(text, speaker=""):
+    """Small deterministic equivalences; unfamiliar rewrites remain unverified.
+
+    Keep descriptive nouns/values and action direction while removing the
+    grammatical scaffolding already enforced by source/epistemic validation.
+    This is deliberately not a general semantic similarity score.
+    """
+    for name in sorted([speaker, *re.split(r"[·・\s]", speaker)], key=len, reverse=True):
+        if name:
+            text = text.replace(name, "")
+    text = QUANTITY.sub(" ", text)
+    for pattern, replacement in (
+        (r"留有|留着|留下|有着|可见|能看见", "有"),
+        (r"灰尘|尘埃", "灰尘"),
+        (r"丢失|缺少|短缺|少了|少", "缺少"),
+        (r"增加|多了|增多", "增加"),
+        (r"不清楚|不知道|未知|不明白", "未知"),
+        (r"明显|显眼", "显眼"),
+        (r"具体名称|具体名字", "名称"),
+    ):
+        text = re.sub(pattern, " " + replacement + " ", text)
+    text = re.sub(HISTORICAL + "|" + ESTIMATE + "|" + TESTIMONY, " ", text)
+    text = re.sub(
+        r"据|的|地|得|了|着|有|是|在|上|表面|边沿|仍|并|但|还|也|他|她|我|其|约|具体",
+        " ", text,
+    )
+    return {part for part in re.findall(r"[\u4e00-\u9fff]+|[a-z0-9]+", text.lower()) if part}
+
+
+def freeze_verified_fact(row, brief):
+    from copy import deepcopy
+
+    requirement = next(r for r in brief["answer_requirements"] if r["id"] == row["requirement_id"])
+    source = next((s for s in brief["answer_sources"] if s["id"] == row.get("source_id")), None)
+    fact_text = _requirement_fact_text(row["body_quote"], requirement)
+    return deepcopy({
+        "requirement": requirement,
+        "source": source,
+        "row": row,
+        "facts": {
+            "text": fact_text,
+            "quantities": sorted(_quantities(fact_text)),
+            "atoms": sorted(_fact_atoms(
+                fact_text, requirement.get("speaker") or (source or {}).get("speaker", ""),
+            )),
+        },
+    })
+
+
+def retained_fact_errors(output, brief, retained):
+    """Revalidate requirement, original authority and facts after a repair."""
+    value = output.model_dump() if hasattr(output, "model_dump") else output
+    effective, _ = normalize_coverage_spans(value, brief)
+    audit = coverage_audit(effective, brief)
+    verified = {r["requirement_id"]: r for r in audit["verified"]}
+    requirements = {r["id"]: r for r in brief["answer_requirements"]}
+    sources = {s["id"]: s for s in brief["answer_sources"]}
+    errors = []
+    for frozen in retained:
+        old = frozen["row"]
+        rid = old["requirement_id"]
+        current = verified.get(rid)
+        reasons = []
+        if (
+            current is None or current.get("source_id") != old.get("source_id")
+            or requirements.get(rid) != frozen["requirement"]
+            or sources.get(old.get("source_id")) != frozen["source"]
+        ):
+            reasons.append("修复未保留原需求及已验证来源")
+        else:
+            # Keep the object/predicate binding. Another requirement in the
+            # same scene source cannot provide the missing or swapped fact.
+            answer = _requirement_fact_text(current["body_quote"], frozen["requirement"])
+            if not _quantities(frozen["facts"]["text"]) <= _quantities(answer):
+                reasons.append("修复丢失已验证数值或单位")
+            speaker = frozen["requirement"].get("speaker") or (frozen["source"] or {}).get(
+                "speaker", "",
+            )
+            if not set(frozen["facts"]["atoms"]) <= _fact_atoms(answer, speaker):
+                reasons.append("修复未能确定保留原已验证关键事实")
+            reasons += _polarity_errors(answer, frozen["facts"]["text"])
+            reasons += _condition_errors(current["body_quote"], old["body_quote"])
+        if reasons:
+            errors.append({"requirement_id": rid, "reasons": reasons, "preserve": frozen})
+    return errors
+
+
 def normalize_coverage_spans(output, brief):
     """Repair copies of already-declared evidence, never body text or authority.
 
     The model must supply a unique current requirement and its allowed source.
-    Only one minimal, fully valid body span may replace its copied quote. Other
-    relevant assertions must also fit that span, so a good sentence cannot hide
-    a contradictory or ambiguous answer elsewhere in the same body.
+    Consistent independently verified spans are ordered by length then position.
+    Every factual assertion is checked even for a correct native mapping, so
+    later repetition/advice is harmless while a contradictory fact is rejected.
     """
     from copy import deepcopy
 
@@ -583,61 +875,30 @@ def normalize_coverage_spans(output, brief):
         local = {**brief, "answer_requirements": [{**requirement, "source_ids": [source_id]}]}
         if coverage_audit({**effective, "answer_coverage": [row]}, local)["complete"]:
             continue
+        if _body_assertion_errors(body, requirement, source):
+            continue
         candidates = []
         for start in range(len(sentences)):
-            for end in range(start, min(start + 2, len(sentences))):
+            for end in range(start, len(sentences)):
                 quote = body[sentences[start].start() : sentences[end].end()]
                 candidate = {**row, "body_quote": quote, "source_quote": source["text"]}
                 if coverage_audit({**effective, "answer_coverage": [candidate]}, local)["complete"]:
                     candidates.append((start, end, candidate))
-        minimal = [
-            c
-            for c in candidates
-            if not any(
-                c[0] <= other[0] <= other[1] <= c[1] and c[:2] != other[:2] for other in candidates
-            )
-        ]
-        if len(minimal) != 1:
+                    break  # Longer spans at this start cannot win the stable order.
+        if not candidates:
             continue
-        start, end, candidate = minimal[0]
-        topic = _content_topics(
-            {**requirement, "text": re.sub(r"[吗呢？?]", "", requirement["text"])}
+        start, end, candidate = min(
+            candidates, key=lambda c: (len(c[2]["body_quote"]), sentences[c[0]].start()),
         )
-        numeric = bool(re.search(r"多少|数量|数目|几(?:本|件|个|把|张|枚|份)", requirement["text"]))
-        units = {unit for _, unit in _requested_quantities(source["text"], requirement["text"])}
-        related = [
-            i
-            for i, sentence in enumerate(sentences)
-            if (
-                len(topic & terms(sentence[0])) >= min(2, len(topic))
-                and topic
-                or numeric
-                and any(unit in units for _, unit in _quantities(sentence[0]))
-            )
-        ]
-        if any(i < start or i > end for i in related):
-            continue
-        # Adjacent sentences may carry speaker/history context. They may not
-        # supply a correct unknown/value sentence to mask a conflicting one.
-        semantic_errors = [
-            error
-            for i in related
-            for error in _source_errors(
-                requirement,
-                sentences[i][0],
-                candidate,
-                source,
-            )
-            if not error.startswith(("正文须将证词归属于", "证词须保留转述性质", "旧证词不能"))
-        ]
-        if semantic_errors:
-            continue
         changes.append(
             {
                 "requirement_id": rid,
                 "before": deepcopy(row),
                 "after": candidate,
-                "reason": "unique_body_span_and_selected_source",
+                "reason": "shortest_earliest_verified_span_and_selected_source",
+                "candidate_count": len(candidates),
+                "body_start": sentences[start].start(),
+                "body_end": sentences[end].end(),
             }
         )
         rows[index] = candidate

@@ -13,7 +13,31 @@ from app.memory.events import (
     story_events,
 )
 from app.persistence.agent_models import AgentMemory
-from app.rooms.service import Identity, require
+from app.rooms.service import Identity, RoomError, require
+
+
+class MemoryBudgetError(RoomError):
+    """Carry reference/size audit across the context transaction's rollback."""
+
+    def __init__(self, audit):
+        self.audit = audit
+        super().__init__(
+            f"当前行动资料超过总上下文预算{audit['context_budget']}字符；"
+            f"实际{audit['context_chars']}字符，必需历史{audit.get('required_chars', 0)}字符", 422,
+        )
+
+
+def require_memory_fit(context, budget, audit):
+    size = prompt_context_size(context)
+    if audit.get("required_complete", True) and size <= budget:
+        return
+    raise MemoryBudgetError({
+        **{k: audit[k] for k in ("required_records", "required_refs", "required_omitted",
+                               "required_complete", "required_chars", "task_index") if k in audit},
+        "context_budget": budget, "context_chars": size,
+        "context_components": {k: len(json.dumps(v, ensure_ascii=False))
+                               for k, v in context.items() if k != "memory_selection_audit"},
+    })
 
 
 def prompt_context_size(context):
@@ -345,6 +369,13 @@ async def build_context(
         session, room.id, memory_events, member_id=binding.member_id,
         keeper=keeper, narrator=narrator,
     )
+    from app.models.budget import context_character_budget
+
+    budget = context_character_budget(service.settings)
+    current_request_keys = list(dict.fromkeys([
+        *cycle.state.get("request_keys", []),
+        *[r["key"] for r in context.get("addressed_requests", []) if r.get("key")],
+    ]))
     evidence, memory_audit = ([], {"selected_refs": [], "omitted": []})
     if phase != "repair_action_arguments":
         evidence, memory_audit = select_memory(
@@ -353,7 +384,13 @@ async def build_context(
             question, scene_id=recall_scene, tasks=tasks,
             targets=recall_targets, target_ids=[explicit_target] if explicit_target else [],
             memories=visible_memories,
-            budget=min(3000, max(900, service.settings.agent_context_chars // 4)),
+            current_request_keys=current_request_keys,
+            task_source_seqs=[cycle.state["triggering_event_seq"]], current_cycle_id=cycle.id,
+            # Required dependencies reserve space before optional scene/history
+            # prose. The same total context gate below measures their real cost;
+            # the old local allowance now limits only supplementary recall.
+            budget=budget,
+            optional_budget=min(3000, max(900, budget // 4)),
         )
     if evidence:
         context["memory_evidence"] = evidence
@@ -366,8 +403,8 @@ async def build_context(
                 and row.get("text") == fact.get("text") and not row.get("excerpt")
                 and not fact.get("result_fact") for row in evidence)]
     context["memory_selection_audit"] = memory_audit
-    require(memory_audit.get("required_complete", True),
-            "当前行动必需的历史证据超过记忆选取预算，无法完整装入；请缩小本轮问题范围", 422)
+    if not memory_audit.get("required_complete", True):
+        require_memory_fit(context, budget, memory_audit)
     reference = memory_audit.get("reference_resolution", {})
     if reference.get("status") in {"recent_reference", "recent_quote", "ambiguous", "unresolved"}:
         context["memory_reference"] = reference
@@ -536,9 +573,6 @@ async def build_context(
             }
             for check in context["checks"]
         ]
-    from app.models.budget import context_character_budget
-
-    budget = context_character_budget(service.settings)
     # Select from the full permission-filtered active branch before dialogue and
     # summary trimming, so an older public improvisation remains available.
     navigation = await service.navigation.state(session, room.id)
@@ -873,11 +907,7 @@ async def build_context(
             budget,
             {k: len(json.dumps(v, ensure_ascii=False)) for k, v in context.items()},
         )
-    require(
-        prompt_context_size(context) <= budget,
-        "当前模组和角色超过上下文预算，请提高上下文限制或减少席位",
-        422,
-    )
+    require_memory_fit(context, budget, memory_audit)
     # Stable prompt order: identity/cards/public scene/module, memories/summary/events,
     # evidence, then the current action. JSON remains explicitly reference data.
     ordered = {
@@ -909,11 +939,7 @@ async def build_context(
         # An empty optional history field must not push an otherwise valid
         # envelope over budget before the role-specific final compaction.
         ordered.pop("recent_dialogue")
-    require(
-        prompt_context_size(ordered) <= budget,
-        "当前行动资料超过上下文预算，无法加入更多历史对话",
-        422,
-    )
+    require_memory_fit(ordered, budget, memory_audit)
     loaded_seqs = {e["seq"] for e in ordered.get("events", []) + ordered.get("recent_dialogue", [])}
     memory_audit["unloaded_event_seqs"] = [
         e["seq"] for e in history_events if e["seq"] not in loaded_seqs

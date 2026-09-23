@@ -15,8 +15,9 @@ from app.persistence.agent_models import AgentRun
 from app.persistence.knowledge_models import AgentModelCall
 
 
-def test_changed_verified_quote_is_rejected_and_first_observed_detail_is_retained(
-    client, game, monkeypatch,  # noqa: F811
+@pytest.mark.parametrize("equivalent", [True, False])
+def test_repair_preserves_verified_facts_or_keeps_conservative_incomplete_fallback(
+    client, game, monkeypatch, equivalent,  # noqa: F811
 ):
     from app.agents import narration_coverage
 
@@ -35,6 +36,8 @@ def test_changed_verified_quote_is_rejected_and_first_observed_detail_is_retaine
     monkeypatch.setattr(narration_coverage, "prepare_response_contract", prepare)
     original_quote = "林先生早先估计少了九件物品。"
     changed_quote = "据林先生此前的估算，物品约少了9件。"
+    if not equivalent:
+        changed_quote = "据林先生此前的估算，物品遗失了9件。"
     missing_answer = "林先生此前表示不知道物品的具体名称。"
     original_mapping = {
         "requirement_id": "r-number", "body_quote": original_quote,
@@ -85,17 +88,24 @@ def test_changed_verified_quote_is_rejected_and_first_observed_detail_is_retaine
                   and e["payload"].get("cycle_id") == cycle["id"]]
     assert len(narrations) == 1
     payload = narrations[0]["payload"]
-    assert payload["safe_fallback"] and payload["answer_origin"] == "server_fallback"
-    assert original_quote in payload["text"] and "未完整生成" in payload["text"]
-    assert changed_quote not in payload["text"] and missing_answer in payload["text"]
+    if equivalent:
+        assert not payload.get("safe_fallback") and payload["answer_origin"] == "repaired"
+        assert changed_quote in payload["text"] and missing_answer in payload["text"]
+        assert original_quote not in payload["text"] and "未完整生成" not in payload["text"]
+    else:
+        assert payload["safe_fallback"] and payload["answer_origin"] == "server_fallback"
+        assert original_quote in payload["text"] and "未完整生成" in payload["text"]
+        assert changed_quote not in payload["text"] and missing_answer in payload["text"]
 
     validation = ok(client.get(game["prefix"] + f"/cycles/{cycle['id']}/validation"))
     audit = validation["narration_validation"]
-    assert audit["answer_complete"] is False and audit["repair_count"] == 1
+    assert audit["answer_complete"] is equivalent and audit["repair_count"] == 1
     assert audit["answer_coverage"]["covered"] == ["r-number", "r-name"]
     assert audit["answer_coverage"]["missing"] == []
     assert validation["narration"]["public_narration"] == payload["text"]
-    assert validation["narration"]["answer_coverage"][0] == original_mapping
+    assert validation["narration"]["answer_coverage"][0]["body_quote"] == (
+        changed_quote if equivalent else original_quote
+    )
 
     async def evidence():
         async with service.rooms.database.sessions() as session:
@@ -106,21 +116,25 @@ def test_changed_verified_quote_is_rejected_and_first_observed_detail_is_retaine
             calls = [call.document for call in await session.scalars(
                 select(AgentModelCall).where(AgentModelCall.run_id == run.id)
             )]
-            return run.context["validated_partial"], sorted(calls, key=lambda c: c["attempt"])
+            return run.context.get("validated_partial"), sorted(calls, key=lambda c: c["attempt"])
 
     retained, calls = client.portal.call(evidence)
-    assert retained["public_narration"] == original_quote + "\n" + missing_answer
-    assert retained["answer_coverage"][0] == original_mapping
+    if not equivalent:
+        assert retained["public_narration"] == original_quote + "\n" + missing_answer
+        assert retained["answer_coverage"][0] == original_mapping
     # Both independently safe answers can survive in a server fallback. The
     # rejected repair remains rejected and must not be labelled complete/native.
     assert calls[0]["generated_output"][body_fields[0]] == original_quote
     assert calls[0]["answer_coverage_audit"]["complete"] is False
-    # The second draft covers the sources. Its separate runtime error is the
-    # dropped exact span, proving this is retention enforcement, not missing IDs.
+    # Both repair variants cover the selected source. Only the deterministically
+    # verified equivalent can publish as repaired; uncertainty keeps fallback.
     assert calls[1]["answer_coverage_audit"]["complete"] is True
-    assert calls[1]["error_category"] == "ModelFormatError"
-    assert any("已验证正文片段" in issue["code"]
-               for issue in calls[1]["validation_issues"])
+    if equivalent:
+        assert not calls[1].get("error_category")
+    else:
+        assert calls[1]["error_category"] == "ModelFormatError"
+        assert any("已验证需求" in issue["code"]
+                   for issue in calls[1]["validation_issues"])
 
 
 @pytest.mark.parametrize("bad_subject", ["historical", "observation"])

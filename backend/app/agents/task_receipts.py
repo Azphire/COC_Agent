@@ -7,6 +7,17 @@ QUANTITY = r"([0-9]+|[零〇一二两三四五六七八九十百千]+)(?:个|把
 ITEM_OPERATIONS = {"give", "take", "pickup", "drop", "place", "throw", "use", "consume"}
 
 
+def restore_task_operands(request, frozen):
+    """Fill absent operands without overwriting newer values, zero or empty lists."""
+    restored = deepcopy(request)
+    for key, value in frozen.items():
+        if key not in restored or restored[key] is None:
+            restored[key] = deepcopy(value)
+        elif isinstance(restored[key], dict) and isinstance(value, dict):
+            restored[key] = restore_task_operands(restored[key], value)
+    return restored
+
+
 def quantity_value(value):
     if value.isdigit():
         return int(value)
@@ -26,10 +37,40 @@ def requested_quantity(text):
     return quantity_value(found[1]) if found else 1
 
 
-def bind_task_operands(request, inventory, actor, requester=None, *, targets=()):
+async def current_task_targets(session, room_id, public):
+    """Add only approved aliases of identities already public in this room/scene."""
+    from sqlalchemy import select
+
+    from app.persistence.preparation_models import RoomEntityState
+
+    targets = {t["id"]: deepcopy(t) for t in public if t.get("fact_scope") == "current_scene"}
+    for target in targets.values():
+        target["aliases"] = [a for a in (target.get("aliases") or []) if isinstance(a, str)]
+    if targets:
+        for entity in await session.scalars(select(RoomEntityState).where(
+            RoomEntityState.room_id == room_id,
+            RoomEntityState.source_entity_id.in_(targets),
+            RoomEntityState.state.in_(["revealed", "corrected"]),
+        )):
+            target = targets[entity.source_entity_id]
+            target["aliases"] = list(dict.fromkeys([
+                *target["aliases"],
+                *[a for a in entity.snapshot.get("aliases", []) if isinstance(a, str)],
+            ]))
+    return list(targets.values())
+
+
+def bind_task_operands(request, inventory, actor, requester=None, *, targets=None):
     """Freeze only uniquely supported IDs before the proposed action executes."""
     from app.preparation.action_authority import operative_fragments, requested_action_kinds
 
+    if targets is not None:
+        targets = [t for t in targets if t.get("fact_scope", "current_scene") == "current_scene"]
+        targets += [{"id": p["id"], "title": p.get("name", ""), "aliases": p.get("names", [])}
+                    for p in inventory.get("other_actors", [])
+                    if p.get("fact_scope") == "current_scene"]
+        targets += [{"id": m["id"], "title": m.get("name", "")}
+                    for m in inventory.get("members", []) if m["id"] != actor]
     operations = request.get("operations", [])
     if len(operations) > 1:
         bound = deepcopy(request)
@@ -48,7 +89,9 @@ def bind_task_operands(request, inventory, actor, requester=None, *, targets=())
                                        & set(operations)) > 1:
                 mapped[operation] = {"unresolved_operands": True}
                 continue
-            single = {"text": parts[0], "operations": [operation]}
+            single = {"text": parts[0], "operations": [operation],
+                      **{k: request[k] for k in ("key", "source_event_seq", "source_start",
+                                                "source_end", "scene_id") if k in request}}
             scoped = _bind_single(single, inventory, actor, requester, targets=targets)
             mapped[operation] = {
                 "target_id": None, "recipient_member_id": None,
@@ -133,6 +176,37 @@ def teammate_target_options(context):
     return list(dict.fromkeys(current)), list(dict.fromkeys(instances))
 
 
+def target_reference_spans(text, targets):
+    """Explicit testimony attribution identifies a source, not an action object.
+
+    Keep every ordinary object mention, including a later mention of the same
+    speaker. Only a closed source phrase and its directly attached quote are
+    excluded; arbitrary surrounding text cannot consume an operation clause.
+    """
+    quote = r'(?:“[^”]*”|‘[^’]*’|「[^」]*」|"[^"]*")'
+    modifier = r"(?:早先|先前|此前|之前|刚才|原先|曾经|所)*"
+    testimony = r"(?:说法|证词|陈述|描述|报告)"
+    saying = r"(?:说过|说|表示|提到过|提到)"
+    spans = set()
+    for target in targets:
+        for name in [target.get("title", ""), *target.get("aliases", [])]:
+            if not name:
+                continue
+            source = re.escape(name) + modifier
+            patterns = [
+                r"(?:根据|依据|按照|依照|据)\s*" + source + r"的?" + testimony
+                + r"(?:\s*[:：]?\s*" + quote + r")?",
+                r"(?:^|(?<=[，。；！？,;.!?\n]))\s*" + source + saying
+                + r"\s*[:：]?\s*" + quote,
+            ]
+            for pattern in patterns:
+                spans.update(m.span() for m in re.finditer(pattern, text))
+    spans = sorted(span for span in spans if not any(
+        other != span and other[0] <= span[0] and span[1] <= other[1] for other in spans
+    ))
+    return [{"start": start, "end": end, "text": text[start:end]} for start, end in spans]
+
+
 def _bind_single(request, inventory, actor, requester, *, targets):
     from app.preparation.action_authority import mentions_alias
 
@@ -171,15 +245,54 @@ def _bind_single(request, inventory, actor, requester, *, targets):
             required_items[item["id"]] = count
         bound["required_items"] = required_items
         bound["quantity"] = sum(required_items.values())
-    if not bound.get("target_id") and "give" not in request.get("operations", []):
-        named = {t["id"] for t in targets if any(
-            mentions_alias(text, name)
+    if targets is not None and "give" not in request.get("operations", []):
+        visible = [t for t in targets
+                   if t.get("fact_scope", "current_scene") == "current_scene"]
+        references = target_reference_spans(text, visible)
+        target_text = list(text)
+        for span in references:
+            # A non-whitespace separator prevents alias matches across an
+            # excluded reference when mentions_alias compacts ordinary spaces.
+            target_text[span["start"]:span["end"]] = "\ufffc" * (span["end"] - span["start"])
+        target_text = "".join(target_text)
+        named = {t["id"] for t in visible if any(
+            mentions_alias(target_text, name)
             for name in [t.get("title", ""), *t.get("aliases", [])] if name
         )}
         if len(named) == 1:
             bound["target_id"] = next(iter(named))
+            bound.pop("target_candidates", None)
+            bound.pop("target_binding_rejection", None)
+            target = next(t for t in visible if t["id"] == bound["target_id"])
+            bound["target_source"] = {
+                "request_key": request.get("key"),
+                "request_source_event_seq": request.get("source_event_seq"),
+                "target_id": target["id"], "title": target.get("title", ""),
+                "fact_scope": target.get("fact_scope", "current_scene"),
+                "excluded_reference_spans": references,
+                **{k: target[k] for k in ("source_event_seq", "revealed_event_seq", "source",
+                                         "ref", "scene_id")
+                   if k in target},
+            }
         elif named:
+            bound["target_id"] = None
             bound["target_candidates"] = sorted(named)[:8]
+            bound.pop("target_source", None)
+        elif bound.get("target_id"):
+            source = bound.get("target_source") or {}
+            verified = (
+                bound["target_id"] in {t["id"] for t in visible}
+                and source.get("target_id") == bound["target_id"]
+                and source.get("request_key") is not None
+                and source["request_key"] == request.get("key")
+                and source.get("request_source_event_seq") == request.get("source_event_seq")
+            )
+            if not verified:
+                bound["target_binding_rejection"] = {
+                    "reason": "unverified_target_id", "proposed_target_id": bound["target_id"],
+                }
+                bound["target_id"] = None
+                bound.pop("target_source", None)
     if "give" in request.get("operations", []):
         recipients = {member["id"] for member in inventory.get("members", [])
                       if member["id"] != actor and member.get("name")

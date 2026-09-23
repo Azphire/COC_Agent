@@ -293,7 +293,8 @@ class BehaviorState(DomainModel):
     cooldowns: list[Cooldown] = Field(default_factory=list, max_length=24)
     last_acted_cycle: str | None = None
     consecutive_pass_count: int = Field(default=0, ge=0)
-    pending_requests: list[dict] = Field(default_factory=list, max_length=12)
+    # This is the durable ledger; prompt selection has its own current-task budget.
+    pending_requests: list[dict] = Field(default_factory=list)
     request_history: list[dict] = Field(default_factory=list, max_length=24)
     task_status: Literal[
         "idle",

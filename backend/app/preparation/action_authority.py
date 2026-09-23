@@ -31,7 +31,8 @@ VERBS = {
         r"|\b(?:search|rummage|find|inspect)\b"
     ),
     "clear": r"清理|搬开|移开|\bclear\b",
-    "observe": r"观察|查看|看(?:清|向|看)|照(?:向|着)|辨认|打量|注视|\b(?:look|observe|watch)\b",
+    "observe": (r"观察|查看|核对|看(?:清|向|看)|照(?:向|着)|辨认|打量|注视"
+                r"|\b(?:look|observe|watch)\b"),
     "light": (
         r"(?:打开|开启|点亮|关掉|关闭).{0,12}(?:灯|照明|手电|屏幕)"
         r"|(?:灯|照明|手电(?:筒)?|屏幕)(?:的?(?:开关|功能))?(?:也|给|都)?(?:关掉|关闭|关上|打开|开启)"
@@ -83,11 +84,11 @@ def declared_action(text):
     return any(
         re.match(
             r"\s*(?:我(?:们)?(?:现在|这就|先|想|要|打算|准备)?)?"
-            r"(?:仔细|认真|先|再|然后|接着|继续|试着|尝试|实际)*"
+            r"(?:仔细|认真|现在|这就|先|再|然后|接着|继续|试着|尝试|实际|去)*"
             r"(?:(?:靠近|走近|凑近|过去|蹲下|弯腰)[^，。；,.!?;]{0,16}?)?"
             r"(?:(?:透过|隔着|借着|顺着)[^，。；,.!?;]{1,12}?)?"
             r"(?:(?:从|在|沿|伸手|伸出手)[^，。；,.!?;]{0,16}?)?"
-            r"(?:急救|包扎|止血|检查|查看|看看|摸|搜索|寻找|搜寻|翻看|翻翻|翻转|翻过|揭下|观察|拿起|取下|使用|潜行|"
+            r"(?:急救|包扎|止血|检查|查看|核对|看看|摸|搜索|寻找|搜寻|翻看|翻翻|翻转|翻过|揭下|观察|拿起|取下|使用|潜行|"
             r"(?:把|将).{1,24}(?:翻过|翻转|揭下|拿起|扔|抛|交给|打开)|交给|交还|归还|递给)",
             c,
         )
@@ -266,6 +267,10 @@ def information_question(text):
             r"我(?:可以|能|该|要|怎么|如何)[^。！？?]{0,16}(?:帮|做|配合)"
             r"[^。！？?]{0,12}(?:什么|如何|怎么|[？?])|"
             r"是(?:做|干|用来).{0,8}(?:什么|啥)|是什么意思|该(?:动|选|用)哪|"
+            r"(?:说明|说说|告诉我|解释|回答|讲讲|分析|列出)[^，。；！？,;.!?]{0,32}"
+            r"(?:什么|哪些|如何|怎么|是否|下一步|接下来)|"
+            r"(?:下一步|接下来)[^，。；！？,;.!?]{0,12}(?:需要|还需|应该|该|要)"
+            r"[^，。；！？,;.!?]{0,16}(?:什么|哪些|如何|怎么)|"
             r"(?:请教|想问|问一下)|\b(?:do you know|what do you think)\b",
             text,
             re.I,
@@ -275,40 +280,49 @@ def information_question(text):
 
 def requested_action_kinds(text):
     """A requestee does not inherit a separate first-person requester action."""
-    if information_question(text):
-        return []
-    polite = bool(
-        re.search(
-            r"(?:能不能|可不可以|能否|可否|可以|能)(?:请|帮|把|将|检查|查看|交|递|拿|用|打开|关闭)"
-            r"|(?:请|麻烦|劳驾|帮我).{0,20}(?:检查|查看|找|观察|拿|递|交|开|关|照看)",
-            text,
-        )
-    )
-    if re.search(r"[？?]", text) and not polite:
-        return []
-    clauses = [
-        c
-        for c in re.split(r"(?<=[，。；！？,;.!?\n])", text)
-        if not speaker_action(c)
-        and not re.match(r"\s*我(?:们)?(?:来|去|先|要|会|再|接着|随后|自己)", c)
-    ]
-    # A polite request remains non-executable for its speaker. Once addressed
-    # to a teammate, its requested operation can guide that teammate's choice.
-    clauses = [
-        re.sub(
+    # A report/advice clause can contain operation words without delegating
+    # them. Scope this exclusion to its original clause: an adjacent explicit
+    # instruction still gives the peer a separate choice to act or decline.
+    clauses = []
+    for part in request_clauses(text):
+        clause = part["text"]
+        if (information_question(clause) or speaker_action(clause)
+                or re.match(r"\s*我(?:们)?(?:来|去|先|要|会|再|接着|随后|自己)", clause)):
+            continue
+        polite = bool(re.search(
+            r"(?:能不能|可不可以|能否|可否|可以|能)(?:请|帮|把|将|检查|查看|核对|交|递|拿|用|打开|关闭)"
+            r"|(?:请|麻烦|劳驾|帮我).{0,20}(?:检查|查看|核对|找|观察|拿|递|交|开|关|照看)",
+            clause,
+        ))
+        if re.search(r"[？?]", clause) and not polite:
+            continue
+        # A polite request remains non-executable for its speaker. Only an
+        # explicit imperative can lose its question punctuation for the peer.
+        clause = re.sub(
             r"(?:能不能|可不可以|能否|可否|可以|能)(?=把|将|请|帮|交|递|拿|用|检查|查看|打开|关闭)",
-            "",
-            c,
+            "", clause,
         )
-        for c in clauses
-    ]
-    # Only an explicit polite imperative can lose its question punctuation.
-    if polite:
-        clauses = [c.rstrip("？?") for c in clauses]
-    clauses = [re.sub(r"^\s*(?:你|您)(?:先|再|现在|这就)?", "", c) for c in clauses]
-    clauses = [re.sub(r"^\s*(?:(?:请|麻烦|劳驾)(?:你|您)?|帮我|帮忙)+", "", c)
-               for c in clauses]
-    return [kind for kind in action_kinds("，".join(clauses)) if kind != "converse"]
+        if polite:
+            clause = clause.rstrip("？?") + ("。" if clause.endswith(("？", "?")) else "")
+        clause = re.sub(r"^\s*(?:然后|接着|同时|并且|并|现在|这就)*", "", clause)
+        clause = re.sub(r"^\s*(?:你|您)(?:先|再|现在|这就)?", "", clause)
+        clause = re.sub(r"^\s*(?:(?:请|麻烦|劳驾)(?:你|您)?|帮我|帮忙)+", "", clause)
+        clauses.append(clause)
+    # Preserve the original sentence delimiters so a conditional does not
+    # accidentally authorize the dependent clause after its comma.
+    return [kind for kind in action_kinds("".join(clauses)) if kind != "converse"]
+
+
+def request_clauses(text):
+    """Literal clauses, including an explicit new request after a conjunction."""
+    boundaries = {0, len(text)}
+    boundaries.update(m.end() for m in re.finditer(r"[，。；！？,;.!?\n]", text))
+    boundaries.update(m.start() for m in re.finditer(
+        r"(?:然后|接着|同时|并且|并)(?=请|麻烦|现在|这就|告诉我|说明|解释|说说)", text,
+    ))
+    ordered = sorted(boundaries)
+    return [{"text": text[start:end], "start": start, "end": end}
+            for start, end in zip(ordered, ordered[1:]) if start < end]
 
 
 def requested_search_attempt(text):

@@ -172,13 +172,14 @@ async def enqueue_teammate(service, session, room, parent, event, binding, reque
                              - {"converse", "pass"}),
     }
     if requests:
-        from app.agents.task_receipts import bind_task_operands
+        from app.agents.task_receipts import bind_task_operands, current_task_targets
         from app.preparation.inventory import inventory_context
 
         inventory = await inventory_context(service, session, room,
                                             "\n".join(r.get("text", "") for r in requests))
-        targets = [t for t in await service.entities.public(session, room.id)
-                   if t.get("fact_scope") == "current_scene"]
+        targets = await current_task_targets(
+            session, room.id, await service.entities.public(session, room.id),
+        )
         state["request_operands"] = {
             r["key"]: bind_task_operands(r, inventory, binding.member_id,
                                         parent.state.get("triggering_member_id"), targets=targets)
@@ -399,7 +400,7 @@ async def settle_teammate_tasks(service, session, room):
             or cycle.status == "cancelled"
             or not feedback
         )
-        from app.agents.task_receipts import receipt_progress
+        from app.agents.task_receipts import receipt_progress, restore_task_operands
 
         result_seqs = {e.seq for e in events if e.type in {
             "check.resolved", "module.interaction", "combat.resolved", "scene.updated",
@@ -420,11 +421,8 @@ async def settle_teammate_tasks(service, session, room):
         for request in behavior.pending_requests:
             if request.get("key") not in cycle.state.get("request_keys", []):
                 continue
-            operands = dict(request)
             frozen = cycle.state.get("request_operands", {}).get(request["key"], {})
-            for key, value in frozen.items():
-                if key not in operands or operands[key] is None:
-                    operands[key] = value
+            operands = restore_task_operands(request, frozen)
             outcomes[request["key"]] = receipt_progress(
                 operands, facts, actor=row.member_id, cycle_id=cycle.id, consumed=consumed,
             )
@@ -498,7 +496,8 @@ async def settle_teammate_tasks(service, session, room):
         else:
             attempt = cycle.state.get("teammate_attempt", {})
             behavior.pending_requests = [
-                {**cycle.state.get("request_operands", {}).get(r.get("key"), {}), **r,
+                {**restore_task_operands(
+                    r, cycle.state.get("request_operands", {}).get(r.get("key"), {})),
                  "last_result_kind": "generation_failed",
                  "technical_failure": {
                      "cycle_id": cycle.id, "target_id": attempt.get("target_id"),

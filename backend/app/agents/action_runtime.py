@@ -515,6 +515,12 @@ def generation_prompt(context, schema):
                 result[key] = [{k: v for k, v in r.items() if k in {
                     "kind", "text", "target_id", "operations", "last_result_kind",
                     "cancelled_keys", "needs_clarification", "target_candidates",
+                    "key", "source_event_seq", "executor_member_id", "status",
+                    "item_ids", "item_instance_ids", "recipient_member_id", "quantity",
+                    "remaining_quantity", "remaining_item_instance_ids",
+                    "completion_event_seqs", "result_event_seqs", "target_source_event_seqs",
+                    "target_binding", "target_source", "operation_operands", "operation_progress",
+                    "required_items", "remaining_items", "unresolved_operands", "technical_failure",
                 }} for r in result[key]]
         if result.get("self_identity"):
             result.pop("profile", None)
@@ -622,16 +628,35 @@ def generation_prompt(context, schema):
             for event in result.get("recent_action_results", [])
         ]
         if result.get("addressed_requests"):
-            result["addressed_requests"] = [
-                {k: v for k, v in r.items() if k in {
-                    "kind", "text", "target_id", "operations", "cancelled_keys",
-                    "needs_clarification",
-                }}
+            # Put the complete selected task in one prompt projection. Keep
+            # provenance, remaining instances/counts and actual receipts while
+            # preserving the original pending ledger in the run context.
+            selected_tasks = {r["key"]: r for r in result.get("memory_evidence", [])
+                              if r.get("kind") == "pending_task" and r.get("key")}
+            task_keys = set()
+            for request in result["addressed_requests"]:
+                task = selected_tasks.get(request.get("key"))
+                if task:
+                    task_keys.add(request["key"])
+                    request.update({k: v for k, v in task.items()
+                                    if k not in {"kind", "text", "operations"}})
+            result["memory_evidence"] = [r for r in result.get("memory_evidence", [])
+                                         if r.get("key") not in task_keys]
+            fresh_request = any(
+                r.get("source_event_seq") == result.get("triggering_action", {}).get("seq")
                 for r in result["addressed_requests"]
-            ]
+            )
+            if result.get("continued_requests") and fresh_request:
+                # Unrelated old opportunities remain in the server's request
+                # ledger and memory task index. They must not fill a fresh
+                # request's prompt or recursively reserve their dependencies.
+                result["deferred_task_count"] = len(result.pop("continued_requests"))
             result.pop("addressed_question", None)
+            goal = result.get("behavior_state", {}).pop("current_short_term_goal", "")
+            if fresh_request and goal not in {r.get("text") for r in result["addressed_requests"]}:
+                goal = ""  # The old intent remains in the server ledger.
             result["current_task"] = {
-                "goal": result.get("behavior_state", {}).get("current_short_term_goal", ""),
+                **({"goal": goal} if goal else {}),
                 "instruction": (
                     "只回应这些当前请求；旧台词不作本轮答复。接受委托时发布本人具体尝试。"
                 ),
@@ -1014,6 +1039,18 @@ class ActionRuntimeMixin:
                     scene_id=module.state["scene_id"], reachable_ids=reachable,
                     name=profile.document["name"],
                 )
+                from app.agents.task_receipts import bind_task_operands, current_task_targets
+
+                # Registration commits before context selection or generation.
+                # A budget refusal must still leave the original key, executor
+                # and uniquely visible operands available to reload/retry.
+                targets = await current_task_targets(session, room.id, public)
+                behavior.pending_requests = [
+                    bind_task_operands(r, inventory, binding.member_id,
+                                       state["triggering_member_id"], targets=targets)
+                    if r.get("kind") == "delegate" and r.get("available", True) else r
+                    for r in behavior.pending_requests
+                ]
                 if retired:
                     self.rooms.append(session, room, "agent.teammate_requests_updated",
                                       room.host_member_id,
@@ -1145,6 +1182,9 @@ class ActionRuntimeMixin:
                 ]
                 trigger = next(e for e in events if e.seq == state["triggering_event_seq"])
                 public = await self.service.entities.public(session, state["room_id"])
+                from app.agents.task_receipts import current_task_targets
+
+                task_targets = await current_task_targets(session, room.id, public)
                 module = await self.service.module(session, state["room_id"])
                 public_ids = {e["id"] for e in public} | {module.state["scene_id"]}
                 if not public:
@@ -1303,8 +1343,23 @@ class ActionRuntimeMixin:
 
             requests = [bind_task_operands(
                 r, public_inventory, binding.member_id, trigger.actor_member_id,
-                targets=[e for e in public if e.get("fact_scope") == "current_scene"],
+                targets=task_targets,
             ) for r in requests]
+            if requests:
+                async def freeze_requests(session, room):
+                    row = await session.get(AgentBehaviorRecord, (room.id, binding.member_id))
+                    if row:
+                        saved = BehaviorState.model_validate(row.document)
+                        by_key = {r["key"]: r for r in requests}
+                        saved.pending_requests = [by_key.get(r["key"], r)
+                                                  for r in saved.pending_requests]
+                        row.document = saved.model_dump(mode="json")
+
+                await self.service.mutate(state["room_id"], freeze_requests)
+                by_key = {r["key"]: r for r in requests}
+                behavior.pending_requests = [by_key.get(r["key"], r)
+                                             for r in behavior.pending_requests]
+                additions["behavior_state"] = behavior.model_dump(mode="json")
             request_text = "\n".join(r["text"] for r in requests)
             requested_action = any(r["kind"] == "delegate" for r in requests)
             requested_operations = list(
@@ -1360,7 +1415,7 @@ class ActionRuntimeMixin:
 
                     bound_requests = normalize_teammate_target(
                         candidate, requests, run.context.get("inventory_state") or {},
-                        binding.member_id, trigger.actor_member_id, targets=public,
+                        binding.member_id, trigger.actor_member_id, targets=task_targets,
                     )
                     decisions.append(candidate)
                     fingerprint = public_fingerprint(
@@ -1805,7 +1860,9 @@ class ActionRuntimeMixin:
                         SessionStateV1.model_validate(room.session_state).characters[UUID(slot.id)]
                     )
                     require(not reason, reason)
-        run_id, _, context, cached = await self.prepare_run(state, binding_id, node)
+        run_id, _, context, cached = await self.prepare_run(
+            state, binding_id, node, context_additions=additions,
+        )
         if cached and (schema is not KeeperNarration or context.get("response_brief")):
             return run_id
         context = {**context, **(additions or {})}
@@ -2593,12 +2650,15 @@ class ActionRuntimeMixin:
                 validate_search_plan(restored, context)
             if schema is not KeeperNarration:
                 return
-            changed = [row for row in verified_for_repair.values()
-                       if row["body_quote"] not in restored.public_narration]
+            from app.agents.narration_coverage import retained_fact_errors
+
+            changed = retained_fact_errors(
+                restored, context.get("response_brief", {}), verified_for_repair.values(),
+            ) if verified_for_repair else []
             if changed:
                 raise ModelFormatError("修复丢失已验证内容", [{
                     "field": "answer_coverage",
-                    "code": "补齐缺项并保留以下已验证正文片段及来源："
+                    "code": "补齐缺项并保留以下已验证需求、来源及关键事实（允许等义改写）："
                     + json.dumps(changed, ensure_ascii=False),
                 }])
 
@@ -2627,7 +2687,11 @@ class ActionRuntimeMixin:
 
         async def record_call(document):
             if schema is KeeperNarration:
-                from app.agents.narration_coverage import coverage_audit, normalize_coverage_spans
+                from app.agents.narration_coverage import (
+                    coverage_audit,
+                    freeze_verified_fact,
+                    normalize_coverage_spans,
+                )
 
                 brief = context.get("response_brief", {})
                 raw = document.get("raw_output") or document.get("generated_output") or {}
@@ -2657,7 +2721,9 @@ class ActionRuntimeMixin:
                                 )
                             except (RoomError, ValueError):
                                 continue
-                            verified_for_repair.setdefault(row["requirement_id"], row)
+                            verified_for_repair.setdefault(
+                                row["requirement_id"], freeze_verified_fact(row, brief),
+                            )
                 document = {
                     **document,
                     "answer_origin": "native" if document.get("attempt", 1) == 1 else "repaired",

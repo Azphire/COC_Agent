@@ -512,7 +512,7 @@ class AgentRuntime(ActionRuntimeMixin):
 
         return await route(self, state)
 
-    async def prepare_run(self, state, binding_id, node, summary=False):
+    async def prepare_run(self, state, binding_id, node, summary=False, *, context_additions=None):
         async def operation(session, room):
             cycle = await session.get(AgentCycle, state["cycle_id"])
             binding = await session.get(RoomAgentBinding, binding_id)
@@ -532,10 +532,10 @@ class AgentRuntime(ActionRuntimeMixin):
             )
             if previous and previous.structured_output is not None:
                 return previous.id, profile.role, previous.context, True
-            additions = None
+            additions = dict(context_additions or {})
             if node == "keeper_decide_repair":
                 original = await session.get(AgentRun, cycle.state["keeper_run_id"])
-                additions = {"validation_errors": original.tool_results}
+                additions["validation_errors"] = original.tool_results
             run_id = previous.id if previous else str(uuid4())
             with session.no_autoflush:
                 context, events, _ = await build_context(
@@ -628,7 +628,24 @@ class AgentRuntime(ActionRuntimeMixin):
             session.add(run)
             return run.id, profile.role, context, False
 
-        return await self.service.mutate(state["room_id"], operation)
+        from app.memory.service import MemoryBudgetError
+
+        try:
+            return await self.service.mutate(state["room_id"], operation)
+        except MemoryBudgetError as error:
+            # The context transaction has rolled back. Persist only reference
+            # and size metadata in a fresh transaction before normal failure
+            # handling preserves the task and reports the blocked attempt.
+            audit = {**error.audit, "phase": node, "binding_id": binding_id}
+
+            async def save_memory_budget(session, room):
+                cycle = await session.get(AgentCycle, state["cycle_id"])
+                cycle.state = {**cycle.state, "memory_budget_failure": audit}
+                self.rooms.append(session, room, "memory.context_blocked", room.host_member_id,
+                                  {"cycle_id": cycle.id, **audit}, "host_only")
+
+            await self.service.mutate(state["room_id"], save_memory_budget)
+            raise
 
     async def decide(self, state, binding_id, node, summary=False, narrator=False):
         run_id, role, context, cached = await self.prepare_run(state, binding_id, node, summary)

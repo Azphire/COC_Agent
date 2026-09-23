@@ -204,8 +204,65 @@ def reference_resolution(events, query, scene_id, targets, target_ids, metadata)
             "historical_only": True}
 
 
+def current_tasks(tasks, *, request_keys=None, source_seqs=(), cycle_id=None,
+                  query="", target_ids=()):
+    """Select explicitly active work; visible old work remains in the lookup ledger.
+
+    None preserves the caller's preselected-task contract. Runtime callers pass
+    an explicit scope even when it is empty, so lexical overlap cannot silently
+    promote every old promise or private goal into a required dependency.
+    """
+    keys, seqs = set(request_keys or []), set(source_seqs)
+    referenced = set()
+    if re.search(r"(?:旧|未完成|待完成|待办|之前|此前|刚才|先前|早先).{0,12}"
+                 r"(?:任务|委派|委托|目标)|继续.{0,12}(?:任务|工作|交接)", query):
+        # An explicit reference to unfinished work can depend on an older
+        # request. Shared scene/verbs alone do not identify that request.
+        neutral = terms("任务 待办 工作 目标 委派 委托 未完成 待完成 完成 继续 刚才 之前 此前 "
+                        "先前 早先 根据 下一步 抵达 到达 之后 以前 核对 检查 查看 观察 确认 "
+                        "请你 请帮我 需要 还需 尚未 是否 什么 如何 怎么 以及 然后 我们 队友")
+        wanted = terms(query) - neutral
+        candidates = {}
+        for position, task in enumerate(tasks):
+            if (task.get("kind") != "pending_task" or task.get("key") in keys
+                    or task.get("source_event_seq", task.get("source", {}).get("seq")) in seqs):
+                continue
+            overlap = wanted & (terms(task.get("text", "")) - neutral)
+            linked = bool(_identifiers(task) & set(target_ids))
+            if linked or len(overlap) >= 2 or any(len(word) >= 4 for word in overlap):
+                signature = json.dumps(task, ensure_ascii=False, sort_keys=True)
+                candidates.setdefault(signature, []).append(position)
+        # Ambiguous old work remains indexed, never guessed or all promoted.
+        if len(candidates) == 1:
+            referenced.update(next(iter(candidates.values())))
+    selected, index, deduplicated, seen = [], [], [], set()
+    for position, task in enumerate(tasks):
+        source_ref = task.get("source", {})
+        active = (request_keys is None or task.get("key") in keys
+                  or task.get("source_event_seq", source_ref.get("seq")) in seqs
+                  or position in referenced
+                  or bool(cycle_id and task.get("kind") == "short_term_goal"
+                          and source_ref.get("turn") == cycle_id))
+        lookup = {k: task[k] for k in ("key", "owner", "status", "target_id",
+                  "remaining_quantity", "remaining_item_instance_ids") if k in task}
+        lookup.update(ref=source_ref.get("ref"), required=active)
+        if position in referenced:
+            lookup["selection_reason"] = "explicit_unique_task_reference"
+        index.append(lookup)
+        if not active:
+            continue
+        signature = json.dumps(task, ensure_ascii=False, sort_keys=True)
+        if signature in seen:
+            deduplicated.append({"ref": source_ref.get("ref"), "reason": "same_task_projection"})
+            continue
+        seen.add(signature)
+        selected.append(task)
+    return selected, index, deduplicated
+
+
 def select_memory(events, query, *, scene_id=None, tasks=(), memories=(), budget=2600,
-                  targets=(), target_ids=()):
+                  targets=(), target_ids=(), current_request_keys=None, task_source_seqs=(),
+                  current_cycle_id=None, optional_budget=None):
     """Select exact facts and related segments without a read-only question gate."""
     events, _ = story_events(events, include_initial_reveals=True)
     from app.memory.segments import source_metadata_map
@@ -213,8 +270,20 @@ def select_memory(events, query, *, scene_id=None, tasks=(), memories=(), budget
     source_metadata = source_metadata_map(events)
     by_seq = {e["seq"]: e for e in events}
     resolution = reference_resolution(events, query, scene_id, targets, target_ids, source_metadata)
+    tasks, task_index, task_duplicates = current_tasks(
+        tasks, request_keys=current_request_keys, source_seqs=task_source_seqs,
+        cycle_id=current_cycle_id, query=query, target_ids=resolution["target_ids"],
+    )
     resolved_ids = set(resolution["target_ids"])
     task_ids = set().union(*(_identifiers(t) for t in tasks)) if tasks else set()
+    dependency_seqs = {seq for task in tasks for key in (
+        "completion_event_seqs", "result_event_seqs", "target_source_event_seqs",
+    ) for seq in task.get(key, [])}
+    dependency_seqs.update(
+        task.get("target_source", {}).get(field)
+        for task in tasks for field in ("revealed_event_seq", "source_event_seq")
+    )
+    dependency_seqs.discard(None)
     target_words = " ".join(" ".join([t.get("title", ""), *t.get("aliases", [])])
                             for t in targets if t.get("id") in resolved_ids)
     demand = query + " " + target_words + " " + " ".join(t.get("text", "") for t in tasks)
@@ -223,7 +292,8 @@ def select_memory(events, query, *, scene_id=None, tasks=(), memories=(), budget
     def relevance(event, material):
         identifiers = _identifiers(event["payload"])
         linked = bool(identifiers & (resolved_ids | task_ids)
-                      or event["seq"] in resolution["source_seqs"])
+                      or event["seq"] in resolution["source_seqs"]
+                      or event["seq"] in dependency_seqs)
         lexical = len(wanted & terms(material))
         if not lexical and not linked:
             return 0
@@ -279,6 +349,8 @@ def select_memory(events, query, *, scene_id=None, tasks=(), memories=(), budget
         # moves. Only a requested outcome or an actual object/task link makes
         # those receipts mandatory. Actor/executor identity grants no such link.
         required = bool(
+            event["seq"] in dependency_seqs
+            or
             fact["kind"] in {"result", "resource_result"} and (
                 _requested_result(query)
                 or _legacy_check_target_requested(fact, query)
@@ -312,21 +384,32 @@ def select_memory(events, query, *, scene_id=None, tasks=(), memories=(), budget
                 candidates.extend((False, score, event["seq"], r)
                                   for r in quote_chunks(record, query))
 
-    selected, omitted, deduplicated, used = [], [], [], 2
-    required_omitted, required_refs = [], []
+    selected, omitted, deduplicated, used = [], [], task_duplicates, 2
+    required_omitted, required_refs, required_records, seen_records = [], [], [], set()
 
     def add(record, required=False):
         nonlocal used
-        size = len(json.dumps(record, ensure_ascii=False, separators=(",", ":"))) + 1
+        encoded = json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        size = len(encoded) + 1
         ref = record.get("source", {}).get("ref", "task")
-        if used + size <= budget:
+        if encoded in seen_records:
+            deduplicated.append({"ref": ref, "reason": "same_exact_record"})
+            return True
+        limit = budget if required or optional_budget is None else min(budget, optional_budget)
+        if required:
+            required_records.append({"ref": ref, "kind": record["kind"], "chars": size,
+                                     **({"key": record["key"]} if record.get("key") else {})})
+        if used + size <= limit:
             selected.append(record)
+            seen_records.add(encoded)
             used += size
             if required:
                 required_refs.append(ref)
             return True
         else:
-            miss = {"ref": ref, "reason": "character_budget", "kind": record["kind"]}
+            miss = {"ref": ref, "reason": "character_budget", "kind": record["kind"],
+                    "chars": size, "used_chars": used, "budget": limit,
+                    "excess_chars": used + size - limit}
             omitted.append(miss)
             if required:
                 required_omitted.append(miss)
@@ -410,6 +493,9 @@ def select_memory(events, query, *, scene_id=None, tasks=(), memories=(), budget
                       "required_omitted": required_omitted,
                       "required_refs": list(dict.fromkeys(required_refs)),
                       "required_complete": not required_omitted,
+                      "budget": budget, "used_chars": used, "optional_budget": optional_budget,
+                      "required_chars": 2 + sum(r["chars"] for r in required_records),
+                      "required_records": required_records, "task_index": task_index,
                       "deduplicated": deduplicated, "reference_resolution": resolution,
                       "coverage_claim": "selected exact fields and recoverable sources only"}
 
@@ -436,10 +522,17 @@ async def visible_tasks(session, room_id, events, *, member_id=None, keeper=Fals
                            "owner": row.member_id, "status": request.get("status", "pending"),
                            "operations": request.get("operations", []),
                            **{key: request[key] for key in (
-                               "request_id", "executor_member_id", "target_id", "item_ids",
+                               "key", "request_id", "source_event_seq", "source_start",
+                               "source_end",
+                               "executor_member_id", "target_id", "item_ids",
                                "item_instance_ids", "recipient_member_id", "quantity",
                                "remaining_quantity", "remaining_item_instance_ids",
-                               "completion_event_seqs",
+                               "completion_event_seqs", "result_event_seqs", "last_result_kind",
+                               "target_source_event_seqs", "target_binding", "target_candidates",
+                               "needs_clarification", "target_source", "operation_operands",
+                               "operation_progress", "required_items", "remaining_items",
+                               "unresolved_operands",
+                               "technical_failure",
                            ) if key in request},
                            "source": source(event, metadata[event["seq"]]["scene_id"]),
                            "epistemic": "requested_not_executed", "historical_only": True})

@@ -8,6 +8,7 @@ from app.preparation.action_authority import (
     addressed_spans,
     declared_action,
     information_question,
+    request_clauses,
     requested_action_kinds,
     speaker_action,
 )
@@ -54,6 +55,33 @@ def historical_third_person_question(text, names=()):
         + r"[^，,。；;！？!?\n]{0,12}(?:早先|先前|之前|以前|刚才|当时|曾|原先|说过|提过)",
         text,
     ))
+
+
+def request_scopes(request):
+    """Split only independently classified clauses, retaining literal offsets."""
+    groups = []
+    for piece in request_clauses(request.text):
+        text = piece["text"]
+        kind = ("cancel" if cancellation(text) else "question"
+                if information_question(text) else "delegate"
+                if requested_action_kinds(text) else None)
+        if not groups:
+            groups.append([0, piece["end"], kind])
+        elif kind and groups[-1][2] and kind != groups[-1][2]:
+            groups.append([piece["start"], piece["end"], kind])
+        else:
+            groups[-1][1] = piece["end"]
+            groups[-1][2] = groups[-1][2] or kind
+    if len(groups) < 2:
+        if information_question(request.text) and not requested_action_kinds(request.text):
+            return [request.model_copy(update={"kind": "question", "operations": []})]
+        return [request]
+    return [request.model_copy(update={
+        "text": request.text[start:end], "kind": kind or request.kind,
+        "source_start": request.source_start + start, "source_end": request.source_start + end,
+        "target_id": None, "operations": requested_action_kinds(request.text[start:end])
+        if kind == "delegate" else [],
+    }) for start, end, kind in groups]
 
 
 def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
@@ -130,8 +158,9 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
         )
         if cancellation(request.text):
             request.kind, request.operations = "cancel", []
-        if request.kind == "delegate" and information_question(request.text):
-            request.kind = "question"
+        if (request.kind == "delegate" and information_question(request.text)
+                and not requested_action_kinds(request.text)):
+            request.kind, request.operations = "question", []
         if not any(
             r.addressee_id == request.addressee_id
             and r.source_start == request.source_start
@@ -203,24 +232,7 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
                 operations=operations,
             )
         )
-    expanded = []
-    for request in requests:
-        pieces = list(re.finditer(r"[^，,。；;！？!?]+[，,。；;！？!?]?", request.text))
-        replacement = next((p for p in pieces[1:]
-                            if not cancellation(p[0]) and requested_action_kinds(p[0])), None)
-        if replacement and cancellation(request.text[:replacement.start()]):
-            boundary = request.source_start + replacement.start()
-            expanded.append(request.model_copy(update={
-                "kind": "cancel", "text": request.text[:replacement.start()],
-                "source_end": boundary, "operations": [],
-            }))
-            text = request.text[replacement.start():]
-            expanded.append(request.model_copy(update={
-                "kind": "delegate", "text": text, "source_start": boundary,
-                "target_id": None, "operations": requested_action_kinds(text),
-            }))
-        else:
-            expanded.append(request)
+    expanded = [scoped for request in requests for scoped in request_scopes(request)]
     focus.requests = sorted(expanded, key=lambda r: r.source_start)[:12]
     for request in focus.requests:
         targets = [
@@ -393,6 +405,14 @@ def reconcile_requests(behavior, requests, *, seq, scene_id, reachable_ids, name
             new["needs_clarification"] = not bool(new["cancelled_keys"])
     active, retired = [], []
     for old in behavior.pending_requests:
+        # Correct only a provable historical classification error, using the
+        # stored original utterance. Preserve the request identity and audit;
+        # unfinished real delegations and mixed requests remain untouched.
+        if (old.get("kind") == "delegate" and information_question(old.get("text", ""))
+                and not requested_action_kinds(old.get("text", ""))):
+            retired.append({**old, "status": "reclassified", "updated_event_seq": seq,
+                            "reason": "original_request_is_information_question"})
+            old = {**old, "kind": "question", "operations": []}
         status = None
         if old.get("kind") == "question" and not question_request(old["text"], name):
             status = "superseded"
@@ -431,7 +451,7 @@ def reconcile_requests(behavior, requests, *, seq, scene_id, reachable_ids, name
             active.append(current)
     keys = {r["key"] for r in active}
     active.extend(r for r in incoming if r["key"] not in keys)
-    behavior.pending_requests = active[-12:]
+    behavior.pending_requests = active
     behavior.request_history = [*behavior.request_history, *retired][-24:]
     if active and behavior.task_status != "proposed":
         behavior.task_status = "pending"

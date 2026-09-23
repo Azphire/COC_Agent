@@ -101,12 +101,14 @@ def test_normalization_cannot_pick_good_sentence_and_hide_conflicting_one(index,
     assert not coverage_audit(effective, context["response_brief"])["complete"]
 
 
-def test_disjoint_matching_answers_are_ambiguous_even_if_both_sourced():
+def test_disjoint_consistent_answers_choose_shortest_earliest_verified_span():
     context = coverage_context()
     original = good_output("林先生早先估计物品少了九件。林先生之前也说物品大约少了九件。")
     original["answer_coverage"][0]["body_quote"] = "wrong-copy"
     effective, changes = normalize_coverage_spans(original, context["response_brief"])
-    assert not changes and effective == original
+    assert len(changes) == 1
+    assert effective["answer_coverage"][0]["body_quote"] == "林先生早先估计物品少了九件。"
+    assert coverage_audit(effective, context["response_brief"])["complete"]
 
 
 def test_adjacent_sentences_can_supply_speaker_and_history_context():
