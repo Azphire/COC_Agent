@@ -361,7 +361,7 @@ def test_bounded_exit_projection_keeps_every_destination_and_requirement():
     prompt = planning_prompt({"omit_bound_prompt_metadata": True, "approved_exits": routes})
     assert len(prompt["approved_exits"]) == 8
     for original, projected in zip(routes, prompt["approved_exits"], strict=True):
-        assert projected == {k: v[:60] if k == "target_description" else v
+        assert projected == {k: v
                              for k, v in original.items() if k != "target_scene_node_id"}
 
 

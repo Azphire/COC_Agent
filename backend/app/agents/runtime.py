@@ -12,7 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from sqlalchemy import select
 
-from app.agents.action_runtime import ActionRuntimeMixin
+from app.agents.action_runtime import ActionRuntimeMixin, generation_prompt
 from app.agents.schemas import AgentCycleState, AgentDecision, SummaryOutput
 from app.agents.tools import AgentTools, definitions
 from app.domain.character import utc_now
@@ -810,7 +810,9 @@ class AgentRuntime(ActionRuntimeMixin):
             result, latency = await self.service.model.generate(
                 [
                     {"role": "system", "content": instruction},
-                    {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                    {"role": "user", "content": json.dumps(
+                        generation_prompt(context, AgentDecision), ensure_ascii=False,
+                    )},
                 ],
                 response_schema=(GroundedNarration if narrator and grounded else SummaryOutput)
                 if summary or narrator
@@ -1520,7 +1522,9 @@ class AgentRuntime(ActionRuntimeMixin):
                             "role": "system",
                             "content": "总结可见事件，区分事实和推断。只返回 content。",
                         },
-                        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                        {"role": "user", "content": json.dumps(
+                            generation_prompt(context, SummaryOutput), ensure_ascii=False,
+                        )},
                     ],
                     response_schema=SummaryOutput,
                     on_call=once,

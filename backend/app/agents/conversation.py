@@ -361,10 +361,25 @@ async def settle_teammate_tasks(service, session, room):
             or cycle.status == "cancelled"
             or not feedback
         )
-        confirmed = observation_completed or settled
+        successful_operations = {
+            fact["operation"] for fact in public_results.get("current_result_facts", [])
+            if fact.get("status") == "success" and fact.get("operation") != "check"
+        }
+        if observation_completed:
+            successful_operations.add("observe")
+        requested_operations = {
+            op for request in behavior.pending_requests
+            if request.get("key") in cycle.state.get("request_keys", [])
+            for op in request.get("operations", [])
+        }
+        confirmed = bool(successful_operations) and (
+            not requested_operations or requested_operations <= successful_operations
+        )
         behavior.task_status = (
             "generation_failed"
             if technical
+            else "cancelled"
+            if cycle.status == "cancelled"
             else "blocked"
             if blocked
             else "completed"
@@ -408,9 +423,12 @@ async def settle_teammate_tasks(service, session, room):
                     ):
                         pending.append(request)
                         continue
-                    remaining = set(request.get("operations", [])) - operations
-                    if remaining and request.get("kind") == "delegate":
-                        pending.append({**request, "operations": sorted(remaining)})
+                    remaining = set(request.get("operations", [])) - successful_operations
+                    if (request.get("kind") == "delegate"
+                            and behavior.task_status != "cancelled"
+                            and (remaining or not confirmed)):
+                        pending.append({**request, "operations": sorted(remaining),
+                                        "last_result_kind": behavior.task_status})
                     else:
                         behavior.request_history = [*behavior.request_history, {
                             **request, "status": behavior.task_status,

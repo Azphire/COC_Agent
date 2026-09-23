@@ -237,8 +237,13 @@ def test_scene_bound_test_npc_converse_and_private_summary_never_public(client, 
     )["events"]
     assert private_text not in json.dumps(events)
     speech = [e for e in events if e["type"] == "npc.spoke"]
-    assert len(speech) == 2 and speech[0]["payload"]["text"] == spoken_text
-    assert "说不清楚" in speech[1]["payload"]["text"]
+    # Batch 43 stopped turning generation/privacy failures into invented NPC
+    # ignorance. Isolated baseline 589da2a reproduces the old two-speech failure;
+    # preserve that boundary when batch 44 adds historical memory sources.
+    assert len(speech) == 1 and speech[0]["payload"]["text"] == spoken_text
+    fallback = [e for e in events if e["type"] == "keeper.narration"][-1]
+    assert "未完整生成" in fallback["payload"]["text"]
+    assert "说不清楚" not in fallback["payload"]["text"]
 
 
 @pytest.mark.parametrize(

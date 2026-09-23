@@ -572,8 +572,10 @@ class TeammateBehaviorPolicy:
             task_cycle_id=state.task_cycle_id,
             last_result=state.last_result,
             last_attempt_result=state.last_attempt_result,
+            # A model saying 'complete' is not a receipt. Settlement clears
+            # the goal only after the requested operation actually succeeds.
             current_short_term_goal=(safe_goal or "")
-            if decision.goal_status in {"complete", "abandon", "adjust"}
+            if decision.goal_status in {"abandon", "adjust"}
             else safe_goal or state.current_short_term_goal,
             last_action_type=decision.action_type
             if decision.mode != "pass"

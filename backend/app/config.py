@@ -41,7 +41,8 @@ class Settings(BaseSettings):
     _credential_sources: dict[str, str] = PrivateAttr(default_factory=dict)
     model_timeout_seconds: float = Field(default=120.0, gt=0)
     model_temperature: float = Field(default=0.3, ge=0, le=2)
-    model_context_limit: int = Field(default=8192, ge=2048, le=32768)
+    # Budget includes the provider schema, system messages and output reserve.
+    model_context_limit: int = Field(default=16384, ge=2048, le=32768)
     model_output_limit: int = Field(default=900, ge=128, le=4096)
     model_keep_alive: str = "5m"
     model_think: bool = False

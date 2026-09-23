@@ -25,6 +25,16 @@ def restored_recall_private_text(context, text, fact_ids=()):
     output. This narrow projection is only for the legacy module-secret gate,
     which otherwise treats every previous scene description as undisclosed.
     """
+    from app.memory.recall import public_historical_quotes
+
+    # The source was selected from this reader's active public branch. Strip
+    # only complete verbatim quotes from the legacy scene-secret comparison;
+    # HO, result, attribution and publication checks still see the full output.
+    original = text
+    if re.search(r"之前|此前|当时|早先|原文|原话|曾经|记录", text):
+        for quote in public_historical_quotes(context):
+            if len(quote) >= 4:
+                text = text.replace(quote, "")
     if not context.get("readonly_recall") or not context.get("fact_evidence"):
         return text
     from app.memory.facts import render_facts
@@ -32,7 +42,7 @@ def restored_recall_private_text(context, text, fact_ids=()):
     known = {record["id"]: record for record in context["fact_evidence"]}
     ids = list(dict.fromkeys([key for key in fact_ids if key in known] + list(known)))
     restored = render_facts([known[key] for key in ids])
-    return "" if text.strip() == restored.strip() else text
+    return "" if original.strip() == restored.strip() else text
 
 
 def internal_identifiers(value):
@@ -135,6 +145,9 @@ class NarrationStream:
                             context.get("response_brief", {}).get("allowed_facts", [])]
                 sources += [f.get("effect", "") for f in snapshot["results"].get(
                     "current_result_facts", [])]
+                from app.memory.recall import public_historical_quotes
+
+                sources += public_historical_quotes(context)
                 if context.get("readonly_recall") and context.get("fact_evidence"):
                     from app.memory.facts import render_facts
 

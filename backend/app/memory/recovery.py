@@ -12,16 +12,25 @@ from app.agents.schemas import SummaryOutput
 from app.domain.character import utc_now
 from app.memory.events import (
     current_participants,
-    epistemic_event,
     incidental_records,
     story_events,
 )
+from app.memory.segments import (
+    branch_revision,
+    canonical,
+    make_segment,
+    required_records,
+    segment_document,
+    select_chunks,
+    validate_segment,
+)
+from app.models.budget import measure_request
 from app.persistence.adjudication_models import SummaryRecoveryRecord
 from app.persistence.agent_models import AgentCycle, AgentMemory, AgentRun, ProfileRecord
 from app.rooms.service import Identity, require
 
 SUMMARY_INSTRUCTION = (
-    "只依据这批列出的可见事件和旧摘要更新简短摘要，区分事实与推测；"
+    "只依据这批列出的可见原始事件写独立分段摘要，区分事实与推测；"
     "不得添加新的实体、证据或事件 ID，不推断事件列表之后的安排。"
     "只总结剧情；不要保留旧摘要中的初始化、房间管理和角色发布或分配安排。"
     "current_participants是当前权威状态，旧摘要不能覆盖它，不把发布角色推断为已分配。"
@@ -30,7 +39,16 @@ SUMMARY_INSTRUCTION = (
     "keeper.narration只是模型叙述；关键发现与成功仅以entity.revealed、clue.revealed、check.resolved、scene.updated确认。"
     "incidental_sources是已经公开说出的KP即兴补充，摘要提及时保留其即兴来源、说话人和场景，不能升级为关键发现。"
     "action.submitted和agent.action_proposed是意图；提问、建议、条件假设不是已执行动作。"
+    "保留经过、人物立场和未完成事项；检定成功不代表物品操作或转场完成。"
+    "source_json_fragment只是一条原始事件的连续片段，不推测片段外内容。"
 )
+
+
+def summary_messages(context):
+    return [
+        {"role": "system", "content": SUMMARY_INSTRUCTION},
+        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+    ]
 
 
 class SummaryRecoveryService:
@@ -60,9 +78,13 @@ class SummaryRecoveryService:
         )
         for binding in bindings:
             run_id = None
+            prepared_branch = None
+            selected_chunks = []
+            prepared_tasks = []
+            prepared_required = []
 
             async def prepare(session, room):
-                nonlocal run_id
+                nonlocal run_id, prepared_branch, selected_chunks, prepared_tasks, prepared_required
                 cycle = await session.get(AgentCycle, cycle_id)
                 ordinal = await session.scalar(
                     select(func.count())
@@ -89,10 +111,11 @@ class SummaryRecoveryService:
                 ):
                     return None
                 profile = await session.get(ProfileRecord, binding.profile_id)
-                events = await self.agents.rooms.events(
+                visible_events = await self.agents.rooms.events(
                     session, room, Identity(binding.member_id, profile.role == "keeper")
                 )
-                events, selection = story_events(events)
+                prepared_branch = branch_revision(visible_events)
+                events, selection = story_events(visible_events, include_initial_reveals=True)
                 old = await session.scalar(
                     select(AgentMemory)
                     .where(
@@ -104,7 +127,9 @@ class SummaryRecoveryService:
                     .order_by(AgentMemory.created_at.desc())
                     .limit(1)
                 )
-                cutoff = old.coverage_end if old else 0
+                # Rebuild legacy summaries from original events once; their
+                # old coverage did not validate designated source fields.
+                cutoff = recovery.last_successful_summary_seq if recovery.segment_version else 0
                 unsummarized = [e for e in events if e["seq"] > cutoff]
                 cycle.state = {
                     **cycle.state,
@@ -119,6 +144,8 @@ class SummaryRecoveryService:
                 if (
                     not manual
                     and not recovery.stale
+                    and not recovery.partial_event_seq
+                    and not any(e["type"] == "scene.updated" for e in unsummarized[:-1])
                     and (
                         len(unsummarized)
                         < self.agents.settings.agent_event_window
@@ -130,39 +157,62 @@ class SummaryRecoveryService:
                     return None
                 eligible = [
                     e
+                    # Explicit rebuild only runs after settlement. Recent
+                    # dialogue remains verbatim in context independently of
+                    # these coverage records. Automatic retries retain it here.
                     for e in (
-                        events
-                        if manual or recovery.stale
-                        else events[: -self.agents.settings.agent_event_window]
+                        events if manual else events[: -self.agents.settings.agent_event_window]
                     )
                     if e["seq"] > cutoff
                 ]
                 if not eligible:
                     return None
+                from app.memory.recall import visible_tasks
+
+                prepared_tasks = await visible_tasks(
+                    session,
+                    room.id,
+                    events,
+                    member_id=binding.member_id,
+                    keeper=profile.role == "keeper",
+                )
                 context = {
                     "phase": "summary",
                     "previous_summary": None,
                     "current_participants": await current_participants(self.agents, session, room),
                     "events": [],
+                    "current_task_projection": {
+                        "as_of_seq": events[-1]["seq"],
+                        "basis": "current task state, not historical execution",
+                        "tasks": prepared_tasks,
+                    },
                 }
-                if old:
-                    from app.memory.facts import summary_sources
 
-                    context["previous_summary"] = summary_sources(events, old.source_event_ids)
-                budget = min(
-                    self.agents.settings.agent_context_chars,
-                    max(
-                        2500,
-                        self.agents.settings.model_context_limit
-                        - self.agents.settings.model_output_limit
-                        - 1200,
-                    ),
+                def fits(proposed):
+                    return (
+                        len(json.dumps(proposed, ensure_ascii=False))
+                        <= self.agents.settings.agent_context_chars
+                        and measure_request(
+                            self.agents.settings,
+                            summary_messages(proposed),
+                            response_schema=SummaryOutput,
+                        )["within_token_limit"]
+                    )
+
+                context, selected_chunks = select_chunks(
+                    eligible,
+                    context,
+                    fits,
+                    partial_seq=recovery.partial_event_seq,
+                    partial_offset=recovery.partial_event_offset,
+                    all_events=events,
                 )
-                for event in eligible:
-                    proposed = {**context, "events": [*context["events"], epistemic_event(event)]}
-                    if len(json.dumps(proposed, ensure_ascii=False)) > budget:
-                        break
-                    context = proposed
+                # Freeze the designated set before the model call. Exact
+                # fields stay in the server ledger and cannot be inferred from
+                # the existence of reference IDs after generation.
+                prepared_required = required_records(
+                    events, [c["seq"] for c in selected_chunks if c["end"] == c["total"]]
+                )
                 covered = context["events"] or eligible[:1]
                 recovery.pending_start_seq, recovery.pending_end_seq = (
                     covered[0]["seq"],
@@ -176,6 +226,7 @@ class SummaryRecoveryService:
                         "eligible_count": len(eligible),
                         "selected_count": len(context["events"]),
                         "selected_seqs": [e["seq"] for e in context["events"]],
+                        "source_chunks": selected_chunks,
                     },
                 }
                 recovery.last_attempted_cycle, recovery.last_attempted_time = cycle.id, utc_now()
@@ -242,13 +293,7 @@ class SummaryRecoveryService:
                         await self.agents.mutate(room_id, consume)
 
                 result, latency = await self.agents.model.generate(
-                    [
-                        {
-                            "role": "system",
-                            "content": SUMMARY_INSTRUCTION,
-                        },
-                        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
-                    ],
+                    summary_messages(context),
                     response_schema=SummaryOutput,
                     max_attempts=1,
                     on_call=once,
@@ -256,13 +301,22 @@ class SummaryRecoveryService:
                 )
 
                 async def save(session, room):
+                    visible = await self.agents.rooms.events(
+                        session, room, Identity(binding.member_id, role == "keeper")
+                    )
+                    run = await session.get(AgentRun, run_id)
+                    cycle = await session.get(AgentCycle, cycle_id)
+                    require(
+                        run
+                        and run.status == "running"
+                        and cycle.status != "cancelled"
+                        and branch_revision(visible) == prepared_branch,
+                        "读档或取消已使摘要生成结果过期",
+                    )
                     content = await self.agents.sanitize(session, room, result.structured.content)
                     source = json.dumps(context, ensure_ascii=False)
                     ids = re.findall(r"(?:event|事件|seq)[ #:=：]*(\d+)", content)
                     known_seqs = {e["seq"] for e in context["events"]}
-                    if old_id:
-                        previous = await session.get(AgentMemory, old_id)
-                        known_seqs.update(previous.source_event_ids)
                     require(all(int(i) in known_seqs for i in ids), "摘要引用了不存在的事件", 422)
                     for identifier in re.findall(
                         r"(?:ev_|entity_|node_|block_)[\w-]+|[0-9a-f]{8}-[0-9a-f-]{27,}", content
@@ -275,36 +329,90 @@ class SummaryRecoveryService:
                         require(identifier in source, "摘要引用了未提供的标识", 422)
                     old = await session.get(AgentMemory, old_id) if old_id else None
                     require(not old or old.active, "摘要已被其他请求更新")
-                    source_events, _ = story_events(
-                        await self.agents.rooms.events(
-                            session, room, Identity(binding.member_id, role == "keeper")
-                        )
-                    )
+                    source_events, _ = story_events(visible, include_initial_reveals=True)
+                    completed_seqs = {c["seq"] for c in selected_chunks if c["end"] == c["total"]}
                     incidental = [
                         record
                         for event in source_events
-                        if event["seq"] in known_seqs
+                        if event["seq"] in completed_seqs
                         for record in incidental_records(event)
                     ][-6:]
                     if incidental:
-                        # Keep bounded attribution even if the summary model
-                        # omits it. Older quotes remain retrievable from events.
                         content += "\nKP即兴补充出处（非关键发现，不证明当前在场）：\n" + "\n".join(
                             f"事件#{r['source_event_seq']}，{r['speaker']}，"
                             f"场景 {r['scene_id']}：{r['text']}"
                             for r in incidental
                         )
-                    from app.memory.state_facts import summary_state_facts
-
-                    content += "\n" + summary_state_facts(
-                        room.session_state,
-                        await self.agents.entities.public(session, room.id),
-                        await self.agents.rooms.public_inventory(session, room),
+                    prior_chunks = []
+                    for memory in await session.scalars(
+                        select(AgentMemory).where(
+                            AgentMemory.room_id == room.id,
+                            AgentMemory.profile_id == binding.profile_id,
+                            AgentMemory.kind == "summary_segment",
+                            AgentMemory.active.is_(True),
+                        )
+                    ):
+                        saved_segment = segment_document(memory)
+                        if saved_segment:
+                            prior_chunks.extend(saved_segment["source_chunks"])
+                    document = make_segment(
+                        content,
                         source_events,
+                        selected_chunks,
+                        member_id=binding.member_id,
+                        tasks=prepared_tasks,
+                        prior_chunks=prior_chunks,
+                    )
+                    require(
+                        canonical(document["required_facts"]) == canonical(prepared_required),
+                        "摘要必保留集合在生成期间发生变化",
+                    )
+                    require(
+                        canonical(document["summary"]["unfinished"]) == canonical(prepared_tasks),
+                        "摘要未保留原任务状态",
+                    )
+                    document["summary"]["unfinished_scope"] = context["current_task_projection"][
+                        "basis"
+                    ]
+                    document["summary"]["unfinished_as_of_seq"] = context[
+                        "current_task_projection"
+                    ]["as_of_seq"]
+                    validate_segment(document, source_events)
+                    seqs = [c["seq"] for c in selected_chunks]
+                    row = await session.get(SummaryRecoveryRecord, (room.id, binding.profile_id))
+                    previous = SummaryRecoveryState.model_validate(row.document)
+                    completed = document["coverage"]["fully_covered_seqs"]
+                    last_chunk = selected_chunks[-1]
+                    partial = last_chunk["end"] < last_chunk["total"]
+                    complete_through = max([previous.last_successful_summary_seq, *completed])
+                    session.add(
+                        AgentMemory(
+                            id=str(uuid4()),
+                            room_id=room.id,
+                            profile_id=binding.profile_id,
+                            kind="summary_segment",
+                            scope="public"
+                            if (
+                                all(c["visibility"] == "public" for c in selected_chunks)
+                                and all(
+                                    t.get("source", {}).get("visibility") == "public"
+                                    for t in prepared_tasks
+                                )
+                            )
+                            else "keeper_only"
+                            if role == "keeper"
+                            else "agent_private",
+                            content=json.dumps(document, ensure_ascii=False),
+                            source_event_ids=seqs,
+                            salience=9,
+                            supersedes_id=None,
+                            coverage_start=min(seqs),
+                            coverage_end=max(seqs),
+                            active=True,
+                        )
                     )
                     if old:
                         old.active = False
-                    seqs = [e["seq"] for e in context["events"]]
                     session.add(
                         AgentMemory(
                             id=str(uuid4()),
@@ -313,26 +421,24 @@ class SummaryRecoveryService:
                             kind="summary",
                             scope="keeper_only" if role == "keeper" else "agent_private",
                             content=content,
-                            source_event_ids=sorted(
-                                set(seqs) | set(old.source_event_ids if old else [])
-                            ),
+                            source_event_ids=seqs,
                             salience=9,
                             supersedes_id=old_id,
-                            coverage_start=old.coverage_start if old else min(seqs),
-                            coverage_end=max(seqs),
+                            coverage_start=min(seqs),
+                            coverage_end=complete_through,
                             active=True,
                         )
                     )
-                    row = await session.get(SummaryRecoveryRecord, (room.id, binding.profile_id))
-                    previous = SummaryRecoveryState.model_validate(row.document)
                     row.document = SummaryRecoveryState(
-                        last_successful_summary_seq=max(seqs),
+                        segment_version=1,
+                        last_successful_summary_seq=complete_through,
+                        partial_event_seq=last_chunk["seq"] if partial else None,
+                        partial_event_offset=last_chunk["end"] if partial else 0,
                         last_attempted_cycle=cycle_id,
                         last_attempted_time=previous.last_attempted_time,
                     ).model_dump(mode="json")
-                    run = await session.get(AgentRun, run_id)
                     run.structured_output, run.status, run.finished_at, run.latency_ms = (
-                        {"content": content},
+                        {"content": content, "coverage": document["coverage"]},
                         "completed",
                         utc_now(),
                         latency,
@@ -346,7 +452,9 @@ class SummaryRecoveryService:
                             "profile_id": binding.profile_id,
                             "cycle_id": cycle_id,
                             "coverage_start": min(seqs),
-                            "coverage_end": max(seqs),
+                            "coverage_end": complete_through,
+                            "partial_event_seq": last_chunk["seq"] if partial else None,
+                            "coverage": document["coverage"],
                         },
                         "host_only",
                     )
@@ -359,9 +467,19 @@ class SummaryRecoveryService:
                 if run_id:
 
                     async def failed(session, room):
+                        visible = await self.agents.rooms.events(
+                            session, room, Identity(binding.member_id, True)
+                        )
+                        run = await session.get(AgentRun, run_id)
+                        if branch_revision(visible) != prepared_branch:
+                            if run and run.status == "running":
+                                run.status, run.finished_at = "cancelled", utc_now()
+                            return  # Never overwrite the restored recovery cursor.
                         row = await session.get(
                             SummaryRecoveryRecord, (room.id, binding.profile_id)
                         )
+                        if not row or not run or run.status != "running":
+                            return
                         recovery = SummaryRecoveryState.model_validate(row.document)
                         recovery.stale = True
                         recovery.failure_count += 1
@@ -370,7 +488,6 @@ class SummaryRecoveryService:
                             recovery.failure_count >= self.agents.settings.summary_max_failures
                         )
                         row.document = recovery.model_dump(mode="json")
-                        run = await session.get(AgentRun, run_id)
                         run.status, run.safe_error, run.error_type = (
                             "failed",
                             recovery.last_safe_error,

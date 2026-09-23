@@ -89,7 +89,9 @@ async def test_adapter_parses_responses(monkeypatch, mode: str) -> None:
             assert isinstance(result.structured, Decision)
             assert result.model_dump()["structured"] == {"action": "观察", "target": None}
             specification = create.call_args.kwargs["response_format"]["json_schema"]
-            assert specification["schema"] == Decision.model_json_schema()
+            from app.models.budget import compact_schema
+
+            assert specification["schema"] == compact_schema(Decision.model_json_schema())
             assert specification["strict"] is True
         else:
             assert result.text == "连接成功"

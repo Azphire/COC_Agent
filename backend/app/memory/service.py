@@ -18,6 +18,7 @@ from app.rooms.service import Identity, require
 
 def prompt_context_size(context):
     """Count the keeper's transmitted audit view, retaining the full server ledger."""
+    context = {k: v for k, v in context.items() if k != "memory_selection_audit"}
     plan_phases = {"plan_keeper_action", "repair_keeper_plan"}
     teammate_phases = {"decide_teammates", "repair_teammate_decision"}
     if context.get("phase") in plan_phases | teammate_phases:
@@ -163,6 +164,7 @@ async def build_context(
     all_events = await service.rooms.events(session, room, identity)
     if narrator:
         all_events = [e for e in all_events if e["visibility"] == "public"]
+    memory_events, _ = story_events(all_events, include_initial_reveals=True)
     all_events, event_selection = story_events(all_events)
     visible_memories = await memories(session, room.id, binding.profile_id, keeper)
     if narrator:
@@ -248,7 +250,7 @@ async def build_context(
 
     question = (trigger or {}).get("payload", {}).get("text", "")
     ranked = sorted(
-        visible_memories,
+        [m for m in visible_memories if m.kind != "summary_segment"],
         key=lambda m: (
             m.kind in {"goal", "summary"},
             m.salience,
@@ -318,6 +320,29 @@ async def build_context(
     from app.preparation.inventory import inventory_context
 
     context["inventory_state"] = await inventory_context(service, session, room, question)
+    from app.memory.recall import select_memory, visible_tasks
+
+    tasks = await visible_tasks(
+        session, room.id, memory_events, member_id=binding.member_id,
+        keeper=keeper, narrator=narrator,
+    )
+    evidence, memory_audit = ([], {"selected_refs": [], "omitted": []})
+    if phase != "repair_action_arguments":
+        evidence, memory_audit = select_memory(
+            [e for e in memory_events if e["seq"] not in pending_seqs
+             and e["seq"] < cycle.state["triggering_event_seq"]],
+            question, scene_id=room.session_state.get("scene_id"), tasks=tasks,
+            memories=visible_memories,
+            budget=min(3000, max(900, service.settings.agent_context_chars // 4)),
+        )
+    if evidence:
+        context["memory_evidence"] = evidence
+    context["memory_selection_audit"] = memory_audit
+    if memory_audit["omitted"]:
+        context["memory_omission"] = {
+            "count": len(memory_audit["omitted"]),
+            "instruction": "部分相关来源未装入；缺失证据不能当作否定或执行回执，必要时按来源回查。",
+        }
     if context["readonly_recall"]:
         from app.memory.facts import bounded_facts, recalled_entity_states, recalled_location
         from app.preparation.inventory import recalled_inventory
@@ -337,7 +362,7 @@ async def build_context(
             "speaker": e["payload"].get("actor_name", e.get("actor_member_id")),
             "type": e["type"],
             "epistemic_status": e["epistemic_status"],
-            "text": e["payload"].get("text", "")[:180],
+            "text": e["payload"].get("text", ""),
         }
         for e in history_events
         if e["visibility"] == "public"
@@ -478,13 +503,9 @@ async def build_context(
             }
             for check in context["checks"]
         ]
-    # An upper bound in characters is conservative for the configured Chinese context.
-    budget = min(
-        service.settings.agent_context_chars,
-        service.settings.model_context_limit - service.settings.model_output_limit - 1200,
-    )
-    if budget < 2500:
-        budget = 2500
+    from app.models.budget import context_character_budget
+
+    budget = context_character_budget(service.settings)
     # Select from the full permission-filtered active branch before dialogue and
     # summary trimming, so an older public improvisation remains available.
     navigation = await service.navigation.state(session, room.id)
@@ -655,14 +676,20 @@ async def build_context(
         candidate = {
             k: v
             for k, v in memory_view(memory).items()
-            if k in {"kind", "scope", "content", "source_event_ids", "epistemic_status"}
+            if k in {"kind", "scope", "content", "epistemic_status"}
         }
-        if memory.kind == "summary":
-            from app.memory.facts import summary_sources
-
-            candidate["content"] = summary_sources(all_events, memory.source_event_ids)
+        # Full provenance remains on AgentMemory. Never replace the model's
+        # prose with a fixed 1200-character source selection.
+        candidate["source_ref"] = (
+            f"e{memory.coverage_start}-{memory.coverage_end}"
+            if memory.coverage_start is not None else f"memory:{memory.id}"
+        )
+        if memory.kind == "summary" and any(m.kind == "summary_segment" for m in visible_memories):
+            continue  # The selected segment is already in memory_evidence.
         proposed = {**context, "memories": [*context["memories"], candidate]}
         if prompt_context_size(proposed) > budget - 1200:
+            memory_audit["omitted"].append({"ref": candidate["source_ref"],
+                                            "kind": memory.kind, "reason": "character_budget"})
             continue
         context["memories"].append(candidate)
         selected.append(memory.id)
@@ -714,15 +741,16 @@ async def build_context(
         for e in reversed(window)
         if e["type"] in {"clue.revealed", "entity.revealed", "check.resolved", "scene.updated"}
     ]
-    pending_blocked = False
     for event in pending_window:
         proposed = {**context, "events": [*context["events"], event]}
         if prompt_context_size(proposed) > budget:
-            pending_blocked = True
-            break
+            memory_audit["omitted"].append({"ref": f"e{event['seq']}",
+                                            "kind": "pending_source",
+                                            "reason": "source_group_requires_recall"})
+            continue
         context = proposed
         chosen_seqs.add(event["seq"])
-    for event in [] if pending_blocked else [*state_events, *reversed(window)]:
+    for event in [*state_events, *reversed(window)]:
         if event["seq"] in chosen_seqs:
             continue
         proposed = {**context, "events": [event, *context["events"]]}
@@ -730,6 +758,19 @@ async def build_context(
             context["events"].insert(0, event)
             chosen_seqs.add(event["seq"])
     context["events"].sort(key=lambda e: e["seq"])
+
+    def refresh_memory_notice():
+        # Selection can omit later summaries / failed-compression source rows
+        # after initial recall. Keep the warning in the measured projection;
+        # never append new prompt content after the final character gate.
+        if phase != "repair_action_arguments" and memory_audit["omitted"]:
+            context["memory_omission"] = {
+                "count": len(memory_audit["omitted"]),
+                "instruction": "部分相关来源未装入；缺失证据不能当作否定或执行回执，"
+                               "必要时按来源回查。",
+            }
+
+    refresh_memory_notice()
     # Completed public interactions and current holders outrank older optional
     # improvisations. Pre-context rule routing can consume the space that was
     # available when those memories were selected above.
@@ -745,6 +786,34 @@ async def build_context(
         audit["omitted_block_count"] = audit.get("omitted_block_count", 0) + 1
         audit["budget_used"] = len(json.dumps(module_context, ensure_ascii=False))
         context = {**context, "module": module_context, "module_context_audit": audit}
+    # The first recall allocation happens before scene/HO/rules are assembled.
+    # A large necessary scene must reach the final request gate without an
+    # optional old fact consuming the space reserved for the current action.
+    while prompt_context_size(context) > budget:
+        rows = list(context.get("memory_evidence", []))
+        removable = [i for i, row in enumerate(rows)
+                     if row.get("kind") not in {"pending_task", "short_term_goal"}]
+        if not removable:
+            break
+        row = rows.pop(removable[-1])
+        memory_audit["omitted"].append({"ref": row.get("source", {}).get("ref"),
+                                        "kind": row.get("kind"), "reason": "character_budget"})
+        memory_audit["selected_refs"] = [r["source"]["ref"] for r in rows]
+        context["memory_evidence"] = rows
+        refresh_memory_notice()
+    # Updating the omission notice can consume the last few reserved characters.
+    # Repack whole history rows, preserving the first failed-compression source
+    # for the existing recovery path; all omitted originals stay recoverable.
+    pending_first = pending_window[0]["seq"] if pending_window else None
+    while context.get("events") and prompt_context_size(context) > budget:
+        removable = [i for i, event in enumerate(context["events"])
+                     if event["seq"] != pending_first]
+        if not removable:
+            break
+        event = context["events"].pop(removable[-1])
+        memory_audit["omitted"].append({"ref": f"e{event['seq']}",
+                                        "kind": "history_event", "reason": "character_budget"})
+        refresh_memory_notice()
     # Argument repair already reserves its failed arguments and validation
     # feedback. Optional historical excerpts must not prevent that repair.
     while (
@@ -789,9 +858,7 @@ async def build_context(
         {k: v for k, v in context.items() if k not in ordered and k != "triggering_action"}
     )
     ordered["triggering_action"] = context["triggering_action"]
-    ordered["recent_dialogue"] = (
-        [] if context.get("summary_status", {}).get("stale") else recent_dialogue
-    )
+    ordered["recent_dialogue"] = recent_dialogue
     while ordered.get("events") and prompt_context_size(ordered) > budget:
         ordered["events"] = ordered["events"][1:]
     while ordered["recent_dialogue"] and prompt_context_size(ordered) > budget:
@@ -805,4 +872,9 @@ async def build_context(
         "当前行动资料超过上下文预算，无法加入更多历史对话",
         422,
     )
+    loaded_seqs = {e["seq"] for e in ordered.get("events", []) + ordered.get("recent_dialogue", [])}
+    memory_audit["unloaded_event_seqs"] = [
+        e["seq"] for e in history_events if e["seq"] not in loaded_seqs
+    ]
+    ordered["memory_selection_audit"] = memory_audit
     return await service.sanitize(session, room, ordered), all_events, selected

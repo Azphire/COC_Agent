@@ -367,7 +367,10 @@ class NarrationValidator:
             for e in results["events"]
             if e["type"] == "module.interaction"
         ]
-        sources = [*(brief or {}).get("source_quotes", []), *discovered, *interactions]
+        from app.memory.recall import public_historical_quotes
+
+        sources = [*(brief or {}).get("source_quotes", []), *discovered, *interactions,
+                   *public_historical_quotes({"response_brief": brief or {}})]
         if sources:
             material = re.sub(r"[\W_]", "", "\n".join(sources))
             if any(re.search(r"写着|写道|写有|内容是", s) for s in sources):

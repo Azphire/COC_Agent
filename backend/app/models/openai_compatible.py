@@ -26,8 +26,9 @@ from app.models.base import (
     Tool,
     ToolCall,
 )
+from app.models.budget import schema_envelope
 from app.models.credentials import resolve_credential, usable
-from app.models.ollama import generation_schema, schema_issues
+from app.models.ollama import schema_issues
 
 
 def strict_schema(value):
@@ -115,34 +116,10 @@ class OpenAICompatibleClient:
         if self.local:
             # Keep the initial local integration short and deterministic.
             request["reasoning_effort"] = "none"
-        if tools:
-            request["tools"] = [dict(tool) for tool in tools]
-        if response_schema is not None:
-            schema = generation_schema(
-                response_schema.model_json_schema()
-                if isinstance(response_schema, type)
-                else dict(response_schema)
-            )
-            if self.output_mode == "json_object":
-                request["response_format"] = {"type": "json_object"}
-                request["messages"] = [
-                    {
-                        "role": "system",
-                        "content": "Return only a JSON object matching this schema. "
-                        "Do not output reasoning. JSON schema: "
-                        + json.dumps(schema, ensure_ascii=False),
-                    },
-                    *request["messages"],
-                ]
-            else:
-                request["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "model_response",
-                        "strict": True,
-                        "schema": strict_schema(schema),
-                    },
-                }
+        request.update(schema_envelope(
+            messages, response_schema, tools,
+            provider="openai_compatible", output_mode=self.output_mode,
+        ))
         try:
             completion = await self.client.chat.completions.create(**request)
         except OpenAIError as error:

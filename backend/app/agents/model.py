@@ -10,6 +10,13 @@ from weakref import WeakKeyDictionary
 from pydantic import BaseModel, ValidationError
 
 from app.models.base import ModelError, ModelFormatError, ModelResponse
+from app.models.budget import (
+    calibrate_usage,
+    compact_schema,
+    measure_request,
+    require_request_fit,
+    schema_envelope,
+)
 from app.models.factory import create_model
 from app.models.ollama import OllamaAgentAdapter, generation_schema, schema_issues
 
@@ -104,6 +111,9 @@ class AgentModelClient:
                 model_finished = None
                 generated_output = None
                 raw_output = None
+                request_budget = measure_request(
+                    self.settings, call_prompt, response_schema, tools, output_limit,
+                )
 
                 async def stream_event(kind, **values):
                     if on_stream:
@@ -120,6 +130,7 @@ class AgentModelClient:
                         await stream_event("delta", text=text)
 
                 try:
+                    require_request_fit(request_budget)
                     await stream_event("start")
                     async with asyncio.timeout(self.settings.model_timeout_seconds):
                         result = await self.adapter.generate(
@@ -223,6 +234,12 @@ class AgentModelClient:
                     await stream_event("error", category=error_category, retrying=False)
                     raise
                 finally:
+                    calibrate_usage(self.settings, request_budget, usage)
+                    envelope = schema_envelope(
+                        call_prompt, response_schema, tools,
+                        provider=self.settings.model_provider,
+                        output_mode=self.settings.model_output_mode,
+                    )
                     call = {
                         "provider": self.settings.model_provider,
                         "model": self.settings.model_name,
@@ -247,10 +264,13 @@ class AgentModelClient:
                         "error_category": error_category,
                         "validation_issues": issues,
                         "schema": response_schema.__name__ if response_schema else None,
-                        "output_contract": generation_schema(response_schema.model_json_schema())
+                        "output_contract": compact_schema(generation_schema(
+                            response_schema.model_json_schema()))
                         if response_schema else None,
                         "input_chars": len(json.dumps(call_prompt, ensure_ascii=False)),
                         "input_messages": call_prompt,
+                        "transmitted_messages": envelope["messages"],
+                        "request_budget": request_budget,
                         "generated_output": generated_output,
                         "raw_output": raw_output,
                     }

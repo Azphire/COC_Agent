@@ -123,14 +123,11 @@ class OllamaAgentAdapter:
                 "num_ctx": self.settings.model_context_limit,
             },
         }
-        if response_schema:
-            request["format"] = generation_schema(
-                response_schema.model_json_schema()
-                if isinstance(response_schema, type)
-                else response_schema
-            )
-        if tools:
-            request["tools"] = list(tools)
+        from app.models.budget import schema_envelope
+
+        request.update(schema_envelope(
+            messages, response_schema, tools, provider="ollama", output_mode="json_schema",
+        ))
         if on_delta is not None:
             data = await self._stream_response(request, on_delta)
         else:

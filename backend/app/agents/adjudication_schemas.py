@@ -308,6 +308,9 @@ class BehaviorRejection(DomainModel):
 
 class SummaryRecoveryState(DomainModel):
     schema_version: Literal[1] = 1
+    segment_version: int = 0
+    partial_event_seq: int | None = None
+    partial_event_offset: int = Field(default=0, ge=0)
     last_successful_summary_seq: int = 0
     pending_start_seq: int | None = None
     pending_end_seq: int | None = None

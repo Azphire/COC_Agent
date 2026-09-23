@@ -173,7 +173,11 @@ def test_context_budget_includes_separators_and_repair_feedback(client, game):  
                     phase="repair_action_arguments",
                     additions={"validation_errors": [{"instruction": "先切换到维修间，再检定"}]},
                 )
-                assert len(json.dumps(context, ensure_ascii=False)) <= budget
+                from app.memory.service import prompt_context_size
+
+                # Full omitted/source audit stays on the server, outside the
+                # transmitted context character limit.
+                assert prompt_context_size(context) <= budget
                 assert context["phase"] == "repair_action_arguments"
                 assert context["validation_errors"]
 
