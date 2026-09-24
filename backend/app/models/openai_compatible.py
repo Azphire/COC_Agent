@@ -175,11 +175,18 @@ class OpenAICompatibleClient:
             if response_schema is not None:
                 if choice.finish_reason == "length":
                     raise ModelFormatError("结构化输出超过 token 上限", token_usage=usage)
-                structured = (
-                    response_schema.model_validate_json(message.content or "")
-                    if isinstance(response_schema, type)
-                    else json.loads(message.content or "")
-                )
+                if "answer_parts" in getattr(response_schema, "model_fields", {}):
+                    from app.agents.answer_parts import decode_answer_parts_document
+
+                    structured = response_schema.model_validate(
+                        decode_answer_parts_document(message.content or ""),
+                    )
+                else:
+                    structured = (
+                        response_schema.model_validate_json(message.content or "")
+                        if isinstance(response_schema, type)
+                        else json.loads(message.content or "")
+                    )
             return ModelResponse(
                 text=message.content or "",
                 tool_calls=calls,
@@ -189,10 +196,24 @@ class OpenAICompatibleClient:
                 request_id=safe_identifier(getattr(completion, "_request_id", None)),
                 response_model=safe_identifier(completion.model),
             )
-        except ValidationError as error:
-            raise ModelFormatError(
-                "模型 JSON 或工具参数不符合约束", schema_issues(error, response_schema), usage
-            ) from None
+        except (ValidationError, ModelFormatError) as error:
+            failure = error if isinstance(error, ModelFormatError) else ModelFormatError(
+                "模型 JSON 或工具参数不符合约束", schema_issues(error, response_schema), usage,
+            )
+            failure.token_usage = usage
+            if "answer_parts" in getattr(response_schema, "model_fields", {}):
+                content = message.content or ""
+                if not any(tag in content.lower() for tag in (
+                    "<think", "</think", '"reasoning"', '"chain_of_thought"', '"thinking"',
+                )):
+                    from app.agents.answer_parts import decode_answer_parts_document
+
+                    failure.raw_output_text = content
+                    try:
+                        failure.generated_output = decode_answer_parts_document(content)
+                    except (ValueError, ModelFormatError):
+                        failure.generated_output = {"unparsed_text": content}
+            raise failure from None
         except (ValueError, TypeError):
             raise ModelFormatError("模型 JSON 或工具参数格式无效", token_usage=usage) from None
 

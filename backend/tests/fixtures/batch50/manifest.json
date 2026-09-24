@@ -1,0 +1,27 @@
+{
+  "baseline": "42401ab511e8823e8a0082b5e0ca91385f660648",
+  "actual_branch_at_freeze": "main",
+  "user_baseline_label": "repair",
+  "method": "Unmodified JSON subtrees from original context, calls and formal events",
+  "model_calls": 0,
+  "files": {
+    "real-09-delegate-failure.json": {
+      "sha256": "53ef40bf554175a011950740471084ff36865f16b5f4d73f8a58000d3a6e2f96",
+      "source_sha256": "1de3e6bf63a1f55cb22a97889ea5468d8a96656d4d9b63a5117822dd96cac3eb",
+      "context_sha256": "46df2ccadfd166f5917580ff94d68738c1d4be699c3e597a004678c9c31ed9b9",
+      "call_document_sha256": [
+        "a485e05b0ca5719a4be6ac364d1aabb18b090857255c4431cf9e7f5a9055e484",
+        "fc1ab1539035e93c8f088ece0a2963cdae3dc9324ed0b18c9b0f876bffbc84f1"
+      ]
+    },
+    "real-10-delegate-failure.json": {
+      "sha256": "6bbbf09183c57c70fcb6597aeea0ae9a6e57687b183c1b87a3c062d23921a78e",
+      "source_sha256": "5c79ea046ce7a6a9eb7bf8c6c5fe7b8b712113e09b67354f509090e4f9b207cb",
+      "context_sha256": "6703735eb69fe4a66fd5720800f947395b53e9e6fc881b4beb2fc2f582746fce",
+      "call_document_sha256": [
+        "e1bc9854f713d0fc1586e58ec28f05c894964d7051d2b99b75348218de41808d",
+        "40b4f77cf8a1cc7b3af77605a4e0c5980173dc468c15731858facb6e1eae1c98"
+      ]
+    }
+  }
+}

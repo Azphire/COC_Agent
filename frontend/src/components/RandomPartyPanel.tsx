@@ -59,7 +59,7 @@ export default function RandomPartyPanel({ batchId, scopeId, count, preparationI
       else if (mode === 'repair' && next) next = await api<PartyBatch>(`/party-batches/${next.id}/members/${memberIndex}/repair-persona`, hostToken(), 'POST', { request_id: requestId() })
       else if (mode === 'resize' && next) {
         await beforeCreate?.()
-        next = await api<PartyBatch>(`/party-batches/${next.id}/resize`, hostToken(), 'POST', { request_id: requestId(), count })
+        next = await api<PartyBatch>(`/party-batches/${next.id}/resize`, hostToken(), 'POST', { request_id: requestId(), count, handout_ids: count > next.count ? handoutIds?.slice(next.count, count) : [] })
       }
       if (!next) return
       accept(next)

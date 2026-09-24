@@ -390,25 +390,59 @@ def _content_topics(requirement):
 
 def _unknown_for_requirement(text, requirement):
     topics = _content_topics(requirement)
-    clauses = [
-        s.strip() for s in re.split(r"[，,。；;！？!?\n]|但是|但|不过|然而", text) if s.strip()
-    ]
-    for index, clause in enumerate(clauses):
-        if not re.search(UNKNOWN, clause):
-            continue
-        if topics & terms(clause):
-            return True
-        # "至于具体名称，他仍不知道" is one scoped statement across a comma.
-        if (
-            index
-            and topics & terms(clauses[index - 1])
-            and re.match(
-                r"^(?:但|而|[他她我]|仍|还|尚|目前|暂时|并)*(?:不知|不清|不明|未确认|无法确认)",
+    for sentence in re.split(r"[。；;！？!?\n]", text):
+        clauses = [s.strip() for s in re.split(r"[，,]|但是|但|不过|然而", sentence) if s.strip()]
+        for index, clause in enumerate(clauses):
+            if not re.search(UNKNOWN, clause):
+                continue
+            if topics & terms(clause):
+                return True
+            # Bind the epistemic predicate across one comma in this sentence,
+            # without accepting an unrelated sentence about another subject.
+            if index and topics & terms(clauses[index - 1]) and re.match(
+                r"^(?:但|而|[他她我]|仍|还|尚|目前|暂时|现在|眼下|并)*" + "(?:" + UNKNOWN + ")",
                 clause,
-            )
-        ):
-            return True
+            ):
+                return True
     return False
+
+
+def unknown_assertion_errors(body, requirement):
+    """Unknown prose cannot hide a positive/negative probe claim in any part."""
+    if requirement.get("source_ids"):
+        return []
+    predicate = re.split(r"有没有|有无|是否", requirement["text"], maxsplit=1)[-1]
+    topic = _topic_terms(predicate)
+    errors = []
+    assertions = re.sub(r"但是|然而|不过|并且|而且|同时|以及|但|而|却|且|并", "，", body)
+    for sentence in re.split(r"[。；;！？!?\n]", assertions):
+        for clause in _factual_clauses(sentence):
+            if not topic & terms(clause):
+                continue
+            remainder = re.sub(r"有没有|有无|是否", "", clause)
+            if re.match(
+                r"\s*(?:你|我)(?:们)?(?:正在|正|试图|尝试|仔细|开始|先|继续|用手)?"
+                r"(?:检查|查看|搜索|寻找|观察)", clause,
+            ) and not re.search(
+                r"发现|看到|看见|确认|确定|表明|没有|并无|不存在|未见|存在|是", remainder,
+            ):
+                continue
+            # A scoped question/topic followed by its epistemic predicate is
+            # natural unknown prose. It is not a negative assertion containing
+            # the substring '没有' in '有没有'. Explicit claims remain checked.
+            stripped = re.sub(UNKNOWN, "", remainder)
+            explicit = re.search(
+                r"没有|并无|不存在|未见|没见|存在|确实|有|是|为|留着|可见", stripped,
+            )
+            if re.search(r"有没有|有无|是否", clause) and _unknown_for_requirement(
+                sentence, requirement,
+            ) and not explicit:
+                continue
+            if not explicit and _unknown_for_requirement(sentence, requirement):
+                continue
+            if not re.search(UNKNOWN, clause) or explicit:
+                errors.append("正文给出了本轮来源未确认的检查结论：" + clause)
+    return errors
 
 
 def _polarity_errors(answer, quote):
@@ -849,26 +883,10 @@ def coverage_audit(output, brief, *, prefix=False, partial=False):
                 reasons.append("无可见依据时须具体说明尚未知的内容")
             elif requirement.get("source_ids"):
                 reasons.append("本轮存在相关可见来源，须引用并保留已知内容后说明未知项")
-            elif re.search(r"有没有|有无|是否", requirement["text"]):
+            elif not requirement.get("source_ids"):
                 # A later 'unknown' sentence cannot excuse an earlier invented
                 # answer to this same explicit factual probe.
-                predicate = re.split(r"有没有|有无|是否", requirement["text"], maxsplit=1)[-1]
-                topic = _topic_terms(predicate)
-                assertions = re.sub(
-                    r"但是|然而|不过|并且|而且|同时|以及|但|而|却|且|并", "，", body,
-                )
-                for clause in _factual_clauses(assertions):
-                    lead = re.match(
-                        r"\s*(?:你|我)(?:们)?(?:正在|正|试图|尝试|仔细|开始|先|继续|用手)?"
-                        r"(?:检查|查看|搜索|寻找|观察)", clause,
-                    )
-                    remainder = re.sub(r"有没有|有无|是否", "", clause)
-                    if lead and not re.search(
-                        r"发现|看到|看见|确认|确定|表明|没有|并无|不存在|未见|存在|是", remainder,
-                    ):
-                        continue
-                    if topic & terms(clause) and not re.search(UNKNOWN, clause):
-                        reasons.append("正文给出了本轮来源未确认的检查结论：" + clause)
+                reasons += unknown_assertion_errors(body, requirement)
             if row.get("status") == "unknown" and not _unknown_for_requirement(answer, requirement):
                 reasons.append("unknown须在正文具体说明未知内容")
         if reasons:

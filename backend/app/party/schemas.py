@@ -42,6 +42,8 @@ class RerollInput(OperationInput):
 
 class ResizeInput(OperationInput):
     count: int = Field(ge=0, le=6)
+    # Only expansion positions; archived members keep their original selection.
+    handout_ids: list[str | None] | None = Field(default=None, max_length=6)
 
 
 class AdoptInput(OperationInput):

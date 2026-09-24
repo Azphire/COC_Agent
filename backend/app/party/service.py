@@ -578,6 +578,96 @@ class PartyService:
             await self._save(doc)
             return doc
 
+    @staticmethod
+    def _check_new_handout(definition, document, ruleset):
+        """Reject impossible sourced build choices before rolling any added card."""
+        policy = definition.adjustments
+        if not policy:
+            return
+        require(policy.ruleset_id == ruleset.id, "新增 HO 不适用于当前规则集", 422)
+        require(not policy.required_era or policy.required_era == document["era"],
+                "新增 HO 的年代与已保留队伍不一致", 422)
+        require(set(policy.attribute_choices) <= {a.key for a in ruleset.attributes}
+                and set(policy.skill_bonuses) <= {s.key for s in ruleset.skills},
+                "新增 HO 包含当前规则集不支持的属性或技能", 422)
+        if policy.required_age is not None and ruleset.age_rules:
+            require(any(b.minimum <= policy.required_age <= b.maximum
+                        for b in ruleset.age_rules.bands),
+                    "新增 HO 的年龄不支持当前规则下的随机建卡", 422)
+        occupations = [o for o in ruleset.occupations if document["era"] in o.eras
+                       and (not policy.required_occupation
+                            or o.key == policy.required_occupation)]
+        require(bool(occupations), "新增 HO 的职业不支持当前年代或规则集", 422)
+        if policy.credit_maximum is not None:
+            require(any((o.credit_rating_minimum or 0)
+                        + policy.skill_bonuses.get("credit_rating", 0)
+                        <= policy.credit_maximum for o in occupations),
+                    "新增 HO 信用上限与职业最低要求冲突", 422)
+
+    async def _resize_plan(self, document, body, ruleset):
+        from app.party.launch import check_launch_batch
+
+        added = max(0, body.count - document["count"])
+        require(body.handout_ids is None or len(body.handout_ids) == added,
+                "新增 HO 数量必须与扩充位置数一致", 422)
+        async with self.database.sessions() as session:
+            launch = await check_launch_batch(session, {**document, "count": body.count})
+            occupied = set()
+            if launch and document["launch"]["role"] == "party":
+                own = launch.document.get("own_handout")
+                if own:
+                    occupied.add(own)
+                character_id = launch.document.get("character_id")
+                if character_id:
+                    card = await self.characters.get(UUID(character_id))
+                    handout = card.module_handout
+                    if handout:
+                        require(handout.preparation_id == document["preparation_id"],
+                                "本人角色 HO 属于其他准备版本", 422)
+                        occupied.add(handout.handout_id)
+                elif launch.document.get("own_batch_id"):
+                    own_batch = await session.get(PartyBatch, launch.document["own_batch_id"])
+                    if own_batch:
+                        occupied.update(m["character"]["module_handout"]["handout_id"]
+                                        for m in own_batch.document["members"]
+                                        if m["character"].get("module_handout"))
+        if not added:
+            return {}, {}
+        _, _, handouts = await self._preparation(document["preparation_id"])
+        catalog = {item.id: item for item in handouts}
+        saved = {index: next((m for m in reversed(document["history"])
+                             if m["index"] == index), None)
+                 for index in range(document["count"], body.count)}
+        # Check preserved investigators as well as new selections as one plan.
+        for member in [*document["members"], *[m for m in saved.values() if m]]:
+            handout = member["character"].get("module_handout")
+            if handout:
+                key = handout["handout_id"]
+                require(handout["preparation_id"] == document["preparation_id"]
+                        and key in catalog
+                        and handout["definition"] == catalog[key].model_dump(mode="json"),
+                        "已保留或恢复人物的 HO 与已批准来源不一致", 422)
+                require(key not in occupied, "HO 已由本人、保留或恢复的成员占用", 422)
+                occupied.add(key)
+        selections = body.handout_ids or [None] * added
+        plan = {}
+        for offset, index in enumerate(range(document["count"], body.count)):
+            if saved[index]:
+                continue  # Restoring a card never reassigns its HO from a new UI plan.
+            key = selections[offset]
+            require(not catalog or bool(key),
+                    "新增成员必须选择未占用的 HO；请减少人数或调整方案", 422)
+            require(not key or key in catalog, "新增 HO 不在已核准准备版本中", 422)
+            require(not key or key not in occupied, "新增 HO 已由其他成员占用", 422)
+            if key:
+                self._check_new_handout(catalog[key], document, ruleset)
+                occupied.add(key)
+                plan[index] = CharacterHandout(
+                    preparation_id=document["preparation_id"], handout_id=key,
+                    definition=catalog[key],
+                )
+        return saved, plan
+
     async def resize(self, batch_id, body):
         """Explicitly keep the first N investigators; archive removed members intact."""
         from app.party.launch import sync_launch_batch
@@ -587,9 +677,11 @@ class PartyService:
             require(doc["status"] != "adopted", "队伍已采用，不能调整人数", 409)
             require(not self._live(doc), "人物仍在生成中；请等待当前步骤完成", 409)
             ruleset = await self._version(doc)
-            operation, duplicate = self._operation(doc, body.request_id, "resize", body.count)
+            payload = [body.count, body.handout_ids] if body.handout_ids is not None else body.count
+            operation, duplicate = self._operation(doc, body.request_id, "resize", payload)
             if duplicate:
                 return doc
+            saved_members, handout_plan = await self._resize_plan(doc, body, ruleset)
             old_count = doc["count"]
             if body.count < old_count:
                 doc["history"].extend(copy.deepcopy(doc["members"][body.count:]))
@@ -598,13 +690,14 @@ class PartyService:
                 for index in range(old_count, body.count):
                     # An explicitly removed investigator is recoverable with its
                     # original HO and prose, and never incurs another model call.
-                    saved = next((m for m in reversed(doc["history"])
-                                  if m["index"] == index), None)
+                    saved = saved_members[index]
                     if saved:
                         doc["history"].remove(saved)
                         doc["members"].append(saved)
                     else:
-                        doc["members"].append(self._member(doc, index, 0, ruleset))
+                        doc["members"].append(self._member(
+                            doc, index, 0, ruleset, handout_plan.get(index),
+                        ))
             doc["count"] = body.count
             operation["status"] = "complete"
             doc["error"] = next((m["error"] for m in doc["members"] if m["error"]), None)

@@ -1,0 +1,2 @@
+# SHA256 manifests cover exact fixture bytes across Windows checkouts.
+*.json -text

@@ -14,7 +14,15 @@ _PAST = re.compile(r"曾经|曾|过去|幼时|小时候|当年|一度")
 _POSSESSION = re.compile(
     r"(?:随身携带|随身带着|随身带有|配备|配有|装备着|持有|带着|携带|拥有)"
     r"(?:了|着)?(?:一|两|三|几)?(?:把|支|套|副|个|张|本)?"
-    r"(?P<item>[^，,。；;！？!?\n]{1,24})"
+    r"(?P<item>[^，,。；;！？!?\n]{1,200})"
+)
+_GEAR_ALIASES = (
+    {"手电筒", "手电"}, {"照相机", "相机"}, {"绳索", "绳子"},
+    {"双筒望远镜", "望远镜"}, {"纱布绷带", "绷带"},
+)
+_GEAR = re.compile(
+    r"枪|刀|剑|匕首|手杖|手电|放大镜|相机|照相机|绳|工具|药|急救|"
+    r"护甲|防弹|子弹|弹药|汽车|轿车|摩托|证件|徽章|探测仪|望远镜|撬棍"
 )
 _CREDENTIAL = re.compile(
     r"(?:驾驶|医师|律师执业|律师|行医|飞行|持枪|教师)?(?:执照|资格证)|"
@@ -101,7 +109,15 @@ def _supported(claim, source):
 def _unsupported_effects(profile, character):
     """Require source support for explicit present effects, never personality flaws."""
     source = _approved_text(character)
-    equipment = [item.name for item in getattr(character, "equipment", [])]
+    equipment = {item.name for item in getattr(character, "equipment", [])}
+    # Some existing catalogue names themselves enumerate equivalent names.
+    for name in tuple(equipment):
+        for variant in re.split(r"[、／/]", re.sub(r"[（）()]", "、", name)):
+            if variant.strip():
+                equipment.add(variant.strip())
+    for aliases in _GEAR_ALIASES:
+        if equipment & aliases:
+            equipment.update(aliases)
     issues = []
     for field in ("background", "personality", "goals", "speaking_style", "action_tendency"):
         text = profile.get(field, "")
@@ -118,18 +134,24 @@ def _unsupported_effects(profile, character):
                 for match in _POSSESSION.finditer(clause):
                     if not _affirmative(clause, match.start(), match.end()):
                         continue
-                    item = re.split(r"用来|用于|以便|并|来|进行", match["item"])[0].strip()
-                    # Wishes, memories, opinions and personality traits are not gear.
-                    if not re.search(
-                        r"枪|刀|剑|匕首|手杖|手电|放大镜|相机|照相机|绳|工具|药|急救|"
-                        r"护甲|防弹|子弹|弹药|汽车|轿车|摩托|证件|徽章|探测仪|望远镜|撬棍",
-                        item,
-                    ):
-                        continue
-                    if item not in equipment \
-                            and not _supported(item, source):
-                        issues.append({"field": field, "claim": clause.strip(),
-                                       "message": f"额外装备“{item}”未列入本人的卡或批准背景"})
+                    carried = re.split(r"用来|用于|以便|进行|来(?=照|记|拍|检|攀)",
+                                       match["item"])[0]
+                    # Validate each conjunct, including a repeated possession verb.
+                    # Exact aliases never let e.g. gun oil authorize a gun.
+                    for item in re.split(r"(?:以及|并且|还有|[、和与及并])(?![^（）()]*[）)])",
+                                         carried):
+                        item = item.strip()
+                        repeated = _POSSESSION.fullmatch(item)
+                        if repeated:
+                            item = repeated["item"]
+                        item = re.sub(r"^(?:一|两|二|三|几|\d+)?(?:把|支|套|副|个|张|本|根|条|台)",
+                                      "", item).strip()
+                        # Wishes, memories and personality traits are not gear.
+                        if not _GEAR.search(item) or re.match(r"(?:不|没|未|无)", item):
+                            continue
+                        if item not in equipment and not _supported(item, source):
+                            issues.append({"field": field, "claim": clause.strip(),
+                                           "message": f"额外装备“{item}”未列入本人的卡或批准背景"})
                 for match in _CREDENTIAL.finditer(clause):
                     if _affirmative(clause, match.start(), match.end()) \
                             and not _supported(match[0], source):

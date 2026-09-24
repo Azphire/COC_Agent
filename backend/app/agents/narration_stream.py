@@ -83,12 +83,18 @@ def private_fragments(values, public_text):
 
 class NarrationStream:
     def __init__(self, runtime, state, run_id, contract, snapshot):
-        from app.agents.stream_json import IncrementalJSONObjectString
+        from app.agents.stream_json import IncrementalJSONObjectArray, IncrementalJSONObjectString
 
         self.runtime, self.hub = runtime, runtime.rooms.hub
         self.state, self.run_id, self.snapshot = state, run_id, snapshot
-        self.field = narration_body_field(contract)
-        self.parser_class = IncrementalJSONObjectString
+        parts_field = contract.model_fields.get("answer_parts")
+        self.parts_mode = bool(parts_field) and not (
+            parts_field.json_schema_extra or {}
+        ).get("x-server-bound")
+        self.field = "answer_parts" if self.parts_mode else narration_body_field(contract)
+        self.parser_class = IncrementalJSONObjectArray if self.parts_mode else (
+            IncrementalJSONObjectString
+        )
         self.parser = None
         self.stream_id, self.attempt = None, 0
         self.accepted = ""
@@ -96,6 +102,13 @@ class NarrationStream:
         self.buffered_reason = None
         self.valid = True
         context = snapshot["run"].context
+        self.part_order = tuple(
+            row["id"] for row in context.get("response_brief", {}).get("answer_requirements", [])
+        ) if self.parts_mode else ()
+        self.parts_context = None
+        self.parts_received = {}
+        self.parts_seen = set()
+        self.parts_published = []
         # These branches depend on server restoration, later source fields or
         # another speaker's complete answer. Keep their existing publication.
         self.eligible = bool(self.field) and not (
@@ -206,7 +219,7 @@ class NarrationStream:
         require(not any(eid in text for eid in self.snapshot["internal_ids"]),
                 "句段包含内部标识", 403)
 
-    async def validate(self, text):
+    async def validate(self, text, *, output=None):
         self.check_private(text, prefix=True)
         if self.field == "observed_detail":
             require(not re.match(r"(?:你|我)(?:们)?(?:正|试图|尝试|仔细|蹲|开始)", text),
@@ -214,10 +227,11 @@ class NarrationStream:
         sources = compact(self.snapshot["sources"])
         # A literal or core factual assertion needs its already-public source,
         # not a citation that might appear later in the JSON object.
-        for clause in re.split(r"[。！？；\n]", text):
-            if re.search(r"写着|写道|写有|内容是|密码|暗号|真相|凶手|身份|意味着|证明|"
-                         r"因为|所以|导致|尸体|死亡原因|仪式|祭祀|神祇|通往|隐藏|藏着", clause):
-                require(compact(clause) in sources, "关键事实仍需完整来源校验", 422)
+        if not self.parts_mode:
+            for clause in re.split(r"[。！？；\n]", text):
+                if re.search(r"写着|写道|写有|内容是|密码|暗号|真相|凶手|身份|意味着|证明|"
+                             r"因为|所以|导致|尸体|死亡原因|仪式|祭祀|神祇|通往|隐藏|藏着", clause):
+                    require(compact(clause) in sources, "关键事实仍需完整来源校验", 422)
         # These references are server-bound during restore_output, not chosen
         # by a later model field. Bind the identical last-receipt references now
         # so a mixed success/failure turn cannot pass an ambiguous prefix and
@@ -228,13 +242,57 @@ class NarrationStream:
                 check_reference = event["payload"].get("id", event["payload"].get("check_id"))
             elif event["type"] == "scene.updated":
                 transition_reference = str(event["seq"])
+        output = output or KeeperNarration(public_narration=text)
+        output.check_result_reference = check_reference
+        output.transition_result_reference = transition_reference
         await self.runtime.validate_narration_output(
             None, self.snapshot["room"], self.snapshot["cycle"], self.snapshot["run"],
-            KeeperNarration(
-                public_narration=text, check_result_reference=check_reference,
-                transition_result_reference=transition_reference,
-            ), prefix_snapshot=self.snapshot,
+            output, prefix_snapshot=self.snapshot,
         )
+
+    async def receive_parts(self, additions):
+        """Release only complete, bound parts in the frozen public order."""
+        from app.agents.answer_parts import project_answer_parts
+        from app.models.base import ModelFormatError
+
+        try:
+            # Inspect the entire decoded batch before publishing any of it. A
+            # repeated ID is an invalid contract, including a repair changing
+            # a server-retained part.
+            seen = set(self.parts_seen)
+            for part in additions:
+                rid = part.get("requirement_id")
+                require(rid in self.part_order and rid not in seen,
+                        "应答片段需求缺失、重复或不属于本轮", 422)
+                seen.add(rid)
+            for part in additions:
+                output = project_answer_parts([part], self.parts_context, partial=True)
+                self.check_private(output.public_narration, prefix=True)
+                self.parts_received[part["requirement_id"]] = part
+            self.parts_seen = seen
+            while len(self.parts_published) < len(self.part_order):
+                rid = self.part_order[len(self.parts_published)]
+                if rid not in self.parts_received:
+                    break
+                parts = [*self.parts_published, self.parts_received[rid]]
+                output = project_answer_parts(parts, self.parts_context, partial=True)
+                candidate = output.public_narration
+                require(len(candidate) <= 2000, "公开正文超过长度上限", 422)
+                require(candidate.startswith(self.accepted), "片段不得改写已发布顺序", 422)
+                await self.validate(candidate, output=output)
+                if not await self.hub.stream_delta(
+                    self.state["room_id"], self.state["cycle_id"], self.stream_id,
+                    candidate[len(self.accepted):], attempt=self.attempt,
+                ):
+                    return
+                self.parts_published = parts
+                self.accepted = candidate
+                self.first_display_at = self.first_display_at or time.time()
+        except (RoomError, ModelFormatError, ValueError, TypeError):
+            # A later part cannot make an unbound assertion safe. Keep genuine
+            # verified output, but never send the failing part before interrupt.
+            self.eligible = False
+            self.buffered_reason = "invalid_answer_part"
 
     async def __call__(self, event):
         if not self.valid:
@@ -247,9 +305,15 @@ class NarrationStream:
             self.first_display_at = None
             self.buffered_reason = None
             self.parser = self.parser_class(self.field) if self.field else None
+            self.parts_received, self.parts_seen, self.parts_published = {}, set(), []
             self.stream_id = await self.hub.stream_start(
                 self.state["room_id"], self.state["cycle_id"], attempt=self.attempt,
             )
+            if self.parts_mode:
+                self.parts_context = deepcopy(self.snapshot["run"].context)
+                retained = self.parts_context.pop("_answer_parts_retained", [])
+                if retained and self.eligible:
+                    await self.receive_parts(retained)
             return
         if kind == "error" and self.stream_id:
             await self.hub.stream_interrupt(
@@ -260,10 +324,14 @@ class NarrationStream:
             return
         if kind != "delta" or not self.eligible or event["attempt"] != self.attempt:
             return
-        self.parser.feed(event["text"])
+        additions = self.parser.feed(event["text"])
         if self.parser.invalid:
             self.eligible = False
             self.buffered_reason = "invalid_json"
+            return
+        if self.parts_mode:
+            if additions:
+                await self.receive_parts(additions)
             return
         value = self.parser.value
         if len(value) > 2000:

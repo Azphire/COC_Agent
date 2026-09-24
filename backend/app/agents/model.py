@@ -47,6 +47,7 @@ class AgentModelClient:
         validate_output=None,
         max_attempts=2,
         on_stream=None,
+        prepare_retry=None,
     ):
         guard = (
             self.configuration.operation("模型生成（含排队及格式修复）")
@@ -67,6 +68,7 @@ class AgentModelClient:
                     validate_output,
                     max_attempts,
                     on_stream,
+                    prepare_retry,
                 )
             except ModelError as error:
                 if self.configuration:
@@ -85,6 +87,7 @@ class AgentModelClient:
         validate_output,
         max_attempts,
         on_stream,
+        prepare_retry,
     ):
         started = time.monotonic()
         if self.adapter is None:
@@ -111,6 +114,7 @@ class AgentModelClient:
                 model_finished = None
                 generated_output = None
                 raw_output = None
+                raw_output_text = None
                 request_budget = measure_request(
                     self.settings, call_prompt, response_schema, tools, output_limit,
                 )
@@ -150,8 +154,14 @@ class AgentModelClient:
                         tag in result.text.lower()
                         for tag in ("<think", "</think", '"reasoning"', '"chain_of_thought"')
                     ):
+                        raw_output_text = result.text
                         try:
-                            raw_output = json.loads(result.text)
+                            if "answer_parts" in getattr(response_schema, "model_fields", {}):
+                                from app.agents.answer_parts import decode_answer_parts_document
+
+                                raw_output = decode_answer_parts_document(result.text)
+                            else:
+                                raw_output = json.loads(result.text)
                         except ValueError:
                             pass
                     generated_output = (
@@ -195,6 +205,7 @@ class AgentModelClient:
                     usage = usage or getattr(error, "token_usage", None)
                     generated_output = generated_output or getattr(error, "generated_output", None)
                     raw_output = raw_output or getattr(error, "generated_output", None)
+                    raw_output_text = raw_output_text or getattr(error, "raw_output_text", None)
                     issues = (
                         schema_issues(error, response_schema)
                         if isinstance(error, ValidationError)
@@ -273,10 +284,13 @@ class AgentModelClient:
                         "request_budget": request_budget,
                         "generated_output": generated_output,
                         "raw_output": raw_output,
+                        "raw_output_text": raw_output_text,
                     }
                     self.calls.append(call)
                     if on_result:
                         await on_result(call)
+                if prepare_retry and attempt + 1 < max_attempts:
+                    response_schema, prompt = await prepare_retry(call, prompt)
 
     async def close(self):
         adapter, self.adapter = self.adapter, None

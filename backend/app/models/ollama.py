@@ -71,7 +71,7 @@ def generation_schema(value):
             # Pydantic defaults keep old persisted plans readable.
             result["required"] = list(dict.fromkeys([*result.get("required", []), *explicit]))
         properties = result.get("properties", {})
-        body = next((name for name in ("observed_detail", "public_narration")
+        body = next((name for name in ("answer_parts", "observed_detail", "public_narration")
                      if name in properties), None)
         if body:
             # Providers often follow schema order. Produce the public body
@@ -215,11 +215,19 @@ class OllamaAgentAdapter:
                 raise ValueError("truncated")
             structured = None
             if response_schema:
-                structured = (
-                    response_schema.model_validate_json(content)
-                    if isinstance(response_schema, type) and issubclass(response_schema, BaseModel)
-                    else json.loads(content)
-                )
+                if "answer_parts" in getattr(response_schema, "model_fields", {}):
+                    from app.agents.answer_parts import decode_answer_parts_document
+
+                    structured = response_schema.model_validate(
+                        decode_answer_parts_document(content),
+                    )
+                else:
+                    structured = (
+                        response_schema.model_validate_json(content)
+                        if isinstance(response_schema, type)
+                        and issubclass(response_schema, BaseModel)
+                        else json.loads(content)
+                    )
             # Deliberately never copy message.thinking into any returned object.
             return ModelResponse(
                 text=content,
@@ -254,9 +262,15 @@ class OllamaAgentAdapter:
                 tag in content.lower()
                 for tag in ("<think", "</think", '"reasoning"', '"chain_of_thought"', '"thinking"')
             ):
+                failure.raw_output_text = content
                 try:
-                    failure.generated_output = json.loads(content)
-                except ValueError:
+                    if "answer_parts" in getattr(response_schema, "model_fields", {}):
+                        from app.agents.answer_parts import decode_answer_parts_document
+
+                        failure.generated_output = decode_answer_parts_document(content)
+                    else:
+                        failure.generated_output = json.loads(content)
+                except (ValueError, ModelFormatError):
                     failure.generated_output = {"unparsed_text": content}
             raise failure from None
 

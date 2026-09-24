@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from app.agents.action_runtime import NARRATION_INSTRUCTION, action_messages, generation_prompt
 from app.agents.adjudication_schemas import KeeperNarration
+from app.agents.answer_parts import bind_part
 from app.agents.generation_contracts import generation_contract, narration_body_field
 from app.agents.narration_coverage import (
     coverage_audit,
@@ -88,7 +89,9 @@ def test_action_leadin_does_not_erase_valid_actual_result_and_unknown_answer(fro
     context, calls = frozen
     value = corrected(context, calls[0])
     value["public_narration"] = lead + RESULT + UNKNOWN
-    result = generation_contract(KeeperNarration, context).model_validate(value)
+    # Legacy persisted/API prose still validates as prose. It is deliberately
+    # not converted from old coverage to the new generation-only answer_parts.
+    result = KeeperNarration.model_validate(value)
     assert result.public_narration == value["public_narration"]
     assert coverage_audit(result, context["response_brief"])["complete"]
 
@@ -131,23 +134,24 @@ def test_actual_effect_does_not_excuse_missing_or_invented_formal_answers(frozen
         generation_contract(KeeperNarration, context).model_validate(value)
 
 
-def test_unknown_source_and_status_are_bound_in_actual_generation_grammar(frozen):
-    context, calls = frozen
+def test_unknown_source_and_status_are_server_bound_outside_generation_grammar(frozen):
+    context, _ = frozen
     contract = generation_contract(KeeperNarration, context)
     wire = generation_schema(contract.model_json_schema())
-    variants = wire["properties"]["answer_coverage"]["items"]["oneOf"]
+    variants = wire["properties"]["answer_parts"]["items"]["oneOf"]
     rows = [wire["$defs"][v["$ref"].split("/")[-1]] for v in variants]
     unknown, result = rows
-    assert unknown["properties"]["source_id"]["type"] == "null"
-    assert unknown["properties"]["status"]["const"] == "unknown"
-    assert unknown["properties"]["source_quote"]["const"] == ""
-    assert result["properties"]["source_id"]["const"] == "e96"
-    value = corrected(context, calls[0])
-    # Valid prose is still required: the schema cannot convert a source error
-    # to an answer, or copy another requirement's permitted source.
-    value["answer_coverage"][0]["source_id"] = "e96"
-    with pytest.raises(ValidationError):
-        contract.model_validate(value)
+    assert set(unknown["properties"]) == {"requirement_id", "text"}
+    assert set(result["properties"]) == {"requirement_id", "text"}
+    unknown_id = unknown["properties"]["requirement_id"]["const"]
+    result_id = result["properties"]["requirement_id"]["const"]
+    bound_unknown = bind_part({"requirement_id": unknown_id, "text": UNKNOWN}, context)
+    assert bound_unknown["source_id"] is None and bound_unknown["status"] == "unknown"
+    assert bound_unknown["source_quote"] == ""
+    bound_result = bind_part({"requirement_id": result_id, "text": RESULT}, context)
+    assert bound_result["source_id"] == "e96" and bound_result["status"] == "answered"
+    with pytest.raises(ModelFormatError):
+        bind_part({"requirement_id": unknown_id, "text": UNKNOWN, "source_id": "e96"}, context)
 
 
 @pytest.mark.parametrize("has_result", [False, True])
@@ -160,15 +164,15 @@ def test_current_effect_uses_full_body_while_pure_observation_keeps_detail(froze
             r for r in brief["answer_requirements"] if r["kind"] != "result"
         ]
     contract = generation_contract(KeeperNarration, context)
-    expected = "public_narration" if has_result else "observed_detail"
+    expected = None if has_result else "observed_detail"
     assert narration_body_field(contract) == expected
     wire = generation_schema(contract.model_json_schema())
-    assert expected in wire["properties"]
+    assert ("answer_parts" if has_result else expected) in wire["properties"]
     assert ("observed_detail" in wire["properties"]) is not has_result
     if has_result:
-        description = wire["properties"][expected]["description"]
-        assert "实际结果" in description and "尚未确认" in description
-        assert "pattern" not in wire["properties"][expected]
+        assert "public_narration" not in wire["properties"]
+        assert "answer_coverage" not in wire["properties"]
+        assert "pattern" not in json.dumps(wire)
 
 
 @pytest.mark.parametrize("index", [0, 1])
@@ -215,7 +219,7 @@ def test_original_bound_probe_survives_real05_abbreviated_teammate_action():
     for original in calls:
         assert not coverage_audit(original, brief)["complete"]
     value = corrected(context, calls[0])
-    result = generation_contract(KeeperNarration, context).model_validate(value)
+    result = KeeperNarration.model_validate(value)
     assert result.public_narration == value["public_narration"]
     assert coverage_audit(result, brief)["complete"]
     assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
@@ -247,8 +251,9 @@ def test_real06_prompt_and_claim_grammar_use_final_selected_sources(mixed):
     selected = {s["text"] for s in brief["answer_sources"]}
     assert allowed <= selected and RESULT in allowed
     wire = generation_schema(generation_contract(KeeperNarration, context).model_json_schema())
-    ids = wire["properties"]["claim_ids"]["items"]
-    assert "entity_a630d572-fb0f-4fdb-9a14-7931258cb862" not in json.dumps(ids)
+    assert "claim_ids" not in wire["properties"]
+    assert "answer_parts" in wire["properties"]
+    assert "entity_a630d572-fb0f-4fdb-9a14-7931258cb862" not in json.dumps(wire)
     assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -261,7 +266,8 @@ def test_real08_missing_evidence_hints_do_not_supply_facts_or_validate_failed_bo
     before = copy.deepcopy(context)
     messages = action_messages(context, KeeperNarration, NARRATION_INSTRUCTION)
     assert "普通杂物可补充材质" not in messages[0]["content"]
-    assert "关于纸张有没有夹层或折叠，目前尚未确认。" in messages[0]["content"]
+    assert "answer_parts是唯一正文" in messages[0]["content"]
+    assert "尚未确认" not in messages[0]["content"]
     assert "操作成功不代表" in messages[0]["content"]
     assert json.loads(messages[1]["content"])["response_brief"]["answer_sources"] == (
         context["response_brief"]["answer_sources"]

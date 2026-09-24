@@ -1,7 +1,7 @@
-"""Bounded incremental decoding of one exact, top-level JSON string.
+"""Bounded incremental decoding of one exact top-level JSON body field.
 
-This is only a decoder, never a visibility or narration validator. Callers must
-validate complete candidate sentences against fixed public facts before release.
+These are only decoders, never visibility or narration validators. Callers must
+validate complete candidate sentences or answer parts before release.
 """
 
 import json
@@ -183,5 +183,88 @@ class IncrementalJSONObjectString:
         decoded = json.loads(self._raw[:self._position + 1])
         if not isinstance(decoded.get(self.field), str) or decoded[self.field] != self.value:
             raise ValueError("selected field missing or inconsistent")
+        self._state = "done"
+        self.complete = True
+
+
+class IncrementalJSONObjectArray(IncrementalJSONObjectString):
+    """Decode complete objects from one top-level array, before its JSON ends.
+
+    Only an object's closing brace makes it available. Escapes, nested values,
+    duplicate keys and root framing receive the same checks at every chunk
+    boundary; decoded objects still require their caller's semantic validation.
+    """
+
+    def __init__(self, field: str, max_chars: int = 262144, max_items: int = 32):
+        super().__init__(field, max_chars)
+        self.value = []
+        self.max_items = max_items
+
+    @staticmethod
+    def _object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate key")
+            value[key] = item
+        return value
+
+    def feed(self, text: str) -> list[dict]:
+        additions = super().feed(text)
+        return additions if isinstance(additions, list) else []
+
+    def _consume(self, char):
+        if self._role:
+            self._consume_string(char)
+            return
+        if self._state == "array_object":
+            if char == '"':
+                self._begin_string("skip")
+            elif char in "[{":
+                self._nested.append(char)
+            elif char in "]}":
+                expected = "[" if char == "]" else "{"
+                if not self._nested or self._nested.pop() != expected:
+                    raise ValueError("invalid array object container")
+                if not self._nested:
+                    item = json.loads(
+                        self._raw[self._value_start:self._position + 1],
+                        object_pairs_hook=self._object,
+                    )
+                    if len(self.value) >= self.max_items:
+                        raise ValueError("too many array objects")
+                    self.value.append(item)
+                    self._state = "array_separator"
+            return
+        if self._state in {"array_value_or_end", "array_value", "array_separator"}:
+            if char in " \r\n\t":
+                return
+            if char == "]" and self._state != "array_value":
+                self.closed = True
+                self._state = "comma_or_end"
+            elif char == "{" and self._state != "array_separator":
+                self._value_start = self._position
+                self._nested = [char]
+                self._state = "array_object"
+            elif char == "," and self._state == "array_separator":
+                self._state = "array_value"
+            else:
+                raise ValueError("selected array must contain objects")
+            return
+        if self._state == "value" and self._key == self.field:
+            if char in " \r\n\t":
+                return
+            if char != "[":
+                raise ValueError("selected value is not an array")
+            self._state = "array_value_or_end"
+            return
+        super()._consume(char)
+
+    def _end_object(self):
+        decoded = json.loads(
+            self._raw[:self._position + 1], object_pairs_hook=self._object,
+        )
+        if not isinstance(decoded.get(self.field), list) or decoded[self.field] != self.value:
+            raise ValueError("selected array missing or inconsistent")
         self._state = "done"
         self.complete = True

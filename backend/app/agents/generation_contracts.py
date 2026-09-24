@@ -373,6 +373,14 @@ def generation_contract(schema, context):
             ),
         )
     if schema is KeeperNarration:
+        from app.agents.answer_parts import (
+            CONTRACT_VERSION,
+            parts_field,
+            project_answer_parts,
+            uses_answer_parts,
+        )
+
+        parts_mode = uses_answer_parts(context)
         responder = context.get("response_brief", {}).get("responder", {})
         fields = {}
         if responder.get("kind") == "npc":
@@ -680,6 +688,21 @@ def generation_contract(schema, context):
             fields["public_narration"] = (
                 str, Field(default="", json_schema_extra={"x-server-bound": True})
             )
+        if parts_mode:
+            fields["answer_parts"] = parts_field(context)
+            fields["answer_contract_version"] = (
+                Literal[CONTRACT_VERSION],
+                Field(default=CONTRACT_VERSION, json_schema_extra={"x-server-bound": True}),
+            )
+            for name, annotation, default in (
+                ("public_narration", str, ""),
+                ("answer_coverage", list[AnswerCoverage], []),
+                ("claim_ids", list[str], []),
+                ("incidental_details", list[str], []),
+            ):
+                fields[name] = (annotation, Field(
+                    default=default, json_schema_extra={"x-server-bound": True},
+                ))
         result = bound(
             KeeperNarration,
             {
@@ -698,6 +721,25 @@ def generation_contract(schema, context):
             def responds_to_new_turn(value):
                 from app.agents.behavior import bigram_jaccard
 
+                if parts_mode:
+                    from app.models.base import ModelFormatError
+
+                    projection = project_answer_parts(value.answer_parts, context)
+                    if (
+                        value.public_narration
+                        and value.public_narration != projection.public_narration
+                        or value.answer_coverage
+                        and value.answer_coverage != projection.answer_coverage
+                        or value.incidental_details or value.claim_ids or value.grounded_claims
+                    ):
+                        raise ModelFormatError("逐段契约不能另外生成正文或引用副本", [{
+                            "field": "answer_parts", "code": "只在每项text中填写实际正文。",
+                        }])
+                    value.public_narration = projection.public_narration
+                    value.answer_coverage = projection.answer_coverage
+                    value.check_result_reference = projection.check_result_reference
+                    value.transition_result_reference = projection.transition_result_reference
+
                 if observation_body and value.observed_detail:
                     from app.models.base import ModelFormatError
 
@@ -711,7 +753,7 @@ def generation_contract(schema, context):
                     value.public_narration = value.observed_detail
 
                 brief = context.get("response_brief", {})
-                if answer_requirements:
+                if answer_requirements and not parts_mode:
                     from app.agents.narration_coverage import (
                         coverage_audit,
                         coverage_repair_message,
@@ -834,6 +876,12 @@ def generation_contract(schema, context):
 def restore_output(output, schema, context):
     value = output.model_dump(mode="json")
     if schema is KeeperNarration:
+        if "answer_parts" in value:
+            from app.agents.answer_parts import project_answer_parts
+
+            projection = project_answer_parts(value.pop("answer_parts"), context)
+            value.update(projection.model_dump(mode="json"))
+        value.pop("answer_contract_version", None)
         value.pop("observed_detail", None)
     if schema is KeeperNarration and value.get("npc_speech"):
         for answer in value["npc_speech"].get("answers", []):

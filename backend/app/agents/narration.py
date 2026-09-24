@@ -446,7 +446,7 @@ class NarrationValidator:
         require(not error, "叙事声称了未获实际结算支持的效果：" + (error or ""), 422)
         negative = [f for f in results.get("current_result_facts", [])
                     if f.get("status") in {"failure", "not_executed", "technical_failure"}]
-        if negative and output.public_narration and not prefix:
+        if negative and output.public_narration and not prefix and not partial:
             from app.agents.results import answer_result_error
 
             require(not answer_result_error(
@@ -527,7 +527,7 @@ class NarrationValidator:
                             422,
                         )
         uncertain = re.search(r"未|没|无法|不能|不清|不确定|难以|仍需|尚需", text)
-        if not prefix and not any(discovered) and (
+        if not prefix and not partial and not any(discovered) and (
             (brief or {}).get("unconfirmed_target") or results.get("blocked_discovery")
         ):
             require(bool(uncertain), "未确认的调查不能叙述为已经发现内容", 422)
@@ -567,7 +567,7 @@ class NarrationValidator:
                 text, list(checks.values()), reference=output.check_result_reference,
             ), "叙事与真实检定结果冲突", 422)
             require(
-                prefix or passed is not False or any(discovered) or bool(uncertain),
+                prefix or partial or passed is not False or any(discovered) or bool(uncertain),
                 "检定失败后需要说明实际后果或未能确认的内容",
                 422,
             )
@@ -584,7 +584,7 @@ class NarrationValidator:
                 return sum(g in visible_text for g in grams) >= min(3, len(grams))
 
             require(
-                prefix or passed is not True
+                prefix or partial or passed is not True
                 or not any(discovered)
                 or any(includes_feedback(s) for s in discovered if s),
                 "成功后的具体反馈没有出现在发言中，请自然解释本轮实际发现："
