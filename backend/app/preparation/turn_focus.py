@@ -5,12 +5,16 @@ import re
 from app.agents.adjudication_schemas import TurnFocus, TurnRequest
 from app.preparation.action_authority import (
     action_kinds,
+    address_candidates,
     addressed_spans,
     declared_action,
     information_question,
+    mentioned_members,
+    public_member_names,
     request_clauses,
     requested_action_kinds,
     speaker_action,
+    unquoted_text,
 )
 
 
@@ -57,6 +61,22 @@ def historical_third_person_question(text, names=()):
     ))
 
 
+def salutation_only_fragment(text, people):
+    """A parsed addressee left after request subtraction is not a self action."""
+    remainder = list(text)
+    names = public_member_names(people)
+    for owners, start, end in address_candidates(text, people):
+        aliases = {alias for mid in owners for alias in (
+            names[mid], re.split(r"[·•\s]", names[mid])[0],
+        ) if alias}
+        pattern = (r"\s*(?:(?:我)?(?:请|让|叫|问|向|对))?(?:"
+                   + "|".join(re.escape(alias) for alias in aliases)
+                   + r")(?:先生|女士)?")
+        if re.fullmatch(pattern, text[start:end]):
+            remainder[start:end] = " " * (end - start)
+    return not "".join(remainder).strip(" \t\r\n，,。；;：:！？!?、")
+
+
 def request_scopes(request):
     """Split only independently classified clauses, retaining literal offsets."""
     groups = []
@@ -90,6 +110,7 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
     Old saves/plans lack requests. The lexical compatibility path runs here once,
     never independently in scheduling, normalization or authority checks.
     """
+    people = public_member_names(people)
     explicit = addressed_spans(raw, {mid: name for mid, name in people.items() if mid != actor})
     explicit.extend(explicit_spans)
     explicit.sort(key=lambda span: span[1])
@@ -120,6 +141,10 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
         }
         if owners and owners != {request.addressee_id}:
             continue
+        if not owners and request.addressee_id not in npc_ids and not re.search(
+            r"你|您", unquoted_text(request.text),
+        ):
+            continue  # A generic question belongs to the KP, not a modeled peer.
         if (request.addressee_id in npc_ids and not owners
                 and historical_third_person_question(
                     request.text, [people[request.addressee_id]],
@@ -201,6 +226,8 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
         and focus.question in raw
         and focus.question
         and question_request(focus.question, people.get(focus.addressee_id, ""))
+        and (focus.addressee_id in npc_ids or re.search(r"你|您", unquoted_text(focus.question))
+             or any(mid == focus.addressee_id for mid, _, _ in explicit))
         and not (
             focus.addressee_id in npc_ids
             and historical_third_person_question(focus.question, [people[focus.addressee_id]])
@@ -235,11 +262,7 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
     expanded = [scoped for request in requests for scoped in request_scopes(request)]
     focus.requests = sorted(expanded, key=lambda r: r.source_start)[:12]
     for request in focus.requests:
-        targets = [
-            mid
-            for mid, name in people.items()
-            if mid != request.addressee_id and name in request.text
-        ]
+        targets = list(mentioned_members(request.text, people) - {request.addressee_id})
         if len(targets) == 1:
             request.target_id = targets[0]
     return focus.requests
@@ -247,6 +270,15 @@ def bind_requests(focus, raw, people, actor, *, npc_ids=(), explicit_spans=()):
 
 def repair_attribution(plan, raw, people, actor, *, npc_ids=(), explicit_spans=()):
     focus = plan.focus or TurnFocus()
+    ambiguous = [owners for owners, _, _ in address_candidates(raw, people) if len(owners) > 1]
+    if ambiguous:
+        focus.requests, focus.addressee_id = [], None
+        plan.focus, plan.addressed_member_id = focus, None
+        plan.needs_clarification = plan.parsed_intent.requires_clarification = True
+        plan.parsed_intent.clarification_question = "这个称呼对应多位成员，请明确要请哪一位。"
+        plan.proposed_check = plan.proposed_transition_id = None
+        plan.proposed_tool_calls, plan.proposed_reveal_entity_ids = [], []
+        return
     # A negative account of a prior attempt is context for the question, not
     # permission to repeat that attempt. Apply this before request attribution.
     from app.preparation.action_authority import action_kinds
@@ -269,8 +301,14 @@ def repair_attribution(plan, raw, people, actor, *, npc_ids=(), explicit_spans=(
         focus.addressee_id = None
         plan.focus = focus
     if not requests:
+        unbound_addressee = bool(focus.addressee_id and focus.addressee_id not in npc_ids
+                                 and not re.search(r"你|您", unquoted_text(focus.question)))
+        unbound_question = unbound_addressee and question_request(focus.question)
+        if unbound_addressee:
+            focus.addressee_id, plan.addressed_member_id = None, None
+            plan.focus = focus
         own = speaker_action(raw)
-        if own and (had_requests or not focus.action):
+        if own and (had_requests or not focus.action) and not unbound_question:
             from app.agents.action_policy import explicit_movement
             focus.action, focus.question, focus.addressee_id = raw[raw.index(own):], "", None
             focus.action_target_id = focus.action_target_id or plan.parsed_intent.target_id
@@ -301,7 +339,8 @@ def repair_attribution(plan, raw, people, actor, *, npc_ids=(), explicit_spans=(
             ]
         # The existing primary action is one original span. Preserve its full
         # operative continuation, not a manufactured concatenation across people.
-        attempts = [raw[left:right] for left, right in intervals]
+        attempts = [raw[left:right] for left, right in intervals
+                    if not salutation_only_fragment(raw[left:right], people)]
         action = next((a for a in attempts if re.search(r"我(?:们)?", a)), next(iter(attempts), ""))
     if not action:
         # Compatibility for a KP that put the entire mixed turn in question.

@@ -200,6 +200,7 @@ def addressed_request_text(raw, name, members=None):
 
 def address_names(members):
     """Accept an unambiguous given name as a salutation, never a shared prefix."""
+    members = public_member_names(members)
     candidates = {
         mid: {name, re.split(r"[·•\s]", name)[0]} for mid, name in members.items()
     }
@@ -207,38 +208,77 @@ def address_names(members):
     for mid, names in candidates.items():
         unique = [n for n in sorted(names, key=len, reverse=True)
                   if n and (n == members[mid] or len(n) >= 2)
-                  and sum(n in ns for ns in candidates.values()) == 1]
+                  and (sum(n == value for value in members.values()) == 1
+                       if n == members[mid] else sum(n in ns for ns in candidates.values()) == 1)]
         patterns[mid] = "(?:" + "|".join(map(re.escape, unique)) + ")" if unique else r"(?!)"
     return patterns
 
 
-def addressed_spans(raw, members):
-    """Explicit address boundaries, not a classifier of an utterance's meaning."""
+def public_member_names(members):
+    """Display seat suffixes are not part of a saved investigator's name."""
+    return {mid: re.sub(r"[（(]队友\s*\d+[）)]$", "", name) for mid, name in members.items()}
+
+
+def unquoted_text(text):
+    """Quoted instructions describe content; they do not acquire new authority."""
+    return re.sub(r'“[^”]*”|‘[^’]*’|「[^」]*」|"[^"]*"', lambda m: " " * len(m[0]), text)
+
+
+def address_candidates(raw, members):
+    """Resolve complete names before aliases; preserve genuinely shared names."""
+    members = public_member_names(members)
+    owners = {}
+    for mid, name in members.items():
+        for alias in {name, re.split(r"[·•\s]", name)[0]}:
+            if alias and (alias == name or len(alias) >= 2):
+                owners.setdefault(alias, set()).add(mid)
+    for alias in owners:
+        exact = {mid for mid, name in members.items() if name == alias}
+        owners[alias] = exact or owners[alias]
+    if not owners:
+        return []
+    name_pattern = "(?:" + "|".join(
+        re.escape(n) for n in sorted(owners, key=len, reverse=True)
+    ) + ")"
     found = []
     quotes = [m.span() for m in re.finditer(r'“[^”]*”|‘[^’]*’|「[^」]*」|"[^"]*"', raw)]
-    for mid, name_pattern in address_names(members).items():
+    for prefix, suffix in (
+        (r"(?:^|(?<=[，,。！？；;\n]))\s*(?:(?:我)?(?:请|让|叫|问|向|对))?",
+         r"(?:先生|女士)?(?=[，,:：、]|(?:帮|照看|照顾|检查|查看|观察|负责|去|来|说|问|拿|用|打开|关))"),
+        (r"(?:^|(?<=[，,。！？；;\n]))\s*我(?:蹲在|站在|坐在|走到|来到|转向|看着|靠近)",
+         r"(?:旁边|身旁|面前)?(?:，?)(?:并|然后)?(?:询问|问|说|请教)[：:，,]?"),
+    ):
         for match in re.finditer(
-            r"(?:^|(?<=[，,。！？；;\n]))\s*(?:(?:我)?(?:请|让|叫|问|向|对))?"
-            + name_pattern
-            + r"(?:先生|女士)?"
-            + r"(?=[，,:：、]|(?:帮|照看|照顾|检查|查看|观察|负责|去|来|说|问))",
-            raw,
+            prefix + "(?P<name>" + name_pattern + ")" + suffix, raw,
         ):
+            introduction = raw[match.start():match.start("name")]
+            report = re.match(r"(?:先生|女士)?说(?!说)", raw[match.end("name"):])
+            if report and not re.search(r"请|让|叫|问|向|对", introduction):
+                continue  # "林修远说：…" reports him; it does not address him.
             if not any(left <= match.start() < right for left, right in quotes):
-                found.append((mid, match.start(), match.end()))
-        # A named conversation can follow a request to somebody else without a
-        # second salutation: "I crouch beside the guard and ask ...".
-        for match in re.finditer(
-            r"(?:^|(?<=[，,。！？；;\n]))\s*我(?:蹲在|站在|坐在|走到|来到|转向|看着|靠近)"
-            + name_pattern
-            + r"(?:旁边|身旁|面前)?(?:，?)(?:并|然后)?(?:询问|问|说|请教)[：:，,]?",
-            raw,
-        ):
-            if not any(left <= match.start() < right for left, right in quotes):
-                found.append((mid, match.start(), match.end()))
+                found.append((owners[match["name"]], match.start(), match.end()))
     found.sort(key=lambda item: item[1])
+    return found
+
+
+def mentioned_members(text, members):
+    """Complete public names occupy one span; shorter substrings cannot add IDs."""
+    members = public_member_names(members)
+    names = sorted(set(filter(None, members.values())), key=len, reverse=True)
+    if not names:
+        return set()
+    found = {m[0] for m in re.finditer("|".join(map(re.escape, names)), text)}
+    return {mid for mid, name in members.items() if name in found}
+
+
+def addressed_spans(raw, members):
+    """Explicit address boundaries, not a classifier of an utterance's meaning."""
+    found = address_candidates(raw, members)
     spans = []
-    for i, (mid, start, name_end) in enumerate(found):
+    for i, (owners, start, name_end) in enumerate(found):
+        if len(owners) != 1:
+            continue
+        mid = next(iter(owners))
         end = found[i + 1][1] if i + 1 < len(found) else len(raw)
         # A new first-person declaration ends the request even in the same sentence.
         own = re.search(
@@ -284,6 +324,7 @@ def requested_action_kinds(text):
     # them. Scope this exclusion to its original clause: an adjacent explicit
     # instruction still gives the peer a separate choice to act or decline.
     clauses = []
+    text = unquoted_text(text)
     for part in request_clauses(text):
         clause = part["text"]
         if (information_question(clause) or speaker_action(clause)
@@ -359,37 +400,13 @@ def teammate_request(raw, members, actor, *, action=None):
     """A direct request is speech until the addressee submits their own event."""
     if action and action in raw and speaker_action(action):
         return None  # This selected action belongs to the speaker, even with a separate request.
-    for mid, name_pattern in address_names(members).items():
+    for mid, start, end in addressed_spans(raw, members):
         if mid == actor:
             continue
-        addressed = re.search(
-            r"(?:^|[。！？；])\s*" + name_pattern + r"[，,:：]([^。！？；]*)", raw
-        )
-        if addressed and re.search(r"[?？]|(?:请教|询问|想问)", raw[addressed.start() :]):
-            # A salutation can precede background and several sentences before
-            # the actual question. It still gives the named peer a reply turn.
-            return mid
-        if addressed and not re.match(r"\s*我(?:们)?", addressed[1]) and action_kinds(addressed[1]):
-            return mid
-        if re.search(
-            r"(?:^|[。！？；])\s*我(?:对|向)"
-            + name_pattern
-            + r"(?:说道?|表示)[：:]\s*(?:请|麻烦你|劳驾|你|把)",
-            raw,
-        ):
-            return mid
-        if re.search(
-            r"(?:^|[。！？；])\s*"
-            + name_pattern
-            + r"[，,:：]\s*(?:(?:现在|这就|马上|接着|随后|先|再)\s*)*"
-            + r"(?:请|你|帮|把|打开|关|拿|用|过来|来|麻烦你|劳驾|我(?:是|想)?请你|我希望你|"
-            r"能不能|可不可以|能否|可否|可以|能)",
-            raw,
-        ):
-            return mid
-        if re.search(
-            r"(?:请|让|叫)" + name_pattern + r".{0,8}(?:打开|关|拿|用|帮|检查|查看|搜索|观察)",
-            raw,
+        request = raw[start:end]
+        if requested_action_kinds(request) or re.search(
+            r"[?？]|请教|询问|想问|(?:我是|我想|我希望)?请你|麻烦你|劳驾|"
+            r"(?:^|[，,:：])\s*(?:请|帮|照看|照顾|留意|负责|拿着)", request,
         ):
             return mid
     return None
@@ -512,12 +529,12 @@ def freeze_action(plan, raw, actor, seq, scene, entities, runtime, members):
         "named_entity_ids": sorted(named),
         "named_recipients": [
             mid
-            for mid, name in members.items()
-            if mid != actor and name in action and "give" in kinds
+            for mid in mentioned_members(action, members)
+            if mid != actor and "give" in kinds
         ],
         "request_member_id": request,
         "explicit_instance_ids": explicit,
-        "named_members": [mid for mid, name in members.items() if name in action],
+        "named_members": sorted(mentioned_members(action, members)),
     }
 
 

@@ -131,8 +131,10 @@ def test_reroll_name_collision_keeps_other_member_and_adopted_identity(client, p
     assert json.dumps(stored["members"][1], ensure_ascii=False) == other
     assert len(model.messages) == 3  # No extra generation to resolve a name.
 
-    # An old suffix name is a valid already-adopted identity. Reconstruct that
-    # earlier stored result in this isolated fixture; review must not migrate it.
+    adopted = client.post(prefix + "/adopt", json={"request_id": str(uuid4())})
+    assert adopted.status_code == 200, adopted.text
+    # Only an already-adopted old suffix identity is preserved. New adoption
+    # now checks complete names against the whole party, including the owner.
     async def retain_old_name():
         document = await svc.get(batch["id"])
         first = document["members"][0]
@@ -140,15 +142,12 @@ def test_reroll_name_collision_keeps_other_member_and_adopted_identity(client, p
         await svc._save(document)
 
     client.portal.call(retain_old_name)
-    adopted = client.post(prefix + "/adopt", json={"request_id": str(uuid4())})
-    assert adopted.status_code == 200, adopted.text
     original_adopted = client.portal.call(svc.get, batch["id"])
     reviewed = client.portal.call(svc.review, batch["id"])
     assert json.dumps(reviewed, ensure_ascii=False) == json.dumps(
         original_adopted, ensure_ascii=False,
     )
-    card = client.get(f"/api/characters/{reviewed['character_ids'][0]}").json()
-    assert card["name"] == "林修远·猎人"
+    assert reviewed["members"][0]["character"]["name"] == "林修远·猎人"
 
 
 def low_skill(svc, member):

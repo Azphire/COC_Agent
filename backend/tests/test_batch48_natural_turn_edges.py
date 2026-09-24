@@ -58,7 +58,7 @@ def test_real_attempt_and_later_independent_action_keep_authority(text, expected
     assert set(action_kinds(text)) == expected
 
 
-def test_saved_empty_recall_uses_uncertainty_without_claiming_source_absence(saved_turns):
+def test_saved_deduplicated_recall_retains_original_public_source(saved_turns):
     state = saved_turns[0]
     room_id = state["launch_drafts"][0]["room_id"]
     run = next(r for r in state["agent_runs"] if r["room_id"] == room_id
@@ -71,9 +71,10 @@ def test_saved_empty_recall_uses_uncertainty_without_claiming_source_absence(sav
     assert "只管前进" in call["generated_output"]["speech_text"]
     result = restore_output(TeammateDecision.model_validate(call["generated_output"]),
                             TeammateDecision, context)
-    assert result.speech_text == "我还没核对清楚，暂时不能确认。"
-    assert result.mode == "speak" and result.action_text is None and not result.fact_ids
-    # This narrow fix does not reselect evidence or assert it exists/doesn't exist.
+    assert "只管前进吧，已经没有退路了。" in result.speech_text
+    assert result.mode == "speak" and result.action_text is None
+    assert result.fact_ids == ["event:6"]
+    # Batch 49 reads the same selected original from its deduplicated projection.
     assert not context["fact_evidence"]
 
 

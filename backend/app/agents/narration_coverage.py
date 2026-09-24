@@ -42,7 +42,7 @@ def _compact(text):
 def _topic_terms(text):
     # Strip grammatical scaffolding, not object names or source-specific values.
     text = re.sub(
-        r"什么|多少|是否|知道|具体|早先|估计|请|回答|观察|查看|检查|环顾|"
+        r"有没有|有无|会不会|能否|什么|多少|是否|知道|具体|早先|估计|请|回答|观察|查看|检查|环顾|"
         r"我(?:们)?|你(?:们)?|他(?:们)?|她(?:们)?|这次|本轮|现在",
         " ",
         text,
@@ -57,6 +57,30 @@ def _quantities(text):
         (float(n) if re.fullmatch(r"\d+(?:\.\d+)?", n) else quantity_value(n), unit)
         for n, unit in QUANTITY.findall(text)
     }
+
+
+def _answer_quantities(text, requirement, source):
+    """An indefinite article for the quoted document is not a total count.
+
+    This is confined to a verbatim source-text answer. Exact totals, other
+    objects, plural quantities and numeric questions retain their usual guard.
+    """
+    if (not requirement.get("verbatim") or source.get("kind") != "source_text"
+            or re.search(r"多少|几[张份本]|数量|数目|总数", requirement.get("text", ""))):
+        return _quantities(text)
+
+    def article(match):
+        prefix, noun = match["prefix"], match["noun"]
+        if (noun in source["text"] and not re.search(
+                r"只有|仅|只|总共|一共|共计|恰好|正好|准确|数量|数目", prefix)):
+            return prefix + noun
+        return match[0]
+
+    prose = re.sub(
+        r"(?P<prefix>[^，,。；;！？!?\n]{0,20}?(?:贴着|贴有|有))一[张份本]"
+        r"(?P<noun>[\u4e00-\u9fff]{2,8})(?=[，,。；;！？!?：:\n]|$)", article, text,
+    )
+    return _quantities(prose)
 
 
 def _requested_quantities(text, question):
@@ -100,6 +124,53 @@ def _format_only_question(question):
         "能|请|用|以|按|的|吗|呢"
     )
     return not re.sub(r"[\W_]", "", re.sub(vocabulary, "", question))
+
+
+def _selected_result_sources(context):
+    brief = context.get("response_brief", {})
+    if (brief.get("responder", {}).get("kind") != "keeper"
+            or not brief.get("current_action_results") or not brief.get("answer_requirements")):
+        return None
+    return {source["text"] for source in brief.get("answer_sources", [])}
+
+
+def narration_claim_options(context):
+    """Generate claims from the same final sources as the result answer."""
+    selected = _selected_result_sources(context)
+    claims = context.get("PUBLIC_CLAIM_OPTIONS", [])
+    return claims if selected is None else [c for c in claims if c["statement"] in selected]
+
+
+def project_result_answer_sources(prompt):
+    """Do not reintroduce omitted opening/history through alternate projections.
+
+    The caller already copied the prompt; the complete run context remains the
+    authority for validation, permissions, anti-repeat and the result ledger.
+    Requested historical/mixed evidence remains in canonical answer_sources.
+    """
+    selected = _selected_result_sources(prompt)
+    if selected is None:
+        return
+    brief = prompt["response_brief"]
+    # Actual receipts supersede a planner's pre-execution 'unrecorded' guess.
+    brief["answer_basis"] = "facts"
+    brief["allowed_facts"] = [f for f in brief.get("allowed_facts", [])
+                              if f["text"] in selected]
+    for key in ("historical_memory", "incidental_memories", "recent_dialogue"):
+        brief[key] = [row for row in brief.get(key, []) if row.get("text") in selected]
+    brief["source_quotes"] = [text for text in brief.get("source_quotes", []) if text in selected]
+    for key, field in (("current_scene", "public_description"),
+                       ("observation_subject", "public_summary")):
+        if brief.get(key) and brief[key].get(field) not in selected:
+            brief[key].pop(field, None)
+    task = prompt.get("current_task", {})
+    for key in ("observation_subject", "source_quotes"):
+        if key in task:
+            task[key] = brief.get(key)
+    if "fact_evidence" in prompt:
+        prompt["fact_evidence"] = [f for f in prompt["fact_evidence"] if f.get("text") in selected]
+    if "PUBLIC_CLAIM_OPTIONS" in prompt:
+        prompt["PUBLIC_CLAIM_OPTIONS"] = narration_claim_options(prompt)
 
 
 def prepare_response_contract(context):
@@ -152,7 +223,24 @@ def prepare_response_contract(context):
                 historical=True,
                 speaker=entry.get("speaker", ""),
                 epistemic=entry.get("epistemic", ""),
+                title=entry.get("title", ""),
             )
+    from app.memory.facts import selected_answer_facts
+
+    for entry in selected_answer_facts(context):
+        if entry.get("kind") in {"source_text", "npc_statement"} and isinstance(
+            entry.get("source_event_seq"), int
+        ):
+            add(
+                "e" + str(entry["source_event_seq"]), entry["text"],
+                kind=entry["kind"], historical=True,
+                speaker=entry.get("speaker", ""), title=entry.get("title", ""),
+            )
+    # Bound current receipts take priority when duplicate text also appears in
+    # a different event. Retain the current action's actual source reference.
+    current_results = brief.get("current_action_results", [])
+    for result in current_results:
+        add("e" + str(result["source_event_seq"]), result["effect"], kind="receipt")
     for event in context.get("public_tool_results", {}).get("events", []):
         if event["type"] in {"clue.revealed", "entity.revealed", "module.interaction"}:
             payload = event["payload"]
@@ -168,11 +256,29 @@ def prepare_response_contract(context):
             formats.append(clause.strip())
     seq = brief.get("trigger_seq", context.get("triggering_action", {}).get("seq", 0))
     demands = [("observation", s) for s in _observation_subjects(brief.get("attempt", ""))]
+    delegated = brief.get("delegated_requests", [])
+    # Only requests already bound to this child/actor/target arrive here. An
+    # abbreviated execution proposal must not discard the original inspection
+    # question. The probe expresses the purpose of inspecting that same object;
+    # it replaces a generic restatement such as 'inspect the note's edge'.
+    probes = list(dict.fromkeys(
+        subject for request in delegated
+        for subject in _observation_subjects(request["text"])
+        if re.search(r"有没有|有无|是否", subject)
+    ))
+    if probes:
+        demands = [("observation", subject) for subject in probes]
     if not demands and brief.get("ordinary_observation") and brief.get("attempt"):
         subject = brief.get("observation_subject") or {}
         demands = [("observation", subject.get("title") or brief["attempt"])]
     # Formatting attached to a factual question never deletes that question.
-    for question in brief.get("questions", []):
+    from app.agents.narration import question_parts
+
+    questions = list(dict.fromkeys([
+        *brief.get("questions", []),
+        *(question for request in delegated for question in question_parts(request["text"])),
+    ]))
+    for question in questions:
         if _format_only_question(question):
             if question not in formats:
                 formats.append(question)
@@ -189,6 +295,9 @@ def prepare_response_contract(context):
             name = entry["speaker"]
             people.append((name, [name, *re.split(r"[·・\s]", name)]))
     for kind, demand in demands:
+        from app.agents.results import quote_request
+
+        verbatim = kind == "question" and quote_request(demand)
         topic = _topic_terms(demand)
         generic = kind == "observation" and bool(
             re.fullmatch(
@@ -216,6 +325,11 @@ def prepare_response_contract(context):
         selected = [s["id"] for score, s in ranked if score and score >= max(1, ranked[0][0] // 2)][
             :4
         ]
+        if verbatim:
+            originals = selected_answer_facts(context, demand)
+            original_ids = {"e" + str(r["source_event_seq"]) for r in originals
+                            if r.get("kind") in {"source_text", "npc_statement"}}
+            selected = [s["id"] for s in sources if s["id"] in original_ids]
         if generic:
             selected = [
                 s["id"] for s in sources if s["id"] == "scene:" + str(scene.get("id", "current"))
@@ -226,13 +340,36 @@ def prepare_response_contract(context):
                 "kind": kind,
                 "text": demand,
                 "source_ids": selected,
+                **({"answer_instruction": "这项尚未确认，须在正文说明未知；"
+                   "其他需求的来源不能证明它，不可即兴补成肯定或否定。"}
+                   if not selected else {}),
                 **({"generic_scope": True} if generic else {}),
                 **({"speaker": speaker} if speaker else {}),
                 **({"historical": True} if historical else {}),
+                **({"verbatim": True} if verbatim else {}),
             }
         )
         if speaker:
             last_speaker = speaker
+    for result in current_results:
+        source_id = "e" + str(result["source_event_seq"])
+        # The same effect may have both a reveal and an interaction receipt.
+        source = next((s for s in sources if s["id"] == source_id), None)
+        if source is None:
+            source = next((s for s in sources if s["kind"] == "receipt"
+                           and s["text"] == result["effect"]), None)
+        if source is None or any(r.get("result_effect") == result["effect"]
+                                 for r in requirements):
+            continue
+        requirements.append({
+            "id": _stable_id("r", seq, "result", source["id"]),
+            "kind": "result",
+            "text": "本次实际结果：" + (result.get("target_name") or result["effect"]),
+            "source_ids": [source["id"]],
+            "result_effect": result["effect"],
+            **({"verbatim": True} if re.search(r'“[^”]+”|「[^」]+」|\"[^\"]+\"',
+                                                result["effect"]) else {}),
+        })
     selected_ids = {key for r in requirements for key in r["source_ids"]}
     brief["answer_requirements"] = requirements[:12]
     brief["answer_sources"] = [s for s in sources if s["id"] in selected_ids]
@@ -379,6 +516,13 @@ def _source_errors(requirement, answer, row, source):
     source_text = source["text"]
     if not quote.strip() or quote not in source_text:
         return ["source_quote须为本轮所选可见来源中的原样片段"]
+    if requirement.get("verbatim"):
+        literals = re.findall(r'“([^”]+)”|「([^」]+)」|\"([^\"]+)\"', source_text)
+        expected_text = [next(piece for piece in parts if piece) for parts in literals]
+        if not expected_text and source.get("kind") == "source_text":
+            expected_text = [re.sub(r"^.{1,24}?(?:写着|写了)[：:]", "", source_text)]
+        if any(_compact(piece) not in _compact(answer) for piece in expected_text):
+            errors.append("正文须实际答出当前问题所问的原文，不能只提到其对象或放入附属字段")
     if not requirement.get("generic_scope") and not (
         _topic_terms(question) & terms(quote + " " + source.get("speaker", ""))
     ):
@@ -407,7 +551,7 @@ def _source_errors(requirement, answer, row, source):
         )
     )
     expected = _requested_quantities(support, question) if quantity_question else set()
-    actual = _quantities(answer)
+    actual = _answer_quantities(answer, requirement, source)
     if (
         expected and re.search(r"少了|缺少|丢失|失窃", support)
         and re.search(r"多了|增加|增多", answer)
@@ -561,7 +705,7 @@ def _body_assertion_errors(body, requirement, source):
     sentences = re.findall(r"[^。；;！？!?\n]+[。；;！？!?\n]*", body)
     for index, sentence in enumerate(sentences):
         for clause in _factual_clauses(sentence):
-            actual = _quantities(clause)
+            actual = _answer_quantities(clause, requirement, source)
             referring = bool(index and re.match(r"\s*(?:这些|这点|上述|以上|这项|它们)", clause))
             inherited = referring and (
                 topic & terms(sentences[index - 1])
@@ -705,6 +849,26 @@ def coverage_audit(output, brief, *, prefix=False, partial=False):
                 reasons.append("无可见依据时须具体说明尚未知的内容")
             elif requirement.get("source_ids"):
                 reasons.append("本轮存在相关可见来源，须引用并保留已知内容后说明未知项")
+            elif re.search(r"有没有|有无|是否", requirement["text"]):
+                # A later 'unknown' sentence cannot excuse an earlier invented
+                # answer to this same explicit factual probe.
+                predicate = re.split(r"有没有|有无|是否", requirement["text"], maxsplit=1)[-1]
+                topic = _topic_terms(predicate)
+                assertions = re.sub(
+                    r"但是|然而|不过|并且|而且|同时|以及|但|而|却|且|并", "，", body,
+                )
+                for clause in _factual_clauses(assertions):
+                    lead = re.match(
+                        r"\s*(?:你|我)(?:们)?(?:正在|正|试图|尝试|仔细|开始|先|继续|用手)?"
+                        r"(?:检查|查看|搜索|寻找|观察)", clause,
+                    )
+                    remainder = re.sub(r"有没有|有无|是否", "", clause)
+                    if lead and not re.search(
+                        r"发现|看到|看见|确认|确定|表明|没有|并无|不存在|未见|存在|是", remainder,
+                    ):
+                        continue
+                    if topic & terms(clause) and not re.search(UNKNOWN, clause):
+                        reasons.append("正文给出了本轮来源未确认的检查结论：" + clause)
             if row.get("status") == "unknown" and not _unknown_for_requirement(answer, requirement):
                 reasons.append("unknown须在正文具体说明未知内容")
         if reasons:
@@ -729,6 +893,16 @@ def coverage_audit(output, brief, *, prefix=False, partial=False):
     return audit
 
 
+def unknown_answer_hints(requirements):
+    """Expression hints for missing evidence; never fill a generated body."""
+    return [
+        {"requirement_id": r["id"],
+         "answer": "关于" + re.sub(r"[？?。！!]+$", "", r["text"].strip())
+         + "，目前尚未确认。"}
+        for r in requirements if "source_ids" in r and not r["source_ids"]
+    ]
+
+
 def coverage_repair_message(audit):
     import json
 
@@ -739,7 +913,12 @@ def coverage_repair_message(audit):
         "仅在answer_coverage内写答案不算回答。保持已验证片段的含义/来源，"
         "仍输出一段自然KP正文，不限定句数。"
         + json.dumps(
-            {"missing": audit["errors"], "preserve": audit["verified"]},
+            {"missing": audit["errors"], "preserve": audit["verified"],
+             "required_unknown_answers": unknown_answer_hints([
+                 {"id": row["id"], "text": row["requirement"], "source_ids": []}
+                 for row in audit["errors"]
+                 if row.get("requirement") and row.get("available_sources") == []
+             ])},
             ensure_ascii=False,
             separators=(",", ":"),
         )

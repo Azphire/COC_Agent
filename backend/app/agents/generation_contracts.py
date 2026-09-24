@@ -5,9 +5,9 @@ server metadata as defaults. These fields never enter the generation grammar.
 """
 
 import re
-from typing import Literal
+from typing import Annotated, Literal, Union
 
-from pydantic import Field, create_model, model_validator
+from pydantic import Field, TypeAdapter, create_model, model_validator
 
 from app.agents.adjudication_schemas import (
     AnswerCoverage,
@@ -57,6 +57,53 @@ def narration_body_field(contract):
         ):
             return name
     return None
+
+
+def answer_coverage_contract(requirements, source_ids):
+    """A missing source is not another requirement's selectable evidence.
+
+    Keep the ordinary compact grammar. Mixed known/unknown answers additionally
+    bind each row's source/status to its own requirement before generation.
+    The public prose still needs the same independent coverage validation.
+    """
+    if all(r.get("source_ids") for r in requirements):
+        return create_model(
+            "AnswerCoverage", __base__=AnswerCoverage,
+            requirement_id=(Literal[tuple(r["id"] for r in requirements)], ...),
+            source_id=(Literal[(*source_ids, None)], Field(
+                default=None, json_schema_extra={"x-explicit-output": True},
+            )),
+        )
+    variants = []
+    for index, requirement in enumerate(requirements):
+        allowed = tuple(requirement.get("source_ids", []))
+        fields = {
+            "requirement_id": (Literal[requirement["id"]], Field(
+                description=requirement["text"],
+            )),
+            "source_id": (Literal[allowed] if allowed else type(None), Field(
+                default=None, json_schema_extra={"x-explicit-output": True},
+            )),
+        }
+        if not allowed:
+            fields.update({
+                "status": (Literal["unknown"], Field(
+                    default="unknown", json_schema_extra={"x-explicit-output": True},
+                )),
+                "source_quote": (Literal[""], Field(
+                    default="", json_schema_extra={"x-explicit-output": True},
+                )),
+                "body_quote": (str, Field(
+                    min_length=1, max_length=2000,
+                    description="从正文摘录对“" + requirement["text"]
+                    + "”尚未确认的说明；本轮没有这项事实的来源，不能给肯定或否定结论。",
+                )),
+            })
+        variants.append(create_model(f"AnswerCoverage{index + 1}",
+                                     __base__=AnswerCoverage, **fields))
+    return variants[0] if len(variants) == 1 else Annotated[
+        Union[tuple(variants)], Field(discriminator="requirement_id"),
+    ]
 
 
 def generation_contract(schema, context):
@@ -544,7 +591,9 @@ def generation_contract(schema, context):
                 ),
             )
         if "PUBLIC_CLAIM_OPTIONS" in context:
-            claim_ids = tuple(c["claim_id"] for c in context["PUBLIC_CLAIM_OPTIONS"])
+            from app.agents.narration_coverage import narration_claim_options
+
+            claim_ids = tuple(c["claim_id"] for c in narration_claim_options(context))
             fields["claim_ids"] = (
                 list[Literal[claim_ids]] if claim_ids else list[str],
                 Field(
@@ -569,20 +618,35 @@ def generation_contract(schema, context):
         ordinary_observation = context.get("response_brief", {}).get("ordinary_observation")
         answer_requirements = context.get("response_brief", {}).get("answer_requirements", [])
         observation_body = ordinary_observation and not any(
-            r.get("kind") == "question" for r in answer_requirements
+            r.get("kind") in {"question", "result"} for r in answer_requirements
         )
+        unknown_demands = [r["text"] for r in answer_requirements if not r.get("source_ids")]
+        unknown_instruction = (
+            "本轮须明确答出尚未确认的项目：" + "；".join(unknown_demands)
+            + "。在正文具体说哪项尚未确认，不把没有记载写成不存在；同时报告已发生的实际结果。"
+            if unknown_demands else ""
+        )
+        if (not observation_body and responder.get("kind") == "keeper"
+                and context.get("response_brief", {}).get("current_action_results")
+                and any(r.get("kind") == "result" for r in answer_requirements)):
+            fields["public_narration"] = (
+                str,
+                Field(
+                    default="", max_length=2000,
+                    description=fields["public_narration"][1].description
+                    + "本轮包含已执行的实际结果，完整正文须同时报告结果内容和其余检查需求。"
+                    + unknown_instruction,
+                    json_schema_extra={"x-explicit-output": True},
+                ),
+            )
         if answer_requirements:
             source_ids = tuple(s["id"] for s in context["response_brief"].get("answer_sources", []))
-            coverage = create_model(
-                "AnswerCoverage", __base__=AnswerCoverage,
-                requirement_id=(Literal[tuple(r["id"] for r in answer_requirements)], ...),
-                source_id=(Literal[(*source_ids, None)], Field(
-                    default=None, json_schema_extra={"x-explicit-output": True},
-                )),
-            )
+            coverage = answer_coverage_contract(answer_requirements, source_ids)
+            coverage_validator = TypeAdapter(coverage)
             fields["answer_coverage"] = (list[coverage], Field(
                 default_factory=list, max_length=12,
-                description="逐项映射answer_requirements：body_quote须原样出现在本次KP正文，"
+                description="每个answer_requirements.id恰好映射一次，不重复同一需求。"
+                "body_quote须原样出现在本次KP正文，"
                 "source_id/source_quote取本轮answer_sources；保留数值、证词归属和估计。"
                 "无依据则unknown并具体说明未知项。ID、附属细节或NPC台词均不能代替正文回答。",
                 json_schema_extra={"x-explicit-output": True},
@@ -592,6 +656,11 @@ def generation_contract(schema, context):
                 default_factory=list, json_schema_extra={"x-server-bound": True},
             ))
         if observation_body:
+            appearance_instruction = (
+                "本次检查结论仅依据answer_sources，尚未确认的外观不能即兴填成事实。"
+                if context.get("response_brief", {}).get("current_action_results")
+                else "普通杂物可即兴外观，不产生可获得资源、核心线索或治疗效果。"
+            )
             fields["observed_detail"] = (
                 str,
                 Field(
@@ -601,8 +670,10 @@ def generation_contract(schema, context):
                     "中的每个问题，包括有公开来源的历史问题；遵守player_statement的答复格式。"
                     "眼前观察、他人过去的估计或证词、当前实际结果分别说明，不把旧说法写成新发现。"
                     "只依据已公开来源与实际回执，缺少依据时具体说明尚未确认的部分。"
+                    "current_action_results是本次已经发生的结果，须在正文报告；"
+                    "answer_requirements.source_ids为空的检查细节尚未确认，不能编造肯定或否定结论。"
                     "直接描述物件/伤口/环境的外观细节，不描述你试图观察的动作。"
-                    "普通杂物可即兴外观，不产生可获得资源、核心线索或治疗效果。",
+                    + appearance_instruction + unknown_instruction,
                     json_schema_extra={"x-explicit-output": True},
                 ),
             )
@@ -630,7 +701,7 @@ def generation_contract(schema, context):
                 if observation_body and value.observed_detail:
                     from app.models.base import ModelFormatError
 
-                    if re.match(
+                    if not answer_requirements and re.match(
                         r"(?:你|我)(?:们)?(?:正|试图|尝试|仔细|蹲|开始)", value.observed_detail
                     ):
                         raise ModelFormatError("观察只有动作，没有内容", [{
@@ -649,7 +720,7 @@ def generation_contract(schema, context):
                     from app.models.base import ModelFormatError
 
                     effective, _ = normalize_coverage_spans(value, brief)
-                    value.answer_coverage = [coverage.model_validate(row)
+                    value.answer_coverage = [coverage_validator.validate_python(row)
                                              for row in effective.get("answer_coverage", [])]
                     audit = coverage_audit(value, brief)
                     if not audit["complete"]:
@@ -1392,17 +1463,16 @@ def restore_output(output, schema, context):
             raise ModelFormatError("未知公开依据", [{"field": "claim_ids", "code": "unknown_id"}])
         value["grounded_claims"] = [options[k] for k in dict.fromkeys(value["claim_ids"])]
     from app.agents.results import quote_request, search_question_subject
+    from app.memory.facts import answer_query, selected_answer_facts
 
     if schema in {KeeperNarration, TeammateDecision} and context.get("readonly_recall") and (
-        quote_request(context.get("triggering_action", {}).get("payload", {}).get("text", ""))
-        or not any(r.get("result_fact") for r in context.get("fact_evidence", []))
-        and not search_question_subject(
-            context.get("triggering_action", {}).get("payload", {}).get("text", "")
-        )
+        quote_request(answer_query(context))
+        or not any(r.get("result_fact") for r in selected_answer_facts(context))
+        and not search_question_subject(answer_query(context))
     ):
         from app.memory.facts import render_facts
 
-        evidence = context.get("fact_evidence", [])
+        evidence = selected_answer_facts(context)
         ids = value.get("fact_ids", [])
         # The model may order retrieved excerpts. The original text is always
         # rendered by the server, including evidence the model forgot to select.

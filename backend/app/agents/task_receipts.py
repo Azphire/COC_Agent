@@ -99,8 +99,71 @@ def bind_task_operands(request, inventory, actor, requester=None, *, targets=Non
                 **scoped,
             }
         bound["operation_operands"] = mapped
-        return bound
-    return _bind_single(request, inventory, actor, requester, targets=targets)
+    else:
+        bound = _bind_single(request, inventory, actor, requester, targets=targets)
+    return _bind_continuation_targets(bound, inventory, actor, requester, targets=targets)
+
+
+def _bind_continuation_targets(request, inventory, actor, requester, *, targets):
+    """Resolve a local inspection reference from its immediately named antecedent.
+
+    This is disposable request provenance, not a new alias on the module entity.
+    A bare material noun needs a compatible public name, while another object,
+    location modifier, ambiguous antecedent or another request stays unbound.
+    """
+    from app.preparation.action_authority import operative_fragments, requested_action_kinds
+
+    if (targets is None or not request.get("key")
+            or request.get("source_event_seq") is None):
+        return request
+    mapped = request.get("operation_operands", {})
+    fragments = operative_fragments(request.get("text", ""))
+    for operation, operand in mapped.items():
+        if (operation not in {"observe", "search"} or operand.get("target_id")
+                or operand.get("target_candidates") or operand.get("unresolved_operands")
+                or operand.get("executor_member_id") != actor
+                or operand.get("key") != request["key"]
+                or operand.get("source_event_seq") != request["source_event_seq"]):
+            continue
+        indices = [i for i, fragment in enumerate(fragments)
+                   if fragment["text"] == operand.get("text")
+                   and operation in requested_action_kinds(fragment["text"])]
+        if len(indices) != 1 or indices[0] == 0:
+            continue
+        fragment, previous = fragments[indices[0]], fragments[indices[0] - 1]
+        reference = re.fullmatch(
+            r"\s*(?:(?:请|再|并|也|接着|然后|仔细|继续)\s*)*"
+            r"(?:看看|查看|观察|检查)(?:一下)?\s*"
+            r"(它|纸张|这张纸|该纸张)(?:的(?:边缘|表面|正面|背面))?\s*[，,]?",
+            fragment["text"],
+        )
+        prior_clause = request["text"][previous["start"]:fragment["start"]]
+        if not reference or re.search(r"[。；;！？!?\n]", prior_clause):
+            continue
+        prior_ops = requested_action_kinds(previous["text"])
+        if len(prior_ops) != 1 or prior_ops[0] not in {"observe", "search"}:
+            continue
+        antecedent = _bind_single(
+            {"text": previous["text"], "operations": prior_ops,
+             "key": request["key"], "source_event_seq": request["source_event_seq"]},
+            inventory, actor, requester, targets=targets,
+        )
+        source = antecedent.get("target_source")
+        if not source or not antecedent.get("target_id"):
+            continue
+        target = next((t for t in targets if t["id"] == antecedent["target_id"]), None)
+        if not target:
+            continue
+        if reference[1] != "它" and not any(re.search(
+            r"便签|纸条|纸张|纸片|信纸|纸页", name,
+        ) for name in [target.get("title", ""), *target.get("aliases", [])]):
+            continue
+        operand["target_id"] = antecedent["target_id"]
+        operand["target_source"] = {
+            **deepcopy(source), "binding_kind": "same_request_reference",
+            "antecedent_text": previous["text"], "reference_text": fragment["text"],
+        }
+    return request
 
 
 def normalize_teammate_target(decision, requests, inventory, actor, requester=None, *, targets=()):

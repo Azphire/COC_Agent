@@ -36,6 +36,16 @@ async def reroll(batch_id: UUID, body: s.RerollInput, svc: Service):
     return svc.view(await svc.reroll(batch_id, body))
 
 
+@router.post("/{batch_id}/resize")
+async def resize(batch_id: UUID, body: s.ResizeInput, svc: Service):
+    return svc.view(await svc.resize(batch_id, body))
+
+
+@router.post("/{batch_id}/members/{index}/repair-persona")
+async def repair_persona(batch_id: UUID, index: int, body: s.OperationInput, svc: Service):
+    return svc.view(await svc.next(batch_id, body.request_id, repair_index=index))
+
+
 @router.patch("/{batch_id}/members/{index}")
 async def edit(batch_id: UUID, index: int, body: s.MemberEdit, svc: Service):
     return svc.view(await svc.edit(batch_id, index, body))

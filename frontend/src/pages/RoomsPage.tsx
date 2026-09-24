@@ -31,7 +31,7 @@ export default function RoomsPage({ roomId, unlocked, onUnlock, joinOnly = false
   useEffect(() => {
     if (unlocked && !roomId) api<RoomSummary[]>('/rooms', hostToken()).then(setRooms).catch(error => setError(errorText(error)))
   }, [unlocked, roomId])
-  if (roomId) return <RoomAccess key={`${roomId}:${unlocked}`} roomId={roomId} initialInvite={invites[roomId] || ''} />
+  if (roomId) return <RoomAccess key={`${roomId}:${unlocked}`} roomId={roomId} initialInvite={invites[roomId] || ''} onUnlock={onUnlock} />
   return <>
     <section><h2>{joinOnly ? '加入朋友' : '多人房间'}</h2><p>{joinOnly ? '输入朋友分享的邀请码，加入后选择或提交自己的角色并准备。' : '创建新游戏可使用首页向导；这里保留旧房间管理入口。'}</p></section>
     {error && <p role="alert">{error}</p>}
@@ -61,13 +61,14 @@ export default function RoomsPage({ roomId, unlocked, onUnlock, joinOnly = false
   </>
 }
 
-function RoomAccess({ roomId, initialInvite }: { roomId: string; initialInvite: string }) {
+function RoomAccess({ roomId, initialInvite, onUnlock }: { roomId: string; initialInvite: string; onUnlock: () => void }) {
   const remoteToken = localStorage.getItem(credentialKey(roomId))
   const [management, setManagement] = useState(false)
   const [play, setPlay] = useState<PlaySession | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const hasHost = !!hostToken() && !remoteToken
+  const [hostAvailable, setHostAvailable] = useState(!!hostToken())
+  const hasHost = hostAvailable && !!hostToken() && !remoteToken
   const actorKey = `coc.actor.${roomId}`
   const [selected, setSelected] = useState(localStorage.getItem(actorKey) || '')
   useEffect(() => {
@@ -87,7 +88,7 @@ function RoomAccess({ roomId, initialInvite }: { roomId: string; initialInvite: 
     {management && <section className="management-banner"><strong>主机管理视图</strong><p>此视图会读取 KP 资料与全部 HO。</p><button onClick={() => setManagement(false)}>回到调查员游戏桌面</button></section>}
     {!management && play && play.local_members.length > 1 && <label>当前扮演的调查员<select id="local-investigator" value={play.selected_member_id || ''} onChange={e => setSelected(e.target.value)}><option value="">选择本地调查员</option>{play.local_members.map(member => <option key={member.id} value={member.id}>{member.display_name}</option>)}</select></label>}
     {loading && <p role="status">正在进入调查员游戏桌面…</p>}{error && <p role="alert">{error}</p>}
-    {!token && !loading && <section><p>{hasHost ? '当前尚未选择可操作的本地真人调查员。' : '请先通过邀请码加入，或在新游戏向导中验证主机身份。'}</p>{hasHost && <button onClick={() => setManagement(true)}>进入主机管理，配置本地调查员</button>}<p><a href="#/">返回首页</a></p></section>}
+    {!token && !loading && <section><p>{hasHost ? '当前尚未选择可操作的本地真人调查员。' : '在这里验证主机身份后，继续当前房间。朋友可通过邀请码重新加入。'}</p>{hasHost ? <button onClick={() => setManagement(true)}>进入主机管理，配置本地调查员</button> : <HostUnlock onUnlock={() => { setHostAvailable(true); onUnlock() }} />}<p><a href="#/">返回首页</a></p></section>}
     {token && <RoomSession key={`${roomId}:${management ? 'host' : play?.selected_member_id || 'member'}`} roomId={roomId} initialInvite={initialInvite} token={token} credentialType={management ? 'host' : 'member'} onManage={hasHost && !management ? () => setManagement(true) : undefined} />}
   </>
 }

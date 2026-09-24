@@ -27,23 +27,12 @@ def explicit_withdrawal(text):
 
 def addressed_targets(text, targets):
     """Resolve an explicit salutation only, using visible people and members."""
-    match = re.match(r"^\s*([\w·]{2,20})[，,：:]", text)
-    if not match:
-        return {}
-    name = match[1]
-    return {
-        t["id"]: t
-        for t in targets
-        if t["type"] in {"npc", "member"}
-        and (
-            t["title"].endswith(name)
-            or (
-                len(name) > 2
-                and name.endswith(("先生", "女士"))
-                and t["title"].startswith(name[:-2])
-            )
-        )
-    }
+    from app.preparation.action_authority import address_candidates
+
+    people = {t["id"]: t["title"] for t in targets if t["type"] in {"npc", "member"}}
+    found = address_candidates(text, people)
+    owners = found[0][0] if found and not text[:found[0][1]].strip() else set()
+    return {t["id"]: t for t in targets if t["id"] in owners}
 
 
 async def movement_reply(service, session, room, actor, raw, clarification_seq=None):
@@ -330,7 +319,8 @@ async def settle_teammate_tasks(service, session, room):
             e
             for e in events
             if e.type
-            in {"keeper.narration", "check.resolved", "module.interaction", "combat.resolved"}
+            in {"keeper.narration", "check.resolved", "module.interaction", "combat.resolved",
+                "entity.revealed", "clue.revealed"}
         ]
         record = await session.get(ActionPlanRecord, cycle.id)
         rejected = (
@@ -404,6 +394,7 @@ async def settle_teammate_tasks(service, session, room):
 
         result_seqs = {e.seq for e in events if e.type in {
             "check.resolved", "module.interaction", "combat.resolved", "scene.updated",
+            "entity.revealed", "clue.revealed",
         }}
         facts = [f for f in public_results.get("current_result_facts", [])
                  if f.get("source_event_seq") in active_seqs
@@ -413,10 +404,20 @@ async def settle_teammate_tasks(service, session, room):
         if observation_completed:
             plan = record.document.get("plan") or {}
             focus = plan.get("focus") or {}
-            facts.append({"operation": "observe", "status": "success", "actor_id": row.member_id,
-                          "cycle_id": cycle.id, "target_id": focus.get("action_target_id")
-                          or (plan.get("parsed_intent") or {}).get("target_id"),
-                          "source_event_seq": observation_reply.seq})
+            from app.preparation.action_authority import action_kinds
+
+            operations = set((plan.get("action_authority") or {}).get("kinds", [])
+                             or action_kinds(focus.get("action", ""))) & {"observe", "search"}
+            # A physically performed inspection also observes its target; only
+            # this child's validated formal answer can settle a read-only check.
+            operations.add("observe")
+            for operation in sorted(operations):
+                facts.append({
+                    "operation": operation, "status": "success", "actor_id": row.member_id,
+                    "cycle_id": cycle.id, "target_id": focus.get("action_target_id")
+                    or (plan.get("parsed_intent") or {}).get("target_id"),
+                    "source_event_seq": observation_reply.seq,
+                })
         outcomes, consumed = {}, set()
         for request in behavior.pending_requests:
             if request.get("key") not in cycle.state.get("request_keys", []):
@@ -452,9 +453,14 @@ async def settle_teammate_tasks(service, session, room):
             "cycle_id": cycle.id,
             "kind": behavior.task_status,
             "event_seqs": [e.seq for e in feedback],
+            "narration_complete": bool(
+                observation_reply and narration_validation.get("valid") is True
+                and narration_validation.get("answer_complete") is not False
+            ),
             "text": "" if technical else "\n".join(
                 e.payload.get("text") or e.payload.get("display_text")
-                or e.payload.get("summary", "") for e in feedback[-2:]
+                or e.payload.get("summary") or e.payload.get("public_summary")
+                or e.payload.get("content", "") for e in feedback[-2:]
             )[:1000],
             "reason": cycle.state.get("safe_error") or "本次生成未得到有效行动反馈"
             if technical

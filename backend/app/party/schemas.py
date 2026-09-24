@@ -15,6 +15,9 @@ class BatchInput(DomainModel):
     era: Literal["1920s", "modern"] = "1920s"
     seed: str | None = Field(default=None, max_length=128)
     handout_ids: list[str | None] | None = Field(default=None, max_length=6)
+    launch_draft_id: str | None = Field(default=None, max_length=80)
+    launch_draft_version: int | None = Field(default=None, ge=1)
+    launch_role: Literal["party", "self"] = "party"
 
     @model_validator(mode="after")
     def handout_count(self):
@@ -35,6 +38,10 @@ class OperationInput(DomainModel):
 
 class RerollInput(OperationInput):
     member_index: int | None = Field(default=None, ge=0, le=5)
+
+
+class ResizeInput(OperationInput):
+    count: int = Field(ge=0, le=6)
 
 
 class AdoptInput(OperationInput):

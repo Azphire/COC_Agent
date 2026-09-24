@@ -37,7 +37,115 @@ def observation_request(text):
     return ""
 
 
-def response_brief(plan, context, results, *, withdrawal=None):
+def current_action_results(plan, context, results):
+    """Expose only actual effects of this actor's current, targeted execution."""
+    from app.agents.results import result_facts
+
+    trigger = context.get("triggering_action", {})
+    actor = trigger.get("actor_member_id")
+    cycle_id = results.get("cycle_id")
+    target = plan.focus.action_target_id if plan.focus else plan.parsed_intent.target_id
+    if not cycle_id or not actor or not target:
+        return []
+    events = {event["seq"]: event for event in results.get("events", [])
+              if event.get("visibility", "public") == "public"
+              and event.get("payload", {}).get("cycle_id") == cycle_id}
+    original = result_facts(list(events.values()))
+    bound = []
+    for fact in results.get("current_result_facts", []):
+        seq = fact.get("source_event_seq")
+        if (seq not in events or fact.get("cycle_id") != cycle_id
+                or fact.get("actor_id") != actor
+                or fact.get("source_action_seq") != trigger.get("seq")
+                or target not in {fact.get("target_id"), fact.get("action_target_id")}
+                or fact.get("status") not in {"success", "failure"}
+                or not fact.get("effect")):
+            continue
+        # A saved/model-supplied effect cannot borrow an unrelated event number.
+        # Reveal actor/action binding is provided by the execution cycle; the
+        # original reveal still has to prove the exact target and effect.
+        if not any(all(source.get(key) == fact.get(key) for key in (
+            "source_event_seq", "cycle_id", "operation", "status", "target_id", "effect",
+        )) and source.get("actor_id") in {None, actor} for source in original):
+            continue
+        bound.append({key: fact[key] for key in (
+            "source_event_seq", "source_action_seq", "cycle_id", "actor_id", "target_id",
+            "target_name", "action_target_id", "action_text", "operation", "status", "effect",
+        ) if key in fact})
+    return bound
+
+
+def current_delegated_requests(plan, state, events, public_entities):
+    """Carry only this child's source-bound obligations into its answer brief."""
+    from app.preparation.action_authority import requested_action_kinds
+
+    actor = state.get("triggering_member_id")
+    target = plan.focus.action_target_id if plan.focus else plan.parsed_intent.target_id
+    authority = plan.action_authority
+    public = {entity["id"]: entity for entity in public_entities
+              if entity.get("fact_scope") == "current_scene"}
+    if (state.get("origin") != "teammate" or not state.get("related_player_cycle_id")
+            or plan.cycle_id != state.get("cycle_id") or not actor or target not in public
+            or authority.get("actor_member_id") != actor
+            or authority.get("source_event_seq") != state.get("triggering_event_seq")
+            or authority.get("target_id") != target):
+        return []
+    actual = set(authority.get("kinds", []))
+    compatible = actual | ({"observe"} if "search" in actual else set())
+    originals = {event["seq"]: event for event in events
+                 if event.get("visibility") == "public"
+                 and event["type"] in {"action.submitted", "agent.action_proposed"}}
+    projected = []
+    for key in dict.fromkeys(state.get("request_keys", [])):
+        request = state.get("request_operands", {}).get(key, {})
+        seq, start, end = (request.get(field) for field in (
+            "source_event_seq", "source_start", "source_end",
+        ))
+        source = originals.get(seq, {})
+        text = source.get("payload", {}).get("text", "")
+        operations = set(request.get("operations", []))
+        if (request.get("key") != key or request.get("kind") != "delegate"
+                or request.get("executor_member_id") != actor
+                or request.get("addressee_id") != actor
+                or request.get("target_id") not in {None, target}
+                or not isinstance(start, int) or not isinstance(end, int)
+                or not 0 <= start < end <= len(text) or key != f"{seq}:{start}"
+                or text[start:end] != request.get("text")
+                or not operations or not operations <= compatible
+                or not operations <= set(requested_action_kinds(request["text"]))):
+            continue
+        operands = {}
+        for operation in operations:
+            operand = {**request, **request.get("operation_operands", {}).get(operation, {})}
+            proof = operand.get("target_source", {})
+            if (operand.get("target_id") != target or operand.get("unresolved_operands")
+                    or operand.get("target_candidates")
+                    or operand.get("executor_member_id") != actor
+                    or operand.get("key") != key or operand.get("source_event_seq") != seq
+                    or proof.get("target_id") != target or proof.get("request_key") != key
+                    or proof.get("request_source_event_seq") != seq
+                    or proof.get("fact_scope") != "current_scene"
+                    or proof.get("revealed_event_seq") is not None
+                    and proof["revealed_event_seq"] != public[target].get("revealed_event_seq")):
+                break
+            operands[operation] = {
+                "target_id": target, "text": operand.get("text", request["text"]),
+                "target_source": dict(proof),
+            }
+        if set(operands) != operations:
+            continue
+        projected.append({
+            "key": key, "text": request["text"], "source_event_seq": seq,
+            "source_start": start, "source_end": end,
+            "requester_member_id": source.get("actor_member_id"),
+            "executor_member_id": actor, "target_id": target,
+            "operations": sorted(operations), "operation_operands": operands,
+            "cycle_id": state["cycle_id"], "source_action_seq": state["triggering_event_seq"],
+        })
+    return projected
+
+
+def response_brief(plan, context, results, *, withdrawal=None, delegated_requests=()):
     """Project approved public candidates and receipts, never private KP prose."""
     focus = plan.focus
     intent = plan.parsed_intent
@@ -224,6 +332,8 @@ def response_brief(plan, context, results, *, withdrawal=None):
         ),
         "completed_results": results,
         "result_facts": results.get("result_facts", []),
+        "current_action_results": current_action_results(plan, context, results),
+        "delegated_requests": list(delegated_requests),
         "ordinary_observation": bool(
             (
                 results.get("observation_completed")

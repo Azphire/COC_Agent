@@ -6,8 +6,7 @@ import re
 class TeammateEligibilityPolicy:
     def priority(self, *, events, trigger, profile, member_id, addressed=None, goal=""):
         """Direct answers first; relevant danger/tasks then least recently called."""
-        text = trigger.payload.get("text", "")
-        direct = addressed == member_id or bool(profile.get("name") and profile["name"] in text)
+        direct = addressed == member_id
         material = " ".join(
             e.payload.get("text", e.payload.get("public_summary", ""))
             for e in events
@@ -38,14 +37,18 @@ class TeammateEligibilityPolicy:
         )
         return (not direct, not urgent, -fit, not relevant, last)
 
-    def evaluate(self, *, events, trigger, profile, member_id, goal=""):
+    def evaluate(self, *, events, trigger, profile, member_id, goal="", addressed_ids=None):
         current = [e for e in events if e.seq > trigger.seq]
         text = trigger.payload.get("text", "")
-        addressed = trigger.payload.get("target_member_id") == member_id or (
-            profile.get("name")
-            and profile["name"] in text
-            and re.search(r"问|交谈|说|告诉|请|帮|你", text)
-        )
+        if addressed_ids is None:
+            from app.preparation.action_authority import addressed_spans
+
+            # Compatibility for standalone callers; runtime supplies the exact
+            # registered member IDs and never reinterprets names here.
+            addressed_ids = {mid for mid, _, _ in addressed_spans(
+                text, {member_id: profile.get("name", "")},
+            )}
+        addressed = member_id in addressed_ids
         if addressed:
             return "direct_conversation"
         if any(e.type in {"entity.revealed", "clue.revealed"} for e in current):

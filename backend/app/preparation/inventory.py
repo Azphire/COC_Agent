@@ -498,6 +498,10 @@ def requested_handover(text, view, actor, requester):
 def asserted_item_uses(text, view, actor):
     """Bind concrete possession/use clauses, while allowing questions and plans to search."""
     uses = []
+    # A use/possession verb owns its noun phrase, not the object of a later
+    # inspection: "用手检查便签" and "拿着手电观察便签" do not use the note.
+    noun_gap = (r"(?:(?!检查|查看|观察|搜索|寻找|看看|核对|触摸|摸索|翻看|"
+                r"照向|照着|照亮|照明|用|使用|借助).){0,8}")
     # Questions may discuss a named person's item without asserting ownership.
     text = re.sub(r"[^，。；！？,;!?\n]*[？?]", "", text)
     for clause in re.split(r"[，。；！？,;!?\n]|但是|不过|然而|可是|但", text):
@@ -539,7 +543,7 @@ def asserted_item_uses(text, view, actor):
                         clause,
                     )
                     or re.search(
-                        rf"(?:用|使用|举起|举着|拿着|掏出|拿出|取出|打开|点亮|接过|递给|交出|交给|带了|带着|持有|我的|手里的).{{0,8}}{n}|{n}.{{0,8}}(?:照亮|照明|照射|照向|光束|灯光|亮起|在手|在(?:他|她|我)?身上)",
+                        rf"(?:用|使用|借助|举起|举着|拿着|掏出|拿出|取出|打开|点亮|接过|递给|交出|交给|带了|带着|持有|我的|手里的){noun_gap}{n}|{n}.{{0,8}}(?:照亮|照明|照射|照向|光束|灯光|亮起|在手|在(?:他|她|我)?身上)",
                         clause,
                     )
                     or re.search(
@@ -611,7 +615,7 @@ def bind_item_prose(text, view, actor):
             continue
         instruments = re.finditer(
             r"(?:用|使用|借助|拿着|拿出|取出|举着)([^，。；！？,;!?]{1,16}?)"
-            r"(?:撬|照明|照亮|敲|砸|切|剪|捆|划|点火|开锁|打开|修理)",
+            r"(?:撬|照明|照亮|敲|砸|切|剪|捆|划|点火|开锁|打开|修理|检查|查看|观察|核对|翻看)",
             clause,
         )
         generic = re.search(
@@ -635,7 +639,7 @@ def bind_item_prose(text, view, actor):
             r"(?:(?:我|自己|的|一只|双)?"
             r"(?:手|脚|拳头|肩膀|身体|肘部|衣服|衣袖|鞋|力|力气|力量)(?:的|布条)?"
             r"|(?:这|那)(?:种|个)?(?:方式|方法|办法))"
-            r"(?:就|便|才|也|还|能够|能|可以|来|去)*",
+            r"(?:就|便|才|也|还|能够|能|可以|来|去|仔细|认真|轻轻)*",
             match[1],
         )]
         if instruments or generic:

@@ -50,6 +50,27 @@ def result_facts(events, *, result_event_seq=None):
             continue
         if result_event_seq is not None:
             continue  # Original receipts only rehydrate the selected committed facts.
+        if event["type"] in {"entity.revealed", "clue.revealed"}:
+            # The public reveal is an actual effect even if later narration
+            # fails. It proves only this discovery, never every inspection or
+            # proposed operation. The publisher (usually KP) is not its actor.
+            if (not cycle or event.get("visibility", "public") != "public"
+                    or p.get("already_revealed")
+                    or p.get("revealed_event_seq", event["seq"]) != event["seq"]):
+                continue
+            target = p.get("entity_id") or p.get("clue_id") or p.get("id")
+            if target:
+                facts.append({
+                    "operation": "reveal", "status": "success", "cycle_id": cycle,
+                    "actor_id": p.get("actor_id") or actors.get(cycle),
+                    "target_id": target, "target_name": p.get("title"),
+                    "effect": p.get("public_summary") or p.get("content", ""),
+                    "operated_items": [], "recipient_member_id": None,
+                    "source_event_seq": event["seq"],
+                    **{k: p[k] for k in ("source_action_seq", "action_target_id", "action_text")
+                       if k in p},
+                })
+            continue
         if event["type"] not in {
             "combat.resolved", "module.interaction", "check.resolved", "scene.updated",
         }:
@@ -102,6 +123,18 @@ def result_facts(events, *, result_event_seq=None):
                     "check_name": p.get("display_name") or p.get("name", "")}
                    if event["type"] == "check.resolved" else {}),
             })
+    # A later committed action.result can bind a raw reveal to its executing
+    # child. Fill only a unique absent actor; never replace an explicit actor.
+    reveal_actors = {}
+    for fact in facts:
+        if fact["operation"] == "reveal" and fact.get("actor_id"):
+            reveal_actors.setdefault((fact["source_event_seq"], fact.get("target_id")), set()).add(
+                fact["actor_id"],
+            )
+    for fact in facts:
+        actors = reveal_actors.get((fact["source_event_seq"], fact.get("target_id")), set())
+        if fact["operation"] == "reveal" and not fact.get("actor_id") and len(actors) == 1:
+            fact["actor_id"] = next(iter(actors))
     targets = {}
     for fact in facts:
         key = (fact["source_event_seq"], fact["operation"], fact.get("actor_id"),
@@ -269,6 +302,8 @@ def matching_results(facts, text, *, actor_id=None):
 
 
 def describe_result(fact):
+    if fact["operation"] == "reveal":
+        return (fact.get("target_name") or "本次新发现") + "：" + fact.get("effect", "")
     if fact["operation"] == "check":
         if fact.get("effect"):
             return fact["effect"]

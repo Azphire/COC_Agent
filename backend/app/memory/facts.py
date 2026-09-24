@@ -150,6 +150,7 @@ def fact_records(visible_events, entities=(), *, members=None):
             scene_id=p.get("scene_id", scene),
             scene_title=scene_names.get(p.get("scene_id", scene), last_scene_title),
             scope="historical",
+            visibility=e.get("visibility", "public"),
         )
         text = ""
         category = "result"
@@ -246,8 +247,8 @@ def fact_records(visible_events, entities=(), *, members=None):
     return records
 
 
-def select_facts(events, entities, query, *, budget=1700, limit=6, members=None):
-    records = fact_records(events, entities, members=members)
+def select_facts(events, entities, query, *, budget=1700, limit=6, members=None, _records=None):
+    records = fact_records(events, entities, members=members) if _records is None else _records
     from app.agents.results import matching_results, quote_request, search_question_subject
 
     if readonly_recall(query) and not quote_request(query) and (
@@ -489,6 +490,60 @@ def select_facts(events, entities, query, *, budget=1700, limit=6, members=None)
             )
         )
     return selected
+
+
+def answer_query(context):
+    """Use the routed question for its respondent, without inventing a new source."""
+    requests = context.get("addressed_requests", [])
+    if requests and all(r.get("kind") == "question" for r in requests):
+        return "\n".join(r["text"] for r in requests)
+    return context.get("triggering_action", {}).get("payload", {}).get("text", "")
+
+
+def selected_answer_facts(context, question=None):
+    """One public evidence view over final selected projections, never model prose.
+
+    Deduplication may leave an original in either projection. Reuse its original
+    event reference; do not fetch omitted history or turn a task into a result.
+    Explicitly private rows cannot authorize any public answer, including KP's.
+    """
+    records = [dict(r) for r in context.get("fact_evidence", [])
+               if r.get("visibility", "public") == "public"
+               and (not isinstance(r.get("source"), dict)
+                    or r["source"].get("visibility", "public") == "public")]
+    for row in context.get("memory_evidence", []):
+        source = row.get("source", {})
+        if (source.get("visibility") != "public" or not isinstance(source.get("seq"), int)
+                or source.get("ref") != f"e{source['seq']}"
+                or row.get("kind") not in {"source_text", "npc_statement"}
+                or not row.get("text")):
+            continue
+        if any(r.get("source_event_seq") == source["seq"] and r.get("text") == row["text"]
+               for r in records):
+            continue
+        records.append({
+            "id": f"event:{source['seq']}", "source_event_seq": source["seq"],
+            "kind": row["kind"], "text": row["text"], "title": row.get("title", ""),
+            "speaker": row.get("speaker"), "scene_id": source.get("scene"),
+            "scope": "historical", "visibility": "public",
+            **({"source_type": row["source_type"]} if row.get("source_type") else {}),
+        })
+    from app.agents.results import quote_request
+
+    query = answer_query(context) if question is None else question
+    if quote_request(query):
+        # Original wording needs a real reference. State summaries and a model's
+        # own accurate-looking quote cannot fill a missing selected source.
+        records = [r for r in records if isinstance(r.get("source_event_seq"), int)]
+        stop = set(tokens("原文 原话 具体 什么 内容 写着 写了 之前 刚才"))
+        topics = set(tokens(query)) - stop
+        named = [r for r in records if topics & set(tokens(r.get("title", "")))]
+        if named:
+            records = named
+        elif re.search(r"写着|写了|便签|纸条|文字", query):
+            records = [r for r in records if re.search(r"写着|写了|[“「\"]", r["text"])]
+        return select_facts([], [], query, _records=records)
+    return records
 
 
 def render_facts(records, ids=()):

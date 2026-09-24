@@ -21,7 +21,12 @@ from app.domain.character_details import Background
 from app.domain.handouts import CharacterHandout
 from app.models.base import ModelError, ModelFormatError
 from app.party.generator import generate_card, member_seed
-from app.party.persona import ability_issues, enforce_public_identity, unique_name
+from app.party.persona import (
+    ability_issues,
+    enforce_public_identity,
+    name_issues,
+    unique_name,
+)
 from app.party.requirements import preparation_requirements, resolved_requirements
 from app.party.schemas import Persona
 from app.persistence.agent_models import ProfileRecord
@@ -74,6 +79,15 @@ class PartyService:
         result.pop("_active_owner", None)
         result.pop("_lease_until", None)
         for member in result["members"]:
+            mutable = result["status"] != "adopted"
+            prose = member.get("generation_stage") != "numeric"
+            member["recovery"] = {
+                "can_continue": mutable and prose and member["status"] != "ready"
+                and member["model_calls"] < MAX_PERSONA_CALLS,
+                "can_repair": mutable and prose,
+                "can_edit_text": mutable and not member["character"].get("module_handout"),
+                "repair_calls": member.get("repair_calls", 0),
+            }
             member.pop("persona_options", None)
             member.pop("_model_calls", None)
             member.pop("_persona_rejections", None)
@@ -99,10 +113,10 @@ class PartyService:
                 card["background"] = Background().model_dump()
                 member["profile"] = None
                 if member["error"] and member.get("generation_stage") != "numeric":
-                    member["error"] = "人物文字生成失败；数值卡已保存，可重试未完成部分"
+                    member["error"] = "人物文字未完成；数值卡已保存，可只修复本人文字"
         if any(m.get("private_profile") and m.get("error")
                and m.get("generation_stage") != "numeric" for m in result["members"]):
-            result["error"] = "人物文字生成失败；数值卡已保存，可重试未完成部分"
+            result["error"] = "人物文字未完成；数值卡已保存，可只修复本人文字"
         return result
 
     @staticmethod
@@ -188,7 +202,8 @@ class PartyService:
             return
         states = {m["status"] for m in document["members"]}
         document["status"] = (
-            "ready" if states == {"ready"} else "generating" if "generating" in states
+            "ready" if not states or states == {"ready"}
+            else "generating" if "generating" in states
             else "failed" if "failed" in states else "preview"
         )
 
@@ -223,6 +238,7 @@ class PartyService:
             "attempts": [],
             "_model_calls": [],
             "_persona_rejections": [],
+            "repair_calls": 0,
         }
         enforce_public_identity(member, document)
         return member
@@ -261,6 +277,19 @@ class PartyService:
                 "created_at": utc_now().isoformat(),
                 "updated_at": utc_now().isoformat(),
             }
+            from app.party.launch import check_launch_batch, sync_launch_batch
+
+            if body.launch_draft_id:
+                require(body.launch_draft_version is not None,
+                        "关联开团草稿必须提供版本", 422)
+                doc["launch"] = {"draft_id": str(body.launch_draft_id),
+                                 "role": body.launch_role}
+            async with self.database.sessions() as session:
+                launch = await check_launch_batch(session, doc, body.launch_draft_version)
+                doc["reserved_names"] = []
+                if launch and launch.document.get("character_id"):
+                    own = await self.characters.get(UUID(launch.document["character_id"]))
+                    doc["reserved_names"] = [own.name]
             catalog = {item.id: item for item in handouts}
             selected = body.handout_ids or [None] * body.count
             require(all(not key or key in catalog for key in selected),
@@ -277,6 +306,8 @@ class PartyService:
             doc["error"] = next((m["error"] for m in doc["members"] if m["error"]), None)
             try:
                 async with self.database.sessions.begin() as session:
+                    await sync_launch_batch(session, doc,
+                                            expected_version=body.launch_draft_version)
                     session.add(PartyBatch(
                         id=doc["id"], request_id=str(body.request_id), document=copy.deepcopy(doc),
                     ))
@@ -304,12 +335,27 @@ class PartyService:
             "actual_strengths": {
                 skill_names.get(key, key): value
                 for key, value in sorted(character.skill_values.items(), key=lambda item: -item[1])
-                if value >= 50
+                if value >= 50 and key != "credit_rating"
             },
+            "actual_weaknesses": {
+                skill_names.get(key, key): value for key, value in character.skill_values.items()
+                if value <= 30
+            },
+            "approved_background": (
+                character.experience.model_dump() if character.experience
+                and character.experience_approvals else None
+            ),
             "equipment": [item.name for item in character.equipment],
             "finances": character.finances.model_dump(),
             "personality_options": member["persona_options"],
             "public_name_hint": member.get("public_name"),
+            "text_task": (
+                "修复此人已被拒绝的文字：逐项消除previous_output_issues；"
+                "姓名原样使用public_name_hint。背景从真实强项对应的普通工作经历写起，"
+                "承认一项弱项；不要增加未经批准的事故伤病、行动障碍、装备或执照。"
+                if (member.get("attempts") or [{}])[-1].get("kind") == "repair_persona" else
+                "根据给定卡写普通工作经历和具体性格。"
+            ),
             "previous_output_issues": [
                 issue["message"] for rejection in member.get("_persona_rejections", [])[-1:]
                 for issue in rejection["issues"]
@@ -329,6 +375,12 @@ class PartyService:
                 "说话风格与行动倾向各不超过500字符；保持原schema全部字段长度上限。"
                 "人物是调查员队友，不是 KP 或模组 NPC。只能知道公开导入及本人的 HO，"
                 "不得编造模组隐藏线索、其他 HO、结局或已完成的调查。"
+                "先从actual_strengths挑选一项真实工作经验，再结合actual_weaknesses写明确短板；"
+                "没有强项就写普通日常经历，不补造专业成就。"
+                "会改变当前行动能力的身体状态、装备或执照资格，仅可来自"
+                "给定卡、approved_background或own_handout。没有批准来源时，背景只写"
+                "普通工作与生活，不增加伤病或事故转折。"
+                "允许愿望、性格缺点和已恢复且不影响当前能力的过去经历。"
                 "背景不授予额外物品、法术、技能点或属性。能力以卡上数值为准。"
                 "使用给定人格选项形成自然人物，避免千篇一律的冷静观察者。不要输出推理。"
             )},
@@ -339,22 +391,26 @@ class PartyService:
     def _reject_persona(member, profile, issues):
         member.setdefault("_persona_rejections", []).append({
             "profile": copy.deepcopy(profile), "issues": issues,
-            "reviewed_at": utc_now().isoformat(), "checker_version": "low-skill-claims-v1",
+            "reviewed_at": utc_now().isoformat(), "checker_version": "persona-consistency-v2",
         })
         member["status"] = "failed"
         member["error"] = "本次人物文字输出未通过能力检查：" + "；".join(
             issue["message"] for issue in issues
         ) + "。原文字与数值卡已保留，请仅重试未完成文字。"
 
-    def _review_document(self, document, ruleset):
+    def _review_document(self, document, ruleset, *, repair_index=None):
         changed = False
         if document["status"] == "adopted":
             return False
         for member in document["members"]:
+            if repair_index is not None and member["index"] != repair_index:
+                continue
             changed = enforce_public_identity(member, document) or changed
             if member["status"] == "ready" and member.get("profile"):
                 card = CharacterDraft.model_validate(member["character"])
                 issues = ability_issues(member["profile"], card, ruleset)
+                if repair_index is None:
+                    issues.extend(name_issues(card.name, member, document))
                 if issues:
                     self._reject_persona(member, member["profile"], issues)
                     document["error"] = member["error"]
@@ -377,21 +433,31 @@ class PartyService:
                     return await self.get(batch_id)
             return doc
 
-    async def next(self, batch_id, request_id):
+    async def next(self, batch_id, request_id, *, repair_index=None):
+        from app.party.launch import check_launch_batch
+
         async with self.lock(batch_id):
             doc = await self.get(batch_id)
             require(doc["status"] != "adopted", "队伍已采用，不能重新生成角色", 409)
             ruleset = await self._version(doc)
+            async with self.database.sessions() as session:
+                await check_launch_batch(session, doc)
             if self._live(doc):
                 # Another worker owns this step; only that worker calls the model.
                 await asyncio.sleep(0.5)
                 return await self.get(batch_id)
-            if self._review_document(doc, ruleset):
+            if self._review_document(doc, ruleset, repair_index=repair_index):
                 await self._save(doc)
-            operation, duplicate = self._operation(doc, request_id, "next")
+            operation, duplicate = self._operation(
+                doc, request_id, "repair_persona" if repair_index is not None else "next",
+                repair_index,
+            )
             if duplicate and operation["status"] != "started":
                 return doc
-            if duplicate and "member_index" in operation:
+            if repair_index is not None:
+                require(0 <= repair_index < doc["count"], "队伍中不存在此成员", 404)
+                member = doc["members"][repair_index]
+            elif duplicate and "member_index" in operation:
                 member = doc["members"][operation["member_index"]]
             else:
                 member = next((m for m in doc["members"] if m["status"] != "ready"), None)
@@ -400,10 +466,13 @@ class PartyService:
                 await self._save(doc)
                 return doc
             operation["member_index"] = member["index"]
-            require(member["model_calls"] < MAX_PERSONA_CALLS,
-                    "此人物文字生成已达 4 次调用上限；可编辑文字或显式重抽此人", 422)
+            require(repair_index is not None or member["model_calls"] < MAX_PERSONA_CALLS,
+                    "此人物自动文字生成已达 4 次上限；请选择只修复人物文字（每次一次调用）"
+                    "或编辑文字", 422)
             require(member.get("generation_stage") != "numeric",
                     member["error"] or "规则建卡未完成；请在预览内编辑或重抽此人", 422)
+            if repair_index is not None and member.get("profile"):
+                member.setdefault("public_name", member["character"]["name"])
             member["status"], member["error"], doc["error"] = "generating", None, None
             doc["_active_owner"] = str(uuid4())
             self._status(doc)
@@ -412,12 +481,15 @@ class PartyService:
             except PartyWriteConflict:
                 return await self.get(batch_id)
             started = time.monotonic()
-            attempt = {"request_id": str(request_id), "started_at": utc_now().isoformat()}
+            attempt = {"request_id": str(request_id), "started_at": utc_now().isoformat(),
+                       "kind": operation["kind"]}
             member.setdefault("attempts", []).append(attempt)
             heartbeat = asyncio.create_task(self._heartbeat(doc["id"], doc["_active_owner"]))
 
             async def on_call():
                 member["model_calls"] += 1
+                if repair_index is not None:
+                    member["repair_calls"] = member.get("repair_calls", 0) + 1
                 await self._save(doc)
 
             async def on_result(call):
@@ -447,11 +519,13 @@ class PartyService:
                 if issues:
                     self._reject_persona(member, profile.model_dump(), issues)
                     raise ValueError("；".join(issue["message"] for issue in issues))
-                if card.module_handout:
+                if card.module_handout or (repair_index is not None
+                                           and member.get("public_name")):
                     member["original_name"] = profile.name
                     profile.name = member["public_name"]
                 else:
                     unique_name(profile, member, doc)
+                member["public_name"] = profile.name
                 card.name = profile.name
                 card.background = Background(
                     people=profile.background, beliefs=profile.goals, traits=profile.personality,
@@ -502,6 +576,44 @@ class PartyService:
             doc["_active_owner"], doc["_lease_until"] = None, 0
             self._status(doc)
             await self._save(doc)
+            return doc
+
+    async def resize(self, batch_id, body):
+        """Explicitly keep the first N investigators; archive removed members intact."""
+        from app.party.launch import sync_launch_batch
+
+        async with self.lock(batch_id):
+            doc = await self.get(batch_id)
+            require(doc["status"] != "adopted", "队伍已采用，不能调整人数", 409)
+            require(not self._live(doc), "人物仍在生成中；请等待当前步骤完成", 409)
+            ruleset = await self._version(doc)
+            operation, duplicate = self._operation(doc, body.request_id, "resize", body.count)
+            if duplicate:
+                return doc
+            old_count = doc["count"]
+            if body.count < old_count:
+                doc["history"].extend(copy.deepcopy(doc["members"][body.count:]))
+                doc["members"] = doc["members"][:body.count]
+            else:
+                for index in range(old_count, body.count):
+                    # An explicitly removed investigator is recoverable with its
+                    # original HO and prose, and never incurs another model call.
+                    saved = next((m for m in reversed(doc["history"])
+                                  if m["index"] == index), None)
+                    if saved:
+                        doc["history"].remove(saved)
+                        doc["members"].append(saved)
+                    else:
+                        doc["members"].append(self._member(doc, index, 0, ruleset))
+            doc["count"] = body.count
+            operation["status"] = "complete"
+            doc["error"] = next((m["error"] for m in doc["members"] if m["error"]), None)
+            self._status(doc)
+            doc["updated_at"] = utc_now().isoformat()
+            async with self.database.sessions.begin() as session:
+                await sync_launch_batch(session, doc)
+                await self._write(session, doc)
+            doc["_revision"] = doc.get("_revision", 0) + 1
             return doc
 
     async def reroll(self, batch_id, body):
@@ -557,6 +669,8 @@ class PartyService:
                 require(not changes.keys() & protected,
                         "随机原始属性、年龄、HO 来源及审批不能在人物编辑中覆盖", 422)
                 card = CharacterDraft.model_validate({**card.model_dump(), **changes})
+                if card.module_handout and "name" in changes:
+                    member["public_name"] = card.name
                 self.characters.check_known(card, ruleset)
                 recalculate(card, ruleset)
             if body.profile:
@@ -580,6 +694,10 @@ class PartyService:
                     self._reject_persona(member, member["profile"], issues)
                     doc["error"] = member["error"]
             enforce_public_identity(member, doc)
+            issues = name_issues(member["character"]["name"], member, doc)
+            require(not issues, issues[0]["message"] if issues else "", 422)
+            if member.get("profile"):
+                member["public_name"] = member["character"]["name"]
             operation["status"] = "complete"
             self._status(doc)
             await self._save(doc)
@@ -620,6 +738,10 @@ class PartyService:
             try:
                 async with self.database.sessions.begin() as session:
                     await self._write(session, doc)
+                    if doc.get("launch", {}).get("role") == "self":
+                        from app.party.launch import sync_launch_batch
+
+                        await sync_launch_batch(session, doc)
                     for card, profile in zip(sheets, profiles, strict=True):
                         await self.characters.repository.save_in_session(session, card, [
                             ("party_generated", {"batch_id": doc["id"], "seed": doc["seed"]}),

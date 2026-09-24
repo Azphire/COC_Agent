@@ -4,7 +4,22 @@ import hashlib
 import re
 
 LOW_SKILL_LIMIT = 30
-_ABILITY = re.compile(r"擅长|精通|熟练|拿手|专精|高手|专家|大师|经验丰富")
+_ABILITY = re.compile(r"擅长|精通|熟练|拿手|专精|高手|专家|大师|经验丰富|深厚造诣")
+_EXPERT = re.compile(r"精通|专精|高手|专家|大师|深厚造诣|大学|学院|高校")
+_CURRENT_CONDITION = re.compile(
+    r"失明|失聪|瘫痪|截肢|断臂|断腿|无法行走|不能行走|无法看见|丧失视力|失去视力|双目失明"
+)
+_RECOVERED = re.compile(r"(?:已经|现已|已|如今|现在).{0,6}(?:康复|恢复|痊愈)|已无后遗症")
+_PAST = re.compile(r"曾经|曾|过去|幼时|小时候|当年|一度")
+_POSSESSION = re.compile(
+    r"(?:随身携带|随身带着|随身带有|配备|配有|装备着|持有|带着|携带|拥有)"
+    r"(?:了|着)?(?:一|两|三|几)?(?:把|支|套|副|个|张|本)?"
+    r"(?P<item>[^，,。；;！？!?\n]{1,24})"
+)
+_CREDENTIAL = re.compile(
+    r"(?:驾驶|医师|律师执业|律师|行医|飞行|持枪|教师)?(?:执照|资格证)|"
+    r"(?:医学|法学|历史学|人类学)?博士学位|持证(?:医师|医生|律师)"
+)
 _UNIVERSITY_TEACHING = re.compile(
     r"(?:大学|学院|高校)(?:里|内|中)?(?:担任过|出任过|担任|出任|曾经|曾|任)?"
     r"(?:教授|任教|讲授|授课)"
@@ -27,14 +42,100 @@ _GIVEN_NAMES = (
 
 
 def _other_names(member, document):
-    return {m["character"]["name"] for m in document["members"]
-            if m["index"] != member["index"] and m["character"].get("name")}
+    return {*document.get("reserved_names", []),
+            *(m["character"]["name"] for m in document["members"]
+              if m["index"] != member["index"] and m["character"].get("name"))}
 
 
 def _name_conflicts(name, used):
-    # Existing teammate addressing uses substrings. Appending an occupation to
-    # a duplicate name would still address both people in ordinary dialogue.
-    return any(name in other or other in name for other in used)
+    # Creation avoids confusing public identities. Runtime still supports old
+    # overlapping names; this check never migrates adopted investigators.
+    normalized = re.sub(r"\s+", "", name).casefold()
+    return any(normalized in re.sub(r"\s+", "", other).casefold()
+               or re.sub(r"\s+", "", other).casefold() in normalized
+               for other in used if other.strip())
+
+
+def name_issues(name, member, document):
+    if not _name_conflicts(name, _other_names(member, document)):
+        return []
+    return [{"field": "name", "claim": name,
+             "message": "此姓名与本人或队友姓名重叠，请为当前新人物选择不同的完整姓名"}]
+
+
+def _affirmative(clause, start, end):
+    prefix, suffix = clause[:start], clause[end:]
+    return not (_NEGATIVE.search(prefix[-16:]) or _ASPIRATION.search(prefix)
+                or prefix.endswith("想")
+                or _OTHER_PERSON.search(prefix[-8:]) or "是他的梦想" in suffix
+                or "是她的梦想" in suffix or "是他的目标" in suffix
+                or re.search(r"(?:没有|不具备|并无|未持有|未获得|未取得).{0,8}$", prefix)
+                or re.match(r"的?(?:父亲|母亲|朋友|同伴|队友|导师)", suffix))
+
+
+def _approved_text(character):
+    sources = []
+    handout = getattr(character, "module_handout", None)
+    if handout:
+        sources.append(handout.definition.text)
+    experience = getattr(character, "experience", None)
+    if experience and getattr(character, "experience_approvals", None):
+        sources.extend([experience.history, experience.background_detail])
+    return "。".join(sources)
+
+
+def _supported(claim, source):
+    for sentence in re.split(r"[。；;！？!?\n]", source):
+        if _CURRENT_CONDITION.fullmatch(claim) and _RECOVERED.search(sentence):
+            continue
+        for clause in re.split(r"[，,]", sentence):
+            for match in re.finditer(re.escape(claim), clause):
+                prefix = clause[:match.start()]
+                if re.search(r"(?:不得|不能|禁止|未获准).{0,8}$", prefix):
+                    continue
+                if _affirmative(clause, match.start(), match.end()):
+                    return True
+    return False
+
+
+def _unsupported_effects(profile, character):
+    """Require source support for explicit present effects, never personality flaws."""
+    source = _approved_text(character)
+    equipment = [item.name for item in getattr(character, "equipment", [])]
+    issues = []
+    for field in ("background", "personality", "goals", "speaking_style", "action_tendency"):
+        text = profile.get(field, "")
+        for sentence in re.split(r"[。；;！？!?\n]", text):
+            for clause in re.split(r"[，,]", sentence):
+                for match in _CURRENT_CONDITION.finditer(clause):
+                    if not _affirmative(clause, match.start(), match.end()):
+                        continue
+                    if _PAST.search(clause[:match.start()]) and _RECOVERED.search(sentence):
+                        continue
+                    if not _supported(match[0], source):
+                        issues.append({"field": field, "claim": clause.strip(),
+                                       "message": f"当前身体状态“{match[0]}”没有卡或批准背景支持"})
+                for match in _POSSESSION.finditer(clause):
+                    if not _affirmative(clause, match.start(), match.end()):
+                        continue
+                    item = re.split(r"用来|用于|以便|并|来|进行", match["item"])[0].strip()
+                    # Wishes, memories, opinions and personality traits are not gear.
+                    if not re.search(
+                        r"枪|刀|剑|匕首|手杖|手电|放大镜|相机|照相机|绳|工具|药|急救|"
+                        r"护甲|防弹|子弹|弹药|汽车|轿车|摩托|证件|徽章|探测仪|望远镜|撬棍",
+                        item,
+                    ):
+                        continue
+                    if item not in equipment \
+                            and not _supported(item, source):
+                        issues.append({"field": field, "claim": clause.strip(),
+                                       "message": f"额外装备“{item}”未列入本人的卡或批准背景"})
+                for match in _CREDENTIAL.finditer(clause):
+                    if _affirmative(clause, match.start(), match.end()) \
+                            and not _supported(match[0], source):
+                        issues.append({"field": field, "claim": clause.strip(),
+                                       "message": "人物文字中的额外执照或资格没有批准背景支持"})
+    return issues
 
 
 def _seeded_name(member, document, namespace):
@@ -62,14 +163,24 @@ def ability_issues(profile, character, ruleset):
     """
     issues = []
     low_skills = []
+    group_maxima = {}
+    for definition in ruleset.skills:
+        group = definition.specialization_group
+        if group:
+            group_maxima[group] = max(group_maxima.get(group, 0),
+                                      character.skill_values.get(definition.key, 0))
     for definition in ruleset.skills:
         value = character.skill_values.get(definition.key)
-        if value is None or value > LOW_SKILL_LIMIT or not definition.allocatable:
+        if value is None or value >= 50 or not definition.allocatable:
             continue
         aliases = {definition.display_name}
         specialized = re.search(r"[（(]([^）)]+)[）)]", definition.display_name)
         if specialized:
             aliases.add(specialized[1])
+            if value == group_maxima.get(definition.specialization_group):
+                # A general "survival" claim is grounded in the best actual
+                # specialty, not silently accepted because no suffix was named.
+                aliases.add(definition.display_name[:specialized.start()])
         low_skills.append((definition.key, definition.display_name, value, aliases))
     for field in ("background", "personality", "goals", "speaking_style", "action_tendency"):
         text = profile.get(field, "")
@@ -92,6 +203,8 @@ def ability_issues(profile, character, ruleset):
                     after = [claim for claim in claims if claim.start() >= hit.end()]
                     candidates = ([before[-1]] if before else []) + (after[:1] if after else [])
                     for claim in candidates:
+                        if value > LOW_SKILL_LIMIT and not _EXPERT.search(claim[0]):
+                            continue
                         prefix = clause[max(0, claim.start() - 16):claim.start()]
                         if _NEGATIVE.search(prefix) or _ASPIRATION.search(prefix):
                             continue
@@ -117,7 +230,8 @@ def ability_issues(profile, character, ruleset):
                         continue
                     break
     # The same phrase may match the full label and its specialty alias.
-    return list({(i["field"], i["skill"], i["claim"]): i for i in issues}.values())
+    issues.extend(_unsupported_effects(profile, character))
+    return list({(i["field"], i.get("skill"), i["claim"]): i for i in issues}.values())
 
 
 def unique_name(profile, member, document):

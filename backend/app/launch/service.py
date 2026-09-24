@@ -253,6 +253,16 @@ class LaunchService:
             if document["rules"] is None:
                 _, document["rules"] = await self.rules(session)
             document.update(preparation_version=prep.version, source_hash=prep.source_hash)
+            from app.party.requirements import resolved_requirements
+
+            requirements = await resolved_requirements(session, prep)
+            if document.get("ai_count") is None:
+                default = max(0, requirements["minimum_players"] - 1
+                              - document.get("reserved_humans", 0))
+                document["ai_count"] = min(6, max(default, min(
+                    2, requirements["maximum_players"] - 1
+                    - document.get("reserved_humans", 0),
+                )))
             row = LaunchDraft(
                 id=str(uuid4()),
                 request_id=str(body.client_request_id),
@@ -444,14 +454,22 @@ class LaunchService:
             ):
                 issues.append(issue("party_version", "队伍与所选准备版本不一致", "team"))
             members = batch.get("members", [])
-            if not members or any(
+            if (not members and batch.get("count", 0) != 0) or any(
                 m.get("status") not in {"complete", "completed", "ready", "adopted"}
                 for m in members
             ):
                 issues.append(issue("party", "队友尚未全部生成，请继续生成未完成成员", "team"))
             cards.extend(m["character"] for m in members if m.get("character"))
         requirements = await resolved_requirements(session, prep)
-        count = len(cards)
+        if not row.room_id:
+            names = [card.get("name", "").strip() for card in cards]
+            if any(a and b and (a in b or b in a)
+                   for index, a in enumerate(names) for b in names[index + 1:]):
+                issues.append(issue(
+                    "name_conflict", "队伍公开姓名相同或互相包含，"
+                    "请明确编辑新人物姓名后采用", "team",
+                ))
+        count = len(cards) + (doc.get("reserved_humans") or 0)
         if row.room_id:
             room = await self.rooms.room(session, row.room_id)
             count = len(

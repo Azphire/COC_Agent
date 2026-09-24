@@ -14,6 +14,11 @@ class LaunchInput(DomainModel):
     name: Name = "新的调查"
     character_id: UUID | None = None
     party_batch_id: UUID | None = None
+    own_batch_id: UUID | None = None
+    ai_count: int | None = Field(default=None, ge=0, le=6)
+    reserved_humans: int = Field(default=0, ge=0, le=11)
+    era: Literal["1920s", "modern"] = "1920s"
+    own_handout: str | None = Field(default=None, max_length=80)
     rules: list[SourceRef] | None = Field(default=None, max_length=8)
     handout_acknowledged: StrictBool = False
     acknowledge_unspent: StrictBool = False
@@ -24,6 +29,10 @@ class LaunchPatch(DomainModel):
     name: Name | None = None
     character_id: UUID | None = None
     party_batch_id: UUID | None = None
+    ai_count: int | None = Field(default=None, ge=0, le=6)
+    reserved_humans: int | None = Field(default=None, ge=0, le=11)
+    era: Literal["1920s", "modern"] | None = None
+    own_handout: str | None = Field(default=None, max_length=80)
     rules: list[SourceRef] | None = Field(default=None, max_length=8)
     handout_acknowledged: StrictBool | None = None
     acknowledge_unspent: StrictBool | None = None
