@@ -213,6 +213,24 @@ class IncrementalJSONObjectArray(IncrementalJSONObjectString):
         additions = super().feed(text)
         return additions if isinstance(additions, list) else []
 
+    def feed_closed(self, text: str) -> list[dict]:
+        """Return the closed prefix even when later bytes make this frame invalid.
+
+        A transport frame is not a validation boundary. The caller must check
+        each object and then inspect ``invalid``: a malformed tail still fails
+        the document, without changing which earlier closed objects were seen.
+        ``feed`` retains its all-or-nothing contract for existing decoder users.
+        """
+        previous = len(self.value)
+        if isinstance(text, str) and len(text) > self.max_chars - len(self._raw):
+            # The raw-size limit is a character-position boundary as well, rather
+            # than a frame boundary that could erase previously closed items.
+            self.feed(text[:max(0, self.max_chars - len(self._raw))])
+            self.invalid = True
+        else:
+            self.feed(text)
+        return self.value[previous:]
+
     def _consume(self, char):
         if self._role:
             self._consume_string(char)

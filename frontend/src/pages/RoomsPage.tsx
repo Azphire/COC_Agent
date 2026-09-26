@@ -17,6 +17,8 @@ import { launchApi } from '../api/launch'
 import type { PlaySession } from '../api/launch'
 import RoomGameMenu from '../components/RoomGameMenu'
 import CombatPanel from '../components/CombatPanel'
+import { supplementReport } from '../api/agents'
+import { acknowledgeSupplement, supplementRequestId } from '../api/reportRecovery'
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : '请求失败，请重试' }
 
@@ -120,6 +122,9 @@ function RoomSession({ roomId, initialInvite, token, credentialType, onManage }:
   const [editing, setEditing] = useState<{ state: SessionState; revision: number } | null>(null)
   const lastSeq = useRef(0)
   const pending = useRef<Record<string, { fingerprint: string; id: string }>>({})
+  const supplementInFlight = useRef(new Set<number>())
+  const [supplementing, setSupplementing] = useState<number[]>([])
+  const [supplementErrors, setSupplementErrors] = useState<Record<number, string>>({})
   const prefix = `/rooms/${roomId}`
 
   function acceptRoom(next: Room) {
@@ -223,6 +228,24 @@ function RoomSession({ roomId, initialInvite, token, credentialType, onManage }:
     const result = await command(`/${kind}`, { ...body, client_request_id: pending.current[kind].id })
     if (result) { delete pending.current[kind]; if (kind === 'messages') setText('') }
   }
+  async function supplement(reportSeq: number) {
+    const recovery = room?.game?.report_recoveries?.find(item => item.report_seq === reportSeq)
+    if (!recovery?.available || recovery.status === 'running' || supplementInFlight.current.has(reportSeq)) return
+    supplementInFlight.current.add(reportSeq)
+    setSupplementing([...supplementInFlight.current])
+    setSupplementErrors(previous => ({ ...previous, [reportSeq]: '' }))
+    try {
+      const id = supplementRequestId(localStorage, roomId, recovery, requestId)
+      const result = await supplementReport(roomId, reportSeq, token, id)
+      acceptRoom(result.room)
+      acknowledgeSupplement(localStorage, roomId, reportSeq)
+    } catch (error) {
+      setSupplementErrors(previous => ({ ...previous, [reportSeq]: errorText(error) }))
+    } finally {
+      supplementInFlight.current.delete(reportSeq)
+      setSupplementing([...supplementInFlight.current])
+    }
+  }
   async function exportLog(format: string) {
     try {
       const response = await fetch(`/api${prefix}/logs?format=${format}`, { headers: authHeaders(token) })
@@ -271,8 +294,8 @@ function RoomSession({ roomId, initialInvite, token, credentialType, onManage }:
       <ol className="timeline" data-testid="timeline" ref={timelineRef} onScroll={event => {
         const timeline = event.currentTarget
         followTimeline.current = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 48
-      }}>{events.filter(event => event.visibility !== 'host_only' && !event.type.startsWith('agent.cycle') && !event.type.startsWith('review.') && (isHost || storyEvent(event) && event.seq >= openingSeq)).map(event => <RoomTimelineEvent key={event.type === 'keeper.narration' && event.payload.cycle_id ? `keeper-${event.payload.cycle_id}` : event.seq} event={event} room={room} />)}
-        {narration.draft && <RoomTimelineEvent key={`keeper-${narration.draft.cycle_id}`} draft={narration.draft} room={room} />}
+      }}>{events.filter(event => event.visibility !== 'host_only' && !event.type.startsWith('agent.cycle') && !event.type.startsWith('review.') && (isHost || storyEvent(event) && event.seq >= openingSeq)).map(event => <RoomTimelineEvent key={event.seq} event={event} room={room} onSupplement={supplement} supplementing={supplementing.includes(event.seq)} supplementError={supplementErrors[event.seq]} />)}
+        {narration.draft && <RoomTimelineEvent key={`keeper-stream-${narration.draft.stream_id}`} draft={narration.draft} room={room} />}
       </ol>
       {isHost && <details data-testid="host-event-debug"><summary>主机私密事件 · HOST_DEBUG</summary><ol>{events.filter(event => event.visibility === 'host_only' || event.type.startsWith('agent.cycle') || event.type.startsWith('review.')).map(event => <RoomTimelineEvent key={event.seq} event={event} room={room} debug />)}</ol></details>}
       {isHost && <div className="action-row"><button onClick={() => void exportLog('jsonl')}>导出 JSONL</button><button onClick={() => void exportLog('markdown')}>导出 Markdown</button></div>}

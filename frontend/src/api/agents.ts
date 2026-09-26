@@ -1,5 +1,19 @@
 import type { KnowledgeBinding } from './knowledge'
 import type { PublicEntity } from './preparation'
+import type { Result } from './rooms'
+import { api } from './session'
+
+export type ReportRecovery = {
+  report_seq: number; available: boolean;
+  status: 'available' | 'running' | 'completed' | 'failed';
+  reason?: string | null; supplement_id?: string | null;
+}
+export type ReportSupplementResult = Result & {
+  supplement: { id: string; status: string; original_report_seq: number }
+}
+export function supplementReport(roomId: string, reportSeq: number, token: string, clientRequestId: string) {
+  return api<ReportSupplementResult>(`/rooms/${roomId}/reports/${reportSeq}/supplement`, token, 'POST', { client_request_id: clientRequestId })
+}
 
 export type AgentProfileInput = {
   role: 'keeper' | 'investigator'; name: string; background: string; personality: string;
@@ -25,6 +39,7 @@ export type Check = {
   result: { total: number; threshold: number; level: string; passed: boolean; outcome: string; winner?: number | null; both_failed?: boolean; components?: { name: string; display_name: string; value: number; total: number; threshold: number; level: string; passed: boolean }[] } | null;
 }
 export type GameState = {
+  report_recoveries?: ReportRecovery[];
   host_entities?: { id: string; title: string; sanity_effects?: { id: string; encounter: string; success_loss: string; failure_loss: string; source: string; page: number }[] }[];
   conversation_targets?: PublicEntity[];
   public_entities?: PublicEntity[];

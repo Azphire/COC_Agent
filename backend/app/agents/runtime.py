@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from app.agents.action_runtime import ActionRuntimeMixin, generation_prompt
 from app.agents.schemas import AgentCycleState, AgentDecision, SummaryOutput
+from app.agents.timing import stage_state
 from app.agents.tools import AgentTools, definitions
 from app.domain.character import utc_now
 from app.knowledge.schemas import GroundedNarration
@@ -83,7 +84,8 @@ class AgentRuntime(ActionRuntimeMixin):
                     + document["latency_ms"],
                 }
 
-            await self.service.mutate(room_id, operation)
+            with self.rooms.timings.span("model.call_audit", room_id=str(room_id), run_id=run_id):
+                await self.service.mutate(room_id, operation, internal_only=True)
 
         return record
 
@@ -186,6 +188,7 @@ class AgentRuntime(ActionRuntimeMixin):
 
     async def close(self):
         self.closing = True
+        await self.service.report_supplements.close()
         for room_id in list(self.tasks):
             self.invalidate_narration_streams(room_id, "shutdown")
         tasks = list(self.tasks.values())
@@ -397,11 +400,9 @@ class AgentRuntime(ActionRuntimeMixin):
             safe = await self.service.sanitize(session, room, safe_error)
             cycle.status = "failed"
             stages = dict(cycle.state.get("stage_states", {}))
-            stages[cycle.state["current_node"]] = {
-                "status": "failed",
-                "safe_error": safe,
-                "error_category": error_type,
-            }
+            node = cycle.state["current_node"]
+            stages[node] = stage_state(stages.get(node), "failed", safe_error=safe,
+                                       error_category=error_type)
             cycle.state = {
                 **cycle.state,
                 "status": "failed",
@@ -466,6 +467,8 @@ class AgentRuntime(ActionRuntimeMixin):
         return await self.service.mutate(room_id, operation)
 
     async def node(self, state, name):
+        self.rooms.timings.context(room_id=str(state["room_id"]), cycle_id=state["cycle_id"],
+                                  run_id=None, node=name)
         async def operation(session, room):
             cycle = await session.get(AgentCycle, state["cycle_id"])
             require(
@@ -482,8 +485,8 @@ class AgentRuntime(ActionRuntimeMixin):
             stages = dict(cycle.state.get("stage_states", {}))
             previous = cycle.state.get("current_node")
             if previous and previous != name:
-                stages[previous] = {"status": "completed", "safe_error": None}
-            stages[name] = {"status": "running", "safe_error": None}
+                stages[previous] = stage_state(stages.get(previous), "completed", safe_error=None)
+            stages[name] = stage_state(stages.get(name), "running", safe_error=None)
             cycle.state = {
                 **cycle.state,
                 "schema_version": 1,
@@ -1633,7 +1636,10 @@ class AgentRuntime(ActionRuntimeMixin):
                 "safe_error": None,
                 "stage_states": {
                     **cycle.state.get("stage_states", {}),
-                    "finish_cycle": {"status": "completed", "safe_error": None},
+                    "finish_cycle": stage_state(
+                        cycle.state.get("stage_states", {}).get("finish_cycle"),
+                        "completed", safe_error=None,
+                    ),
                 },
             }
             for binding in await self.service.bindings(session, room.id):

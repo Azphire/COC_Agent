@@ -285,6 +285,12 @@ async def retry(room_id: UUID, svc: Service, token: Token):
     return await svc.rooms.command(room_id, token, "agent.retry")
 
 
+@router.post("/rooms/{room_id}/reports/{report_seq}/supplement")
+async def supplement_report(room_id: UUID, report_seq: int, body: s.ReportSupplementInput,
+                            svc: Service, token: Token):
+    return await svc.rooms.command(room_id, token, "agent.supplement", body, report_seq)
+
+
 @router.get("/rooms/{room_id}/checks")
 async def checks(room_id: UUID, svc: Service, token: Token):
     return await svc.get(room_id, token, "checks")

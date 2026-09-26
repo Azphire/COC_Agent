@@ -24,6 +24,7 @@ class Connection:
     bootstrap: list = field(default_factory=list)
     closing: bool = False
     close_code: int = 1013
+    connection_id: str = field(default_factory=lambda: str(uuid4()))
 
     def put(self, message):
         if self.closing:
@@ -240,8 +241,15 @@ class RoomHub:
             connection.put(message)
 
     async def broadcast(self, room_id, events):
+        with self.service.timings.span("broadcast", room_id=str(room_id), event_count=len(events)):
+            await self._broadcast(room_id, events)
+
+    async def _broadcast(self, room_id, events):
         async with self.service.database.sessions() as session:
             room = await self.service.room(session, room_id)
+            # Reuse only an identical authorization projection within this one
+            # broadcast/transaction. Reconnects and later broadcasts rebuild it.
+            projections = {}
             for connection in list(self.connections.get(room_id, set())):
                 member = await session.get(RoomMember, connection.identity.member_id)
                 if member is None or not member.active:
@@ -256,14 +264,41 @@ class RoomHub:
                         if (event.type == "keeper.narration" and stream
                                 and event.payload.get("cycle_id") == stream.cycle_id):
                             connection.discard_stream_messages()
-                        connection.put({"type": "room.event", "data": event_view(event)})
-                connection.put(
-                    {
-                        "type": "room.snapshot",
-                        "data": await self.service.view(session, room, connection.identity),
-                    }
-                )
-                connection.put({"type": "room.synced", "data": {"seq": room.revision}})
+                        with self.service.timings.span(
+                            "formal.publish_enqueue" if event.type == "keeper.narration"
+                            else "event.enqueue", member_id=connection.identity.member_id,
+                            connection_id=connection.connection_id,
+                            event_seq=event.seq, cycle_id=event.payload.get("cycle_id"),
+                            run_id=event.payload.get("run_id"),
+                        ):
+                            connection.put({"type": "room.event", "data": event_view(event)})
+                key = (connection.identity.member_id, connection.identity.is_host)
+                if key not in projections:
+                    with self.service.timings.span(
+                        "snapshot.build", member_id=connection.identity.member_id,
+                        connection_id=connection.connection_id,
+                        audience="host" if connection.identity.is_host else "player",
+                    ) as built:
+                        snapshot = await self.service.view(session, room, connection.identity)
+                    projections[key] = (snapshot, built["span_id"])
+                    projection_source = "built"
+                else:
+                    snapshot, source_id = projections[key]
+                    with self.service.timings.span(
+                        "snapshot.reuse", member_id=connection.identity.member_id,
+                        connection_id=connection.connection_id,
+                        source_snapshot_span_id=source_id,
+                    ):
+                        pass
+                    projection_source = "reused"
+                with self.service.timings.span(
+                    "snapshot.enqueue", member_id=connection.identity.member_id,
+                    connection_id=connection.connection_id,
+                    projection_source=projection_source,
+                    source_snapshot_span_id=projections[key][1],
+                ):
+                    connection.put({"type": "room.snapshot", "data": snapshot})
+                    connection.put({"type": "room.synced", "data": {"seq": room.revision}})
         stream = self.streams.get(str(room_id))
         for event in events:
             if (event.type == "keeper.narration" and stream
@@ -326,7 +361,12 @@ class RoomHub:
                     if room.status != "ended":
                         member = await session.get(RoomMember, identity.member_id)
                         member.last_seen_at = utc_now()
-                    snapshot = await self.service.view(session, room, identity)
+                    with self.service.timings.span(
+                        "snapshot.reconnect_build", room_id=str(room_id),
+                        member_id=identity.member_id,
+                        audience="host" if identity.is_host else "player",
+                    ):
+                        snapshot = await self.service.view(session, room, identity)
                     events = await self.service.events(session, room, identity, auth.after_seq)
                 connection = Connection(websocket, identity)
                 # No await between capture and subscription: a stream frame either

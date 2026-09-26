@@ -17,7 +17,29 @@ from app.domain.character import DomainModel
 from app.models.base import ModelFormatError
 
 CONTRACT_VERSION = "kp-answer-parts-v1"
+MIXED_CONTRACT_VERSION = "kp-answer-parts-v2-mixed"
 SEPARATOR = "\n\n"
+
+
+def server_parts(context):
+    return [{"requirement_id": p["requirement_id"], "text": p["text"]}
+            for p in context.get("response_brief", {}).get("server_parts", [])]
+
+
+def contract_version(context):
+    return MIXED_CONTRACT_VERSION if server_parts(context) else CONTRACT_VERSION
+
+
+def part_origins(context, parts):
+    model = {p["requirement_id"]: p for p in [
+        *context.get("_answer_parts_retained", []), *_parts(parts),
+    ]}
+    server = {p["requirement_id"]: p for p in server_parts(context)}
+    return [{"requirement_id": r["id"], "origin": "server" if r["id"] in server else "model",
+             "text": (server.get(r["id"]) or model[r["id"]])["text"],
+             "evidence_assessment": r.get("evidence_assessment")}
+            for r in context["response_brief"]["answer_requirements"]
+            if r["id"] in server or r["id"] in model]
 
 
 def decode_answer_parts_document(text):
@@ -46,6 +68,7 @@ def uses_answer_parts(context):
 
 def parts_field(context):
     retained = {p["requirement_id"] for p in context.get("_answer_parts_retained", [])}
+    retained |= {p["requirement_id"] for p in server_parts(context)}
     variants = []
     for index, requirement in enumerate(context["response_brief"]["answer_requirements"]):
         if requirement["id"] in retained:
@@ -95,7 +118,7 @@ def _parts(parts):
     return [p.model_dump(mode="json") if hasattr(p, "model_dump") else p for p in parts]
 
 
-def bind_part(part, context):
+def bind_part(part, context, *, server=False):
     """Bind one source, original event and epistemic state without writing prose."""
     brief = context["response_brief"]
     requirements = {r["id"]: r for r in brief["answer_requirements"]}
@@ -105,7 +128,12 @@ def bind_part(part, context):
     rid = part["requirement_id"]
     if rid not in requirements:
         _fail(["片段不是本轮冻结需求：" + rid])
+    if not server and rid in {p["requirement_id"] for p in server_parts(context)}:
+        _fail([{"id": rid, "reason": "服务端说明只读，模型不能生成或覆盖"}])
     allowed = requirements[rid].get("source_ids", [])
+    assessment = requirements[rid].get("evidence_assessment", {})
+    if not allowed and assessment.get("state") == "unresolved":
+        _fail([{"id": rid, "reason": assessment["reason"]}])
     if set(part) - {"requirement_id", "text", "source_id"}:
         _fail([{"id": rid, "reason": "片段含非契约字段"}])
     text = part.get("text")
@@ -159,7 +187,7 @@ def _unknown_assertions(body, brief):
             for error in unknown_assertion_errors(body, r)]
 
 
-def project_answer_parts(parts, context, *, partial=False):
+def project_answer_parts(parts, context, *, partial=False, include_server=False):
     """Validate and render in frozen order; partial still checks all assertions."""
     parts = [*_parts(context.get("_answer_parts_retained", [])), *_parts(parts)]
     brief = context["response_brief"]
@@ -170,6 +198,9 @@ def project_answer_parts(parts, context, *, partial=False):
     if duplicates:
         _fail([{"duplicate_ids": duplicates}])
     rows = {row["requirement_id"]: row for row in (bind_part(p, context) for p in parts)}
+    if not partial or include_server:
+        rows.update({p["requirement_id"]: bind_part(p, context, server=True)
+                     for p in server_parts(context)})
     ordered = [rows[r["id"]] for r in brief["answer_requirements"] if r["id"] in rows]
     narration = KeeperNarration(
         public_narration=SEPARATOR.join(row["body_quote"] for row in ordered),
@@ -232,6 +263,7 @@ def inspect_answer_parts(raw, context):
     except (ValueError, ModelFormatError) as error:
         failures.append({"issues": getattr(error, "issues", [str(error)])})
         projected = None
-    return {"contract_version": CONTRACT_VERSION, "valid": projected is not None,
+    return {"contract_version": contract_version(context), "valid": projected is not None,
+            "part_origins": part_origins(context, candidates),
             "verified_parts": candidates, "errors": failures,
             "projection": projected.model_dump(mode="json") if projected else None}

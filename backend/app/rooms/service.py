@@ -88,6 +88,9 @@ def snapshot_view(snapshot: RoomSnapshot) -> dict:
 class RoomService:
     def __init__(self, database, settings):
         self.database, self.settings = database, settings
+        from app.agents.timing import RuntimeTimings
+
+        self.timings = RuntimeTimings(settings.agent_checkpoint_path.parent / "stage-timings.jsonl")
         self.locks: dict[str, asyncio.Lock] = {}
         self.dice = DiceService()
         self.hub = None
@@ -99,14 +102,18 @@ class RoomService:
 
     @asynccontextmanager
     async def transaction(self):
-        async with self.database.sessions() as session:
-            await session.execute(text("BEGIN IMMEDIATE"))
-            try:
-                yield session
-                await session.commit()
-            except BaseException:
-                await session.rollback()
-                raise
+        with self.timings.span("transaction"):
+            async with self.database.sessions() as session:
+                with self.timings.span("transaction.begin"):
+                    await session.execute(text("BEGIN IMMEDIATE"))
+                try:
+                    yield session
+                    with self.timings.span("transaction.commit"):
+                        await session.commit()
+                except BaseException:
+                    with self.timings.span("transaction.rollback"):
+                        await session.rollback()
+                    raise
 
     async def room(self, session, room_id):
         room = await session.get(GameRoom, str(room_id))
@@ -456,6 +463,7 @@ class RoomService:
 
     async def _command(self, room_id, token, action, body=None, target=None):
         stopped_task = None
+        stopped_reports = []
         async with self.lock(room_id):
             launch = getattr(self, "launch_service", None)
             if action in {"start", "resume"} and self.agent_service and launch:
@@ -490,6 +498,10 @@ class RoomService:
             await self.broadcast(room_id, events)
             if self.agent_service:
                 runtime = self.agent_service.runtime
+                if action == "agent.supplement" and result and result.get("supplement"):
+                    self.agent_service.report_supplements.schedule(
+                        room_id, result["supplement"]["id"],
+                    )
                 if action.startswith("combat.") or action in {
                     "agent.action",
                     "agent.check.roll",
@@ -511,11 +523,15 @@ class RoomService:
                     runtime.cancel_task(room_id)
                 elif action in {"pause", "end", "snapshot.load"}:
                     stopped_task = runtime.cancel_task(room_id, preserve_cycle=True)
+                    stopped_reports = self.agent_service.report_supplements.cancel_room(room_id)
             response = {"room": view, **(result or {})}
         if stopped_task:
             # Let SQLite/checkpoint cancellation finish outside the room lock.
             # A subsequent load/resume cannot inherit the old task's failure.
             await asyncio.gather(stopped_task, return_exceptions=True)
+        if stopped_reports:
+            await asyncio.gather(*stopped_reports, return_exceptions=True)
+            await self.agent_service.report_supplements.finish_cancellations(room_id)
         return response
 
 

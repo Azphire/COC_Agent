@@ -370,6 +370,25 @@ async def settle_teammate_tasks(service, session, room):
             and narration_validation.get("answer_complete") is not False
             and observation_reply
         )
+        if narration_validation.get("answer_origin") == "mixed":
+            # Completion means this inspection was performed and reported, not
+            # that every queried property became a known world fact.
+            requests = cycle.state.get("request_operands", {})
+            relevant = [r for r in behavior.pending_requests
+                        if r.get("key") in cycle.state.get("request_keys", [])]
+            actual = public_results.get("current_result_facts", [])
+            observation_completed = observation_completed and bool(relevant) and all(
+                any(f.get("status") == "success" and f.get("cycle_id") == cycle.id
+                    and f.get("operation") in {"search", "reveal", "observe"}
+                    and f.get("actor_id") == row.member_id
+                    and f.get("source_action_seq") == cycle.state.get("triggering_event_seq")
+                    and f.get("source_event_seq") in active_seqs
+                    and (f.get("action_target_id") or f.get("target_id"))
+                    == requests.get(r["key"], r).get("target_id")
+                    for f in actual)
+                and requests.get(r["key"], r).get("executor_member_id", row.member_id)
+                    == row.member_id for r in relevant
+            )
         settled = bool(observation_completed) or any(
             e.type in {
                 "check.resolved", "module.interaction", "combat.resolved",
@@ -457,6 +476,11 @@ async def settle_teammate_tasks(service, session, room):
                 observation_reply and narration_validation.get("valid") is True
                 and narration_validation.get("answer_complete") is not False
             ),
+            "unknown_properties": [
+                {"object_id": a["object_id"], "question": a["question"], "status": "unknown"}
+                for a in narration_validation.get("evidence_assessments", [])
+                if a and a.get("state") == "not_confirmed"
+            ],
             "text": "" if technical else "\n".join(
                 e.payload.get("text") or e.payload.get("display_text")
                 or e.payload.get("summary") or e.payload.get("public_summary")
@@ -523,6 +547,103 @@ async def settle_teammate_tasks(service, session, room):
             {"member_id": row.member_id, **behavior.last_result},
             "host_only",
         )
+
+
+async def settle_report_supplement(service, session, room, cycle, run, report):
+    """Settle only the original request against its execution and new report."""
+    from app.agents.adjudication_schemas import BehaviorState
+    from app.agents.task_receipts import receipt_progress, restore_task_operands
+    from app.memory.events import story_events
+    from app.persistence.adjudication_models import AgentBehaviorRecord
+    from app.rooms.service import Identity, require
+
+    validation = run.context.get("narration_validation", {})
+    require(run.status == "completed" and cycle.status in {"completed", "failed"}
+            and run.cycle_id == cycle.id and report.type == "keeper.narration"
+            and report.payload.get("cycle_id") == cycle.id
+            and report.payload.get("supplement_of") == run.context.get("supplement_of")
+            and report.payload.get("text") == (run.structured_output or {}).get("public_narration")
+            and not report.payload.get("safe_fallback") and validation.get("valid")
+            and validation.get("answer_complete"), "补述未形成匹配的正式完整报告")
+    events = await service.rooms.events(session, room, Identity(room.host_member_id, True))
+    active, _ = story_events(events, include_initial_reveals=True)
+    active_seqs = {e["seq"] for e in active if e.get("visibility") == "public"}
+    require(report.seq in active_seqs, "补述报告不在当前公开记录中")
+    results = await service.runtime.public_results(session, room, cycle)
+    require(not results.get("failed_tools") and not results.get("blocked_discovery"),
+            "原执行仍受阻，不能仅凭补述结清")
+    executor = cycle.state["triggering_member_id"]
+    row = await session.get(AgentBehaviorRecord, (room.id, executor))
+    if not row:
+        return
+    behavior = BehaviorState.model_validate(row.document)
+    requests = run.context.get("request_operands", {})
+    plan_record = await session.get(ActionPlanRecord, cycle.id)
+    plan = plan_record.document.get("plan", {}) if plan_record else {}
+    from app.preparation.action_authority import action_kinds
+
+    executed_operations = set((plan.get("action_authority") or {}).get("kinds", [])
+                              or action_kinds((plan.get("focus") or {}).get("action", "")))
+    executed_operations &= {"observe", "search"}
+    if "search" in executed_operations:
+        executed_operations.add("observe")
+    pending, completed, consumed = [], [], set()
+    for request in behavior.pending_requests:
+        original = requests.get(request.get("key"))
+        if not original or request.get("key") not in run.context.get("request_keys", []):
+            pending.append(request)
+            continue
+        stable = ("key", "source_event_seq", "executor_member_id",
+                  "requester_member_id", "target_id")
+        require(all(request.get(k) == original.get(k) for k in stable),
+                "原委派的请求或执行对象已变化，不能借用旧回执结清")
+        actual = [f for f in results.get("current_result_facts", [])
+                  if f.get("status") == "success" and f.get("cycle_id") == cycle.id
+                  and f.get("operation") in {"observe", "search", "reveal"}
+                  and f.get("actor_id") == executor and f.get("source_event_seq") in active_seqs
+                  and f.get("source_action_seq") == cycle.state.get("triggering_event_seq")
+                  and (f.get("action_target_id") or f.get("target_id"))
+                  == original.get("target_id")]
+        require(actual and original.get("executor_member_id", executor) == executor,
+                "原委派没有匹配执行者、目标和回合的有效回执")
+        facts = [*results["current_result_facts"], *[{
+            "operation": operation, "status": "success", "actor_id": executor,
+            "cycle_id": cycle.id, "target_id": original["target_id"],
+            "source_event_seq": report.seq, "original_receipt_event_seqs": [
+                f["source_event_seq"] for f in actual], "report_supplement_id": run.id,
+        } for operation in sorted(executed_operations)]]
+        remaining, done = receipt_progress(restore_task_operands(request, original), facts,
+                                           actor=executor, cycle_id=cycle.id, consumed=consumed)
+        if done:
+            completed.append({**request, "status": "completed", "result_cycle_id": cycle.id,
+                              "result_event_seqs": [report.seq], "supplement_id": run.id,
+                              "supplement_of": run.context["supplement_of"]})
+        else:
+            pending.append(remaining)
+    if not completed:
+        return
+    behavior.pending_requests = pending
+    behavior.request_history = [*behavior.request_history, *completed][-24:]
+    feedback = {"cycle_id": cycle.id, "kind": "completed", "narration_complete": True,
+                "event_seqs": [report.seq], "result_facts": results["current_result_facts"],
+                "supplement_id": run.id, "supplement_of": run.context["supplement_of"],
+                "text": report.payload["text"][:1000],
+                "unknown_properties": [
+                    {"object_id": a["object_id"], "question": a["question"], "status": "unknown"}
+                    for a in validation.get("evidence_assessments", [])
+                    if a and a.get("state") == "not_confirmed"],
+                "operations": sorted({op for r in completed for op in r.get("operations", [])})}
+    # A later action may already own the current behavior state. Only the old
+    # request's history changes in that case; its new task remains untouched.
+    if behavior.task_cycle_id == cycle.id:
+        behavior.task_status = "completed" if not pending else "attempted"
+        behavior.last_result = feedback
+        behavior.last_attempt_result = dict(feedback)
+        if not pending:
+            behavior.current_short_term_goal = ""
+    row.document = behavior.model_dump(mode="json")
+    service.rooms.append(session, room, "agent.teammate_task_updated", room.host_member_id,
+                         {"member_id": executor, **feedback}, "host_only")
 
 
 async def route(runtime, state):

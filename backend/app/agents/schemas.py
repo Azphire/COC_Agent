@@ -18,6 +18,10 @@ MemoryKind = Literal["observation", "belief", "goal", "relationship", "summary"]
 MemoryScope = Literal["public", "agent_private", "keeper_only"]
 
 
+class ReportSupplementInput(DomainModel):
+    client_request_id: UUID
+
+
 class ProfileInput(DomainModel):
     role: Role
     name: Name
@@ -199,6 +203,9 @@ class CycleStage(DomainModel):
     ]
     safe_error: str | None = None
     error_category: str | None = None
+    started_at: float | None = None
+    finished_at: float | None = None
+    elapsed_ms: float | None = None
 
 
 class AgentCycleState(TypedDict):

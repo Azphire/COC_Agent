@@ -99,6 +99,8 @@ class NarrationStream:
         self.stream_id, self.attempt = None, 0
         self.accepted = ""
         self.first_display_at = None
+        self.first_validated_at = None
+        self.segments = []
         self.buffered_reason = None
         self.valid = True
         context = snapshot["run"].context
@@ -109,6 +111,8 @@ class NarrationStream:
         self.parts_received = {}
         self.parts_seen = set()
         self.parts_published = []
+        self.part_receipts = {}
+        self.server_published = False
         # These branches depend on server restoration, later source fields or
         # another speaker's complete answer. Keep their existing publication.
         self.eligible = bool(self.field) and not (
@@ -250,44 +254,99 @@ class NarrationStream:
             output, prefix_snapshot=self.snapshot,
         )
 
-    async def receive_parts(self, additions):
+    async def publish_candidate(self, output, segments):
+        """Validate the cumulative prefix and audit publication separately."""
+        candidate = output.public_narration
+        require(len(candidate) <= 2000, "公开正文超过长度上限", 422)
+        require(candidate.startswith(self.accepted), "片段不得改写已发布顺序", 422)
+        validation_started_at = time.time()
+        await self.validate(candidate, output=output)
+        validated_at = time.time()
+        self.first_validated_at = self.first_validated_at or validated_at
+        publish_started_at = time.time()
+        published = await self.hub.stream_delta(
+            self.state["room_id"], self.state["cycle_id"], self.stream_id,
+            candidate[len(self.accepted):], attempt=self.attempt,
+        )
+        published_at = time.time() if published else None
+        offset = len(self.accepted)
+        for segment in segments:
+            body_start = offset + (2 if offset else 0)
+            body_end = (body_start + segment["text_chars"]
+                        if "text_chars" in segment else len(candidate))
+            self.segments.append({
+                **segment, "stream_id": self.stream_id, "attempt": self.attempt,
+                "body_start": body_start, "body_end": body_end,
+                "validation_started_at": validation_started_at,
+                "validated_at": validated_at, "publish_started_at": publish_started_at,
+                "published_at": published_at,
+            })
+            offset = body_end
+        if not published:
+            return False
+        self.accepted = candidate
+        self.first_display_at = self.first_display_at or published_at
+        return True
+
+    async def publish_server_parts(self):
+        """Append fixed explanations only after the full model prefix is safe."""
+        if self.server_published:
+            return
+        from app.agents.answer_parts import project_answer_parts
+
+        fixed = self.parts_context.get("response_brief", {}).get("server_parts", [])
+        if not fixed:
+            return
+        fixed_ids = {p["requirement_id"] for p in fixed}
+        model_ids = [rid for rid in self.part_order if rid not in fixed_ids]
+        if len(self.parts_published) != len(model_ids):
+            return
+        output = project_answer_parts(
+            self.parts_published, self.parts_context, partial=True, include_server=True,
+        )
+        self.server_published = await self.publish_candidate(output, [{
+            "requirement_id": p["requirement_id"], "source": "server",
+            "received_at": None, "chunk_source": None, "chunk_index": None,
+            "text_chars": len(p["text"]),
+        } for p in fixed])
+
+    async def receive_parts(self, additions, *, source="model", receive=None):
         """Release only complete, bound parts in the frozen public order."""
         from app.agents.answer_parts import project_answer_parts
         from app.models.base import ModelFormatError
 
         try:
-            # Inspect the entire decoded batch before publishing any of it. A
-            # repeated ID is an invalid contract, including a repair changing
-            # a server-retained part.
-            seen = set(self.parts_seen)
+            fixed_ids = {p["requirement_id"] for p in self.parts_context.get(
+                "response_brief", {}).get("server_parts", [])}
+            model_order = [rid for rid in self.part_order if rid not in fixed_ids]
             for part in additions:
                 rid = part.get("requirement_id")
-                require(rid in self.part_order and rid not in seen,
+                require(rid in model_order and rid not in self.parts_seen,
                         "应答片段需求缺失、重复或不属于本轮", 422)
-                seen.add(rid)
-            for part in additions:
+                # Each closed object is its own boundary. A later invalid
+                # object must not erase an earlier independently safe prefix
+                # merely because a provider combined both into one frame.
                 output = project_answer_parts([part], self.parts_context, partial=True)
                 self.check_private(output.public_narration, prefix=True)
-                self.parts_received[part["requirement_id"]] = part
-            self.parts_seen = seen
-            while len(self.parts_published) < len(self.part_order):
-                rid = self.part_order[len(self.parts_published)]
-                if rid not in self.parts_received:
-                    break
-                parts = [*self.parts_published, self.parts_received[rid]]
-                output = project_answer_parts(parts, self.parts_context, partial=True)
-                candidate = output.public_narration
-                require(len(candidate) <= 2000, "公开正文超过长度上限", 422)
-                require(candidate.startswith(self.accepted), "片段不得改写已发布顺序", 422)
-                await self.validate(candidate, output=output)
-                if not await self.hub.stream_delta(
-                    self.state["room_id"], self.state["cycle_id"], self.stream_id,
-                    candidate[len(self.accepted):], attempt=self.attempt,
-                ):
-                    return
-                self.parts_published = parts
-                self.accepted = candidate
-                self.first_display_at = self.first_display_at or time.time()
+                self.parts_received[rid] = part
+                self.parts_seen.add(rid)
+                self.part_receipts[rid] = {
+                    "source": source, "requirement_id": rid, "text_chars": len(part["text"]),
+                    "received_at": (receive or {}).get("received_at"),
+                    "chunk_source": (receive or {}).get("source"),
+                    "chunk_index": (receive or {}).get("chunk_index"),
+                    "terminal_chunk": (receive or {}).get("terminal"),
+                }
+                while len(self.parts_published) < len(model_order):
+                    next_id = model_order[len(self.parts_published)]
+                    if next_id not in self.parts_received:
+                        break
+                    parts = [*self.parts_published, self.parts_received[next_id]]
+                    output = project_answer_parts(parts, self.parts_context, partial=True)
+                    if not await self.publish_candidate(output, [self.part_receipts[next_id]]):
+                        return
+                    self.parts_published = parts
+                await self.publish_server_parts()
         except (RoomError, ModelFormatError, ValueError, TypeError):
             # A later part cannot make an unbound assertion safe. Keep genuine
             # verified output, but never send the failing part before interrupt.
@@ -303,9 +362,12 @@ class NarrationStream:
             self.accepted = ""
             self.eligible = self.initial_eligible
             self.first_display_at = None
+            self.first_validated_at = None
+            self.segments = []
             self.buffered_reason = None
             self.parser = self.parser_class(self.field) if self.field else None
             self.parts_received, self.parts_seen, self.parts_published = {}, set(), []
+            self.part_receipts, self.server_published = {}, False
             self.stream_id = await self.hub.stream_start(
                 self.state["room_id"], self.state["cycle_id"], attempt=self.attempt,
             )
@@ -313,7 +375,9 @@ class NarrationStream:
                 self.parts_context = deepcopy(self.snapshot["run"].context)
                 retained = self.parts_context.pop("_answer_parts_retained", [])
                 if retained and self.eligible:
-                    await self.receive_parts(retained)
+                    await self.receive_parts(retained, source="retained")
+                if self.eligible:
+                    await self.publish_server_parts()
             return
         if kind == "error" and self.stream_id:
             await self.hub.stream_interrupt(
@@ -324,14 +388,18 @@ class NarrationStream:
             return
         if kind != "delta" or not self.eligible or event["attempt"] != self.attempt:
             return
-        additions = self.parser.feed(event["text"])
+        additions = (self.parser.feed_closed(event["text"]) if self.parts_mode
+                     else self.parser.feed(event["text"]))
+        if self.parts_mode:
+            if additions:
+                await self.receive_parts(additions, receive=event.get("receive"))
+            if self.parser.invalid:
+                self.eligible = False
+                self.buffered_reason = self.buffered_reason or "invalid_json"
+            return
         if self.parser.invalid:
             self.eligible = False
             self.buffered_reason = "invalid_json"
-            return
-        if self.parts_mode:
-            if additions:
-                await self.receive_parts(additions)
             return
         value = self.parser.value
         if len(value) > 2000:
@@ -348,16 +416,48 @@ class NarrationStream:
             if len(candidate) <= len(self.accepted):
                 continue
             try:
+                validation_started_at = time.time()
                 await self.validate(candidate)
             except RoomError:
                 self.buffered_reason = "awaiting_full_validation"
                 return
+            validated_at = time.time()
+            self.first_validated_at = self.first_validated_at or validated_at
+            publish_started_at = time.time()
             if await self.hub.stream_delta(
                 self.state["room_id"], self.state["cycle_id"], self.stream_id,
                 candidate[len(self.accepted):], attempt=self.attempt,
             ):
                 self.accepted = candidate
                 self.first_display_at = self.first_display_at or time.time()
+                received = event.get("receive") or {}
+                self.segments.append({
+                    "source": "model", "requirement_id": None,
+                    "stream_id": self.stream_id, "attempt": self.attempt,
+                    "received_at": received.get("received_at"),
+                    "chunk_source": received.get("source"),
+                    "chunk_index": received.get("chunk_index"),
+                    "terminal_chunk": received.get("terminal"),
+                    "validation_started_at": validation_started_at,
+                    "validated_at": validated_at, "publish_started_at": publish_started_at,
+                    "published_at": time.time(),
+                })
 
     def metadata(self):
         return {"stream_id": self.stream_id, "stream_attempt": self.attempt}
+
+    def audit_metadata(self):
+        """Private timing, never part of the player's prose or public stream."""
+        def first(source, field):
+            return next((s[field] for s in self.segments
+                         if s["source"] == source and s.get(field) is not None), None)
+
+        return {
+            **self.metadata(), "stream_segments": deepcopy(self.segments),
+            "first_validated_segment_at": self.first_validated_at,
+            "first_published_segment_at": self.first_display_at,
+            "first_model_published_at": first("model", "published_at"),
+            "first_server_published_at": first("server", "published_at"),
+            "first_retained_published_at": first("retained", "published_at"),
+            "stream_buffered_reason": self.buffered_reason,
+        }

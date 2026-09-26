@@ -374,7 +374,9 @@ def prepare_response_contract(context):
     brief["answer_requirements"] = requirements[:12]
     brief["answer_sources"] = [s for s in sources if s["id"] in selected_ids]
     brief["answer_format_requests"] = formats
-    return brief
+    from app.agents.server_parts import prepare_server_parts
+
+    return prepare_server_parts(context, brief, sources)
 
 
 def _content_topics(requirement):
@@ -420,6 +422,16 @@ def unknown_assertion_errors(body, requirement):
             if not topic & terms(clause):
                 continue
             remainder = re.sub(r"有没有|有无|是否", "", clause)
+            # A negated epistemic verb takes its immediately following
+            # proposition as complement. Its scope ends at a clause boundary;
+            # an independent neighbouring assertion is still checked below.
+            epistemic = re.search(r"(?:不(?:能|敢)?|无法|未能)(?:确定|确认|肯定)", clause)
+            if epistemic and topic & terms(clause[epistemic.end():]):
+                prefix = clause[:epistemic.start()]
+                if not topic & terms(prefix) or not re.search(
+                    r"没有|并无|不存在|未见|没见|存在|确实|有|是|为|留着|可见", prefix,
+                ):
+                    continue
             if re.match(
                 r"\s*(?:你|我)(?:们)?(?:正在|正|试图|尝试|仔细|开始|先|继续|用手)?"
                 r"(?:检查|查看|搜索|寻找|观察)", clause,

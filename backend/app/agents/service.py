@@ -56,6 +56,9 @@ class AgentService:
         from app.memory.recovery import SummaryRecoveryService
 
         self.summary_recovery = SummaryRecoveryService(self)
+        from app.agents.report_supplements import ReportSupplementService
+
+        self.report_supplements = ReportSupplementService(self)
         from app.rooms.sanity_service import SanityService
 
         self.sanity = SanityService(self)
@@ -101,23 +104,50 @@ class AgentService:
             query = query.where(AgentCycle.status.not_in(["queued", "queued_action", "suspended"]))
         return await session.scalar(query.order_by(AgentCycle.created_at.desc()).limit(1))
 
-    async def mutate(self, room_id, callback):
-        async with self.rooms.lock(room_id):
-            async with self.rooms.transaction() as session:
-                room = await self.rooms.room(session, room_id)
-                require(room.status != "ended", "房间已结束")
-                before = room.revision
-                result = await callback(session, room)
-                await session.flush()
-                events = list(
-                    await session.scalars(
-                        select(RoomEvent)
-                        .where(RoomEvent.room_id == room.id, RoomEvent.seq > before)
-                        .order_by(RoomEvent.seq)
-                    )
-                )
-            await self.rooms.broadcast(room_id, events)
-            return result
+    async def mutate(self, room_id, callback, *, internal_only=False):
+        timings = self.rooms.timings
+        with timings.span("mutate", room_id=str(room_id), callback=getattr(
+            callback, "__qualname__", type(callback).__qualname__,
+        ), internal_only=internal_only) as mutation:
+            lock = self.rooms.lock(room_id)
+            with timings.span("room_lock.wait"):
+                await lock.acquire()
+            try:
+                with timings.span("room_lock.held"):
+                    async with self.rooms.transaction() as session:
+                        with timings.span("mutate.load_room"):
+                            room = await self.rooms.room(session, room_id)
+                        require(room.status != "ended", "房间已结束")
+                        before = room.revision
+                        with timings.span("mutate.callback"):
+                            result = await callback(session, room)
+                        with timings.span("mutate.flush_events"):
+                            await session.flush()
+                            events = list(await session.scalars(
+                                select(RoomEvent)
+                                .where(RoomEvent.room_id == room.id, RoomEvent.seq > before)
+                                .order_by(RoomEvent.seq)
+                            ))
+                        mutation["event_count"] = len(events)
+                        mutation["formal_event_seqs"] = [
+                            event.seq for event in events if event.type == "keeper.narration"
+                        ]
+                    for event in events:
+                        if event.type == "keeper.narration":
+                            timings.point("formal.committed", event_seq=event.seq,
+                                          cycle_id=event.payload.get("cycle_id"),
+                                          run_id=event.payload.get("run_id"))
+                    # Only explicitly marked audit/bookkeeping writes may omit
+                    # snapshots. An emitted event always forces normal delivery.
+                    if not internal_only or events:
+                        with timings.span("mutate.broadcast", event_count=len(events),
+                                          forced_by_event=bool(internal_only and events)):
+                            await self.rooms.broadcast(room_id, events)
+                    else:
+                        timings.point("broadcast.skipped", reason="internal_only")
+                    return result
+            finally:
+                lock.release()
 
     async def check_views(self, session, room, identity, cycle_id=None):
         query = select(CheckRecord).where(CheckRecord.room_id == room.id)
@@ -211,6 +241,7 @@ class AgentService:
             "cycle": None,
             "bindings": [],
             "public_entities": await self.entities.public(session, room.id),
+            "report_recoveries": await self.report_supplements.views(session, room, identity),
         }
         if cycle:
             result["cycle"] = {
@@ -365,6 +396,8 @@ class AgentService:
 
     async def apply(self, session, room, identity, action, body, target):
         action = action.removeprefix("agent.")
+        if action == "supplement":
+            return await self.report_supplements.enqueue(session, room, identity, body, target)
         if action not in {
             "action",
             "check.roll",

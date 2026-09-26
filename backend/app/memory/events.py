@@ -21,6 +21,7 @@ def incidental_records(event):
         event.get("visibility") != "public"
         or event["type"] not in {"keeper.narration", "npc.spoke"}
         or payload.get("safe_fallback")
+        or payload.get("answer_origin") == "mixed"
         or payload.get("incidental_source") != "kp_improvisation"
     ):
         return []

@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -22,6 +23,7 @@ from app.models.base import (
     ModelError,
     ModelFormatError,
     ModelResponse,
+    ReceiveCallback,
     ResponseSchema,
     Tool,
     ToolCall,
@@ -103,6 +105,7 @@ class OpenAICompatibleClient:
         temperature: float = 0.0,
         max_tokens: int = 256,
         on_delta: ContentCallback | None = None,
+        on_receive: ReceiveCallback | None = None,
     ) -> ModelResponse | AsyncIterator[str]:
         if stream and (tools or response_schema is not None):
             raise ModelError("Streaming supports text only; use non-streaming for tools or JSON")
@@ -128,9 +131,17 @@ class OpenAICompatibleClient:
             failure.request_id = safe_identifier(getattr(error, "request_id", None))
             raise failure from None
         if on_delta is not None:
-            completion = await self._structured_stream(completion, on_delta)
+            completion = await self._structured_stream(completion, on_delta, on_receive)
         elif stream:
             return self._text_stream(completion)
+        elif on_receive:
+            on_receive({
+                "source": "openai_response", "chunk_index": 1,
+                "received_at": time.time(), "received_monotonic": time.monotonic(),
+                "terminal": True,
+                "content_chars": len(completion.choices[0].message.content or "")
+                if completion.choices else 0,
+            })
         try:
             return self._parse_response(completion, response_schema)
         except ModelError as error:
@@ -218,21 +229,33 @@ class OpenAICompatibleClient:
             raise ModelFormatError("模型 JSON 或工具参数格式无效", token_usage=usage) from None
 
     @staticmethod
-    async def _structured_stream(chunks, on_delta):
+    async def _structured_stream(chunks, on_delta, on_receive=None):
         """Collect the same response while forwarding only the content channel."""
         content, tool_calls = [], {}
         finish_reason = usage = model = completion_id = refusal = None
         total_chars = 0
+        chunk_index = 0
         try:
             async with chunks:
                 async for chunk in chunks:
+                    received_at = time.time()
+                    received_monotonic = time.monotonic()
+                    chunk_index += 1
+                    choice = next((c for c in chunk.choices if c.index == 0), None)
+                    if on_receive:
+                        on_receive({
+                            "source": "openai_sdk_chunk", "chunk_index": chunk_index,
+                            "received_at": received_at,
+                            "received_monotonic": received_monotonic,
+                            "terminal": choice is not None and choice.finish_reason is not None,
+                            "content_chars": len(choice.delta.content or "") if choice else 0,
+                        })
                     model, completion_id = chunk.model, chunk.id
                     if chunk.usage is not None:
                         usage = chunk.usage.model_dump()
                     if not chunk.choices:
                         await on_delta("")
                         continue
-                    choice = next((c for c in chunk.choices if c.index == 0), None)
                     if choice is None:
                         continue
                     delta = choice.delta

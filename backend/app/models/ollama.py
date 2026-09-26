@@ -4,6 +4,7 @@ Implements the existing model protocol. The graph never sees this transport.
 """
 
 import json
+import time
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -108,6 +109,7 @@ class OllamaAgentAdapter:
         temperature=0.0,
         max_tokens=256,
         on_delta=None,
+        on_receive=None,
     ):
         if stream:
             raise ModelError("Agent 流式生成请使用 on_delta 回调")
@@ -129,16 +131,25 @@ class OllamaAgentAdapter:
             messages, response_schema, tools, provider="ollama", output_mode="json_schema",
         ))
         if on_delta is not None:
-            data = await self._stream_response(request, on_delta)
+            data = await self._stream_response(request, on_delta, on_receive)
         else:
-            data = await self._request_response(request)
+            data = await self._request_response(request, on_receive)
         return self._parse_response(data, response_schema)
 
-    async def _request_response(self, request):
+    async def _request_response(self, request, on_receive=None):
         try:
             response = await self.client.post("/api/chat", json=request)
+            received_at, received_monotonic = time.time(), time.monotonic()
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            if on_receive:
+                on_receive({
+                    "source": "ollama_response", "chunk_index": 1,
+                    "received_at": received_at, "received_monotonic": received_monotonic,
+                    "terminal": True,
+                    "content_chars": len(data.get("message", {}).get("content", "")),
+                })
+            return data
         except httpx.HTTPStatusError as error:
             message = error.response.text.lower()
             if "out of memory" in message or "cuda error" in message:
@@ -149,11 +160,12 @@ class OllamaAgentAdapter:
         except (httpx.HTTPError, ValueError):
             raise ModelError("本地模型请求失败，请检查 Ollama 状态") from None
 
-    async def _stream_response(self, request, on_delta):
+    async def _stream_response(self, request, on_delta, on_receive=None):
         """Consume one NDJSON response; cancellation exits and closes its HTTP stream."""
         content, calls = [], []
         total_chars = 0
         terminal = None
+        chunk_index = 0
         try:
             async with self.client.stream("POST", "/api/chat", json=request) as response:
                 if response.is_error:
@@ -162,7 +174,34 @@ class OllamaAgentAdapter:
                 async for line in response.aiter_lines():
                     if not line.strip():
                         continue
-                    data = json.loads(line)
+                    received_at = time.time()
+                    received_monotonic = time.monotonic()
+                    chunk_index += 1
+                    try:
+                        data = json.loads(line)
+                    except ValueError:
+                        if on_receive:
+                            on_receive({
+                                "source": "ollama_ndjson", "chunk_index": chunk_index,
+                                "received_at": received_at,
+                                "received_monotonic": received_monotonic,
+                                "terminal": False, "content_chars": None, "frame_error": True,
+                            })
+                        raise
+                    message = data.get("message", {}) if isinstance(data, dict) else {}
+                    text = message.get("content", "") if isinstance(message, dict) else None
+                    # This is the provider's decoded wire frame, before the
+                    # body callback can validate, publish or otherwise wait.
+                    # Error frames also prove receipt, without retaining payloads.
+                    if on_receive:
+                        on_receive({
+                            "source": "ollama_ndjson", "chunk_index": chunk_index,
+                            "received_at": received_at,
+                            "received_monotonic": received_monotonic,
+                            "terminal": isinstance(data, dict) and data.get("done") is True,
+                            "content_chars": len(text) if isinstance(text, str) else None,
+                            "frame_error": not isinstance(data, dict) or bool(data.get("error")),
+                        })
                     if not isinstance(data, dict):
                         raise ModelFormatError("模型流格式无效")
                     if data.get("error"):
@@ -171,10 +210,8 @@ class OllamaAgentAdapter:
                         if "out of memory" in detail or "cuda error" in detail:
                             raise ModelError("本地模型显存不足（OOM），请停止真实模型验收")
                         raise ModelError("本地模型流式请求失败")
-                    message = data.get("message", {})
                     if not isinstance(message, dict):
                         raise ModelFormatError("模型流格式无效")
-                    text = message.get("content", "")
                     if not isinstance(text, str):
                         raise ModelFormatError("模型流格式无效")
                     total_chars += len(text)

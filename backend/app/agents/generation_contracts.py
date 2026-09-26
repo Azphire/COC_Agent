@@ -374,7 +374,7 @@ def generation_contract(schema, context):
         )
     if schema is KeeperNarration:
         from app.agents.answer_parts import (
-            CONTRACT_VERSION,
+            contract_version,
             parts_field,
             project_answer_parts,
             uses_answer_parts,
@@ -691,8 +691,9 @@ def generation_contract(schema, context):
         if parts_mode:
             fields["answer_parts"] = parts_field(context)
             fields["answer_contract_version"] = (
-                Literal[CONTRACT_VERSION],
-                Field(default=CONTRACT_VERSION, json_schema_extra={"x-server-bound": True}),
+                Literal[contract_version(context)],
+                Field(default=contract_version(context),
+                      json_schema_extra={"x-server-bound": True}),
             )
             for name, annotation, default in (
                 ("public_narration", str, ""),

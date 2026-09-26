@@ -7,6 +7,7 @@ type Message = Mapping[str, Any]
 type Tool = Mapping[str, Any]
 type ResponseSchema = type[BaseModel] | Mapping[str, Any]
 type ContentCallback = Callable[[str], Awaitable[None]]
+type ReceiveCallback = Callable[[dict[str, Any]], None]
 
 
 class ModelError(Exception):
@@ -49,6 +50,7 @@ class ModelClient(Protocol):
         temperature: float = 0.0,
         max_tokens: int = 256,
         on_delta: ContentCallback | None = None,
+        on_receive: ReceiveCallback | None = None,
     ) -> ModelResponse | AsyncIterator[str]: ...
 
     async def close(self) -> None: ...
